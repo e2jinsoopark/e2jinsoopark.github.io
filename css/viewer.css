@@ -17,12 +17,15 @@
   --scale-round-y: 1px;
   --scale-factor: 1;
 
-  position: relative;
   overflow: auto;
   background: var(--pdfv-bg);
   outline: none;
   overscroll-behavior: contain;
 }
+
+/* Page offsets are measured against the root, so it must be positioned. Zero specificity: a host layout
+   rule (e.g. the reader's absolutely positioned viewer host) always wins. */
+:where(.pdfv-root) { position: relative; }
 
 [data-theme="dark"] .pdfv-root {
   --pdfv-bg: #1c1f24;

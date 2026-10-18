@@ -74,6 +74,11 @@ async function boot() {
     return;
   }
 
+  // IndexedDB write failures (e.g. storage quota) surface only through this event.
+  library.addEventListener('error', (e) => {
+    toast(e.detail?.message || '변경 내용을 이 기기에 저장하지 못했습니다.', { kind: 'error', timeout: 8000 });
+  });
+
   const deps = buildDeps(modules, library, failures);
   if (failures.length) showBanner(bannerHost, failures);
   startRouter(viewEl, deps);

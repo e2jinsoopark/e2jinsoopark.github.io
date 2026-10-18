@@ -109,7 +109,15 @@ export class StubViewer extends EventTarget {
     this.container.addEventListener('click', (e) => {
       const sid = e.target.closest?.('.sv-s')?.dataset.sid;
       const sel = window.getSelection();
-      if (sid && (!sel || sel.isCollapsed)) this.emit('sentenceclick', { sid });
+      if (sel && !sel.isCollapsed) return;
+      // Like the real viewer: marks are pointer-transparent, so clicks on them are hit-tested and
+      // reported as 'markclick' before the sentence click.
+      const mark = [...this.container.querySelectorAll('.sv-mark')].find((m) => {
+        const r = m.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top - 2 && e.clientY <= r.bottom + 2;
+      });
+      if (mark) this.emit('markclick', { layer: mark.dataset.layer, id: mark.dataset.markId, clientRect: mark.getBoundingClientRect() });
+      if (sid) this.emit('sentenceclick', { sid });
     });
   }
 

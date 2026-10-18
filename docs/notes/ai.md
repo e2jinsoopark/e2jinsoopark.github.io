@@ -85,6 +85,8 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
 
 ## Integrator requests
 
+> Integration status: `reader-view` passes `paperId`; `Translator.mergeCached(cached)` was added for synced translation files; summary headings were aligned — see `integration.md`.
+
 - `config.js PRICES`: Claude Opus 5.5 cache reads are **$0.20/MTok (0.05×)**, not 0.1× (Anthropic price table, cached
   2026-10-06). `usage.js` handles this with a local `CACHE_READ_OVERRIDES` table; `PRICES[m].cacheRead` /
   `PRICES[m].cacheWrite` (absolute USD/MTok), if added to config, take precedence — moving the value there would make

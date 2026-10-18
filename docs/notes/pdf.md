@@ -101,6 +101,8 @@ A second issue: `Range.getClientRects()` covers the fallback font's whole conten
 
 ## Known limitations
 
+> Integration status: fit-width is capped at 1.6 and `.pdfv-root`'s `position` has zero specificity — see `integration.md`.
+
 - **Two broken paragraph continuations,** both caused by the contiguous-page-range rule:
   - when a paragraph is interrupted by two full pages of tables (kiekkas p.2 → p.5);
   - when a paragraph would chain across three pages because the middle page is mostly a figure (lu2025 p.6 → p.8).

@@ -667,6 +667,7 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .subsection { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .subsection-title { margin: 0 0 10px; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
 .radio-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.note + .radio-cards { margin-top: 12px; }
 .radio-card {
   position: relative; display: grid; gap: 3px; padding: 12px 14px 12px 40px; border-radius: 10px;
   border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer;

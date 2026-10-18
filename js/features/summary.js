@@ -1,4 +1,4 @@
-// 요약 panel: structured Korean summary (연구 목적 / 방법 / 주요 결과 / 한계 / 임상·연구적 시사점),
+// 요약 panel: structured Korean summary (한 줄 요약 / 연구 목적 / 연구 방법 / 주요 결과 / 제한점 / 임상·연구적 시사점),
 // cached in ai.summary, regenerate on demand, sentence chips jump to the source.
 import { el } from '../core/util.js';
 import { spinner, toast } from '../ui/components.js';
@@ -84,7 +84,7 @@ class SummaryPanel {
     } else {
       this.status.replaceChildren(el('div', { class: 'pf-empty' },
         el('p', { class: 'pf-empty__title' }, '이 논문의 핵심을 한국어로 정리합니다.'),
-        el('p', { class: 'pf-muted' }, '연구 목적 · 방법 · 주요 결과 · 한계 · 임상·연구적 시사점'),
+        el('p', { class: 'pf-muted' }, '한 줄 요약 · 연구 목적 · 연구 방법 · 주요 결과 · 제한점 · 임상·연구적 시사점'),
         button('요약 만들기', { kind: 'primary', onClick: () => this.generate(), attrs: { 'data-action': 'generate' } })));
     }
   }

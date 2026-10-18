@@ -36,8 +36,8 @@ export const DEFAULT_MODELS = {
  */
 export const PRICES = {
   'claude-haiku-5-5': { input: 0.10, output: 0.50, long: { threshold: 100_000, input: 0.50, output: 2.50 } },
-  'claude-sonnet-5-5': { input: 2.00, output: 10.00 },
-  'claude-opus-5-5': { input: 4.00, output: 20.00 },
+  'claude-sonnet-5-5': { input: 2.00, output: 10.00, cacheRead: 0.20 },
+  'claude-opus-5-5': { input: 4.00, output: 20.00, cacheRead: 0.20 },
   mock: { input: 0, output: 0 },
 };
 export const CACHE_READ_FACTOR = 0.1;

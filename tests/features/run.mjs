@@ -392,7 +392,7 @@ await test('chat: quote prefill, incremental streaming, chips, persistence, stop
 
 await test('summary panel: auto-generate, sections+toc, chips jump, cache on reopen', async () => {
   const { page, ctx, errors } = await open({ tab: 'summary' });
-  await page.waitForFunction(() => document.querySelectorAll('.pf-summary__body h2').length === 5, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelectorAll('.pf-summary__body h2').length === 6, null, { timeout: 5000 });
   const heads = await page.$$eval('.pf-summary__body h2', (hs) => hs.map((h) => h.textContent));
   const toc = await page.$$eval('.pf-toc .pf-chip', (cs) => cs.length);
   const chips = await page.$$eval('.pf-summary__body .pf-sid', (as) => as.length);
@@ -401,8 +401,8 @@ await test('summary panel: auto-generate, sections+toc, chips jump, cache on reo
   await page.click('.pf-summary__body .pf-sid >> nth=2');
   const jumps = await page.evaluate(() => __h.jumps);
   const saved = await page.evaluate(() => __h.library.data['paper1/ai']?.summary);
-  assert(heads.join('|') === '연구 목적|방법|주요 결과|한계|임상·연구적 시사점', `headings ${heads}`);
-  assert(toc === 5 && chips >= 8 && missing === 1, `toc ${toc}, chips ${chips}, missing ${missing}`);
+  assert(heads.join('|') === '한 줄 요약|연구 목적|연구 방법|주요 결과|제한점|임상·연구적 시사점', `headings ${heads}`);
+  assert(toc === 6 && chips >= 9 && missing === 1, `toc ${toc}, chips ${chips}, missing ${missing}`);
   assert(jumps.length === 1 && saved?.markdown && saved.model === 'mock', 'jump + saved');
   await page.goto(`${BASE}/tests/features/harness.html?mock=1&tab=summary`);
   await page.waitForSelector('body[data-ready="1"]');

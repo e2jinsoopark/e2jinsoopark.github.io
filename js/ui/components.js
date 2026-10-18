@@ -490,7 +490,7 @@ function loadMarkdownLibs() {
   if (!markdownLibs) {
     markdownLibs = Promise.all([import(VENDOR.marked), import(VENDOR.dompurify)])
       .then(([markedMod, purifyMod]) => ({
-        marked: new markedMod.Marked({ gfm: true, breaks: true, async: false }),
+        marked: new markedMod.Marked({ gfm: true, breaks: true, async: false, extensions: [CJK_STRONG_EXTENSION] }),
         // A private DOMPurify instance, so hooks/config elsewhere can never weaken ours.
         purify: purifyMod.default(window),
       }))
@@ -502,6 +502,28 @@ function loadMarkdownLibs() {
   }
   return markdownLibs;
 }
+
+// CommonMark's flanking rules reject `**41%**에서`: a closing `**` right after punctuation must be followed by
+// whitespace or punctuation, but Korean particles attach directly to the word. Model output does this all the
+// time, so a bold run that touches a CJK character on either side is tokenized leniently; everything else keeps
+// the standard rules. The result is an ordinary `strong` token, so escaping and sanitizing are unchanged.
+const CJK_CHAR = /[\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u3400-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/;
+const CJK_STRONG = /^\*\*(?![\s*])((?:\\.|[^*\n\\]|\*(?!\*))+?)(?<![\s\\])\*\*/;
+const CJK_STRONG_EXTENSION = {
+  name: 'cjkStrong',
+  level: 'inline',
+  start(src) {
+    const i = src.indexOf('**');
+    return i < 0 ? undefined : i;
+  },
+  tokenizer(src, tokens) {
+    const m = CJK_STRONG.exec(src);
+    if (!m) return undefined;
+    const prev = tokens?.at(-1)?.raw?.slice(-1) || '';
+    if (!CJK_CHAR.test(prev) && !CJK_CHAR.test(src.charAt(m[0].length))) return undefined;
+    return { type: 'strong', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+  },
+};
 
 const PURIFY_CONFIG = {
   USE_PROFILES: { html: true },

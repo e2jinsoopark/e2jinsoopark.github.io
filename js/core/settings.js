@@ -20,25 +20,35 @@ export const DEFAULT_SETTINGS = Object.freeze({
   ui: { theme: 'light', fontSize: 15, syncScroll: true, showAutoHighlights: true },
 });
 
-let current = deepMerge(structuredClone(DEFAULT_SETTINGS), safeStorage.get(STORAGE_KEYS.settings, {}));
+// What is persisted, and what the app sees. They differ only by the session-only mock override,
+// which must never be written back to localStorage.
+let stored = deepMerge(structuredClone(DEFAULT_SETTINGS), safeStorage.get(STORAGE_KEYS.settings, {}));
 
 // `?mock=1` forces the offline mock provider (used by tests and demos; never calls a paid API).
+let mockOverride = false;
 try {
-  if (new URLSearchParams(location.search).get('mock') === '1') current.provider = 'mock';
+  mockOverride = new URLSearchParams(location.search).get('mock') === '1';
 } catch { /* non-browser */ }
+
+const view = () => (mockOverride ? { ...stored, provider: 'mock' } : stored);
+let current = view();
 
 export const settings = {
   get() { return current; },
+  /** True when the session is pinned to the mock provider via ?mock=1. */
+  get isMockSession() { return mockOverride; },
   /** Deep-merge a patch, persist, and broadcast 'settings:change'. Arrays are replaced, not merged. */
   set(patch) {
-    current = deepMerge(current, patch);
-    safeStorage.set(STORAGE_KEYS.settings, current);
+    stored = deepMerge(stored, patch);
+    safeStorage.set(STORAGE_KEYS.settings, stored);
+    current = view();
     bus.emit('settings:change', { settings: current, patch });
     return current;
   },
   reset() {
-    current = structuredClone(DEFAULT_SETTINGS);
+    stored = structuredClone(DEFAULT_SETTINGS);
     safeStorage.remove(STORAGE_KEYS.settings);
+    current = view();
     bus.emit('settings:change', { settings: current, patch: null });
   },
   /** Model id for a task on the active provider. kind: 'translate' | 'assist'. */

@@ -166,16 +166,16 @@ export function summaryPrompt() {
 
 ## 한 줄 요약
 One sentence: what was studied, how, and the main finding.
-
-## 연구 배경과 목적
+## 연구 목적
+The background problem in one line, then the aim, research questions or hypotheses.
 ## 연구 방법
 Design, setting, participants/sample (n), intervention or exposure, instruments/measures, analysis.
 ## 주요 결과
 The key findings with their numbers and statistics exactly as reported.
-## 결론 및 시사점
-The authors' conclusions and the implications for nursing practice, education or research.
 ## 제한점
 Limitations stated by the authors (and obvious ones, labelled as your assessment).
+## 임상·연구적 시사점
+The authors' conclusions and the implications for nursing practice, education or research.
 
 Cite supporting sentence ids like [p3-12] after each point. Be concise: about 350–600 Korean words in total.`;
 }

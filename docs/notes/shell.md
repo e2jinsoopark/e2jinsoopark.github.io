@@ -95,6 +95,8 @@ the shell runs `checkAccess()` first and refuses public repos (`repoPrivate === 
 
 ## Findings for the integrator / other builders
 
+> Integration status: items 1–3 are resolved (viewer root position, mock-session settings, fit-width cap) — see `integration.md`.
+
 1. **Fixed here:** `css/viewer.css` gives `.pdfv-root` `position: relative`, which (same specificity, loaded later)
    collapsed the reader's absolutely positioned viewer host to 32 px — the PDF was invisible. The shell now uses
    `.reader .reader-left > .viewer-host { position: absolute; inset: 0 }`.

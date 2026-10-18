@@ -166,6 +166,7 @@ export function nearestCaptionSid(ctx, page, rect) {
 export function installRegionExplain(ctx, session, { signal }) {
   const { viewer } = ctx;
   let capturing = false;
+  let hint = null;
   const btn = ctx.addToolbarButton?.({
     id: 'explain-region', icon: 'image', title: '그림·표 설명', toggle: true,
     onClick: (active) => setCapture(Boolean(active)),
@@ -177,7 +178,8 @@ export function installRegionExplain(ctx, session, { signal }) {
     capturing = on;
     viewer?.setRegionCapture?.(on);
     btn?.setActive?.(on);
-    if (on) toast('설명할 그림이나 표를 드래그해서 선택하세요. (Esc: 취소)');
+    hint?.close?.();
+    hint = on ? toast('설명할 그림이나 표를 드래그해서 선택하세요. (Esc: 취소)', { timeout: 0 }) : null;
   }
 
   viewer?.addEventListener('regioncapture', (e) => {
@@ -195,6 +197,7 @@ export function installRegionExplain(ctx, session, { signal }) {
   }, { signal });
 
   signal.addEventListener('abort', () => {
+    hint?.close?.();
     if (capturing) viewer?.setRegionCapture?.(false);
     session.explainCard?.close();
   }, { once: true });

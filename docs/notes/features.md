@@ -66,6 +66,8 @@ Owner: features builder. Files: `js/features/*.js`, tests in `tests/features/`.
 
 ## Known limitations / for other modules
 
+> Integration status: the summary headings, Korean bold, highlight-click and citation-coordinate items below are resolved — see `integration.md`.
+
 - **Summary headings.** `prompts.js` asks for 한 줄 요약 / 연구 배경과 목적 / 연구 방법 / 주요 결과 / 결론 및 시사점 / 제한점. The features brief asked for 연구 목적 / 방법 / 주요 결과 / 한계 / 임상·연구적 시사점. The panel is heading-agnostic (its TOC is built from whatever `##` headings come back), so aligning is a one-line prompt change for the AI builder if wanted.
 - **Bold before Hangul.** `**41%**에서` is not bolded by marked: the CommonMark flanking rule blocks bold that ends in punctuation directly before Hangul, and model output often has this. A fix belongs in `renderMarkdown` (components).
 - **Translation-pane selection.** Selecting text in the pane opens no menu: the pane contract has no selection event, and annotations anchor to PDF doc offsets.

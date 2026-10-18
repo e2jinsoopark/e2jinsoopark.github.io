@@ -82,6 +82,9 @@ python -m http.server 8000
 브라우저에서 `http://localhost:8000/?mock=1` 을 열면 실제 API를 부르지 않는 가짜 AI로 시험할 수 있습니다.
 구조와 모듈 계약은 [docs/SPEC.md](docs/SPEC.md)를 보세요.
 
+전체 흐름 자동 테스트(Edge + Playwright, 가짜 AI·가짜 GitHub): `node tests/e2e/run.mjs` —
+준비물과 모듈별 테스트는 [docs/notes/integration.md](docs/notes/integration.md)와 각 `docs/notes/*.md`에 있습니다.
+
 포함된 외부 라이브러리: [pdf.js](https://github.com/mozilla/pdf.js) (Apache-2.0),
 [marked](https://github.com/markedjs/marked) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0).
 각 라이선스는 `vendor/` 폴더에 있습니다.

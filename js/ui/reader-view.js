@@ -232,7 +232,7 @@ class ReaderView {
     };
     if (Translator) {
       try {
-        return new Translator({ doc: this.#doc, cached, save });
+        return new Translator({ doc: this.#doc, cached, save, paperId: this.#paperId });
       } catch (err) {
         console.warn('[reader-view] Translator', err);
       }
@@ -789,6 +789,14 @@ class ReaderView {
       const paper = this.#lib.getPaper(this.#paperId);
       if (paper) this.#setTitle(paper);
     });
+    // Sentences translated on another device (or tab) while this paper is open.
+    const sync = this.#lib.sync;
+    if (sync?.addEventListener) {
+      const path = `papers/${this.#paperId}/translation.json`;
+      this.#on(sync, 'remotechange', (e) => {
+        if (e.detail?.paths?.includes(path)) this.#mergeRemoteTranslations();
+      });
+    }
 
     // [p3-12] sentence links rendered anywhere in the reader (summary, chat, notes…)
     const sidLink = (t) => /** @type {Element} */ (t)?.closest?.('.sid-link[data-sid]');
@@ -1022,6 +1030,14 @@ class ReaderView {
         { label: '설정 열기', kind: 'primary', onClick: () => this.#navigate('#/settings') },
       ],
     });
+  }
+
+  async #mergeRemoteTranslations() {
+    if (typeof this.#translator?.mergeCached !== 'function') return;
+    const cached = await this.#loadData('translation');
+    if (this.#destroyed || !cached) return;
+    const added = this.#translator.mergeCached(cached);
+    if (added.length) this.#scheduleCounts();
   }
 
   #flushTranslationSave() {

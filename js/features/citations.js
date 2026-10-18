@@ -13,25 +13,43 @@ const HIDE_GRACE_MS = 280;
 const PREVIEW_CSS_WIDTH = 440;
 
 /**
- * Bibliography entry a link target points into, or null. `target` is in PDF user space
- * (origin bottom-left, like scrollToPdfPoint); Reference.bbox is taken as top-left origin,
- * matching renderRegion/regioncapture. Destinations usually point at (or just above) the
- * entry's first line, so the closest entry top within a small tolerance wins.
+ * Link target point in PDF units with top-left origin. The viewer supplies `target.pt` (crop-box and
+ * rotation correct); otherwise the user-space y (bottom-left origin) is flipped against the page height,
+ * which is only exact for pages whose box starts at the origin.
+ */
+export function targetPoint(doc, target) {
+  if (!target || !Number.isFinite(target.page)) return null;
+  if (target.pt && Number.isFinite(target.pt.y)) {
+    return { x: Number.isFinite(target.pt.x) ? target.pt.x : null, y: target.pt.y };
+  }
+  const pageH = doc?.pages?.[target.page - 1]?.height;
+  if (target.y == null || !Number.isFinite(pageH)) return null;
+  return { x: Number.isFinite(target.x) ? target.x : null, y: pageH - target.y };
+}
+
+/**
+ * Bibliography entry a link target points into, or null. The viewer's `target.refIndex` (index into
+ * doc.references) wins when present. Otherwise destinations usually point at (or just above) the
+ * entry's first line, so the closest entry top within a small tolerance wins; Reference.bbox uses a
+ * top-left origin like renderRegion/regioncapture.
  */
 export function findReferenceAt(doc, target) {
-  if (!target || !Number.isFinite(target.page) || target.y == null) return null;
-  const pageH = doc?.pages?.[target.page - 1]?.height;
-  if (!Number.isFinite(pageH)) return null;
-  const ty = pageH - target.y;
-  const tx = Number.isFinite(target.x) ? target.x : null;
+  if (!target || !Number.isFinite(target.page)) return null;
+  const refs = doc?.references || [];
+  if (Number.isInteger(target.refIndex)) {
+    const ref = refs.find((r) => r.index === target.refIndex);
+    if (ref) return ref;
+  }
+  const pt = targetPoint(doc, target);
+  if (!pt) return null;
   let best = null;
   let bestDist = Infinity;
-  for (const ref of doc.references || []) {
+  for (const ref of refs) {
     const b = ref.bbox;
     if (ref.page !== target.page || !b) continue;
-    if (tx != null && (tx < b.x - 24 || tx > b.x + b.w + 24)) continue;
-    if (ty < b.y - 18 || ty > b.y + b.h + 4) continue;
-    const dist = Math.abs(ty - b.y);
+    if (pt.x != null && (pt.x < b.x - 24 || pt.x > b.x + b.w + 24)) continue;
+    if (pt.y < b.y - 18 || pt.y > b.y + b.h + 4) continue;
+    const dist = Math.abs(pt.y - b.y);
     if (dist < bestDist) { bestDist = dist; best = ref; }
   }
   return best;
@@ -42,12 +60,12 @@ export function previewRegion(doc, target) {
   const pg = doc?.pages?.[target.page - 1];
   const W = pg?.width || 612;
   const H = pg?.height || 792;
-  if (target.y == null) return { x: 0, y: 0, w: W, h: Math.round(H * 0.32) };
+  const pt = targetPoint(doc, target);
+  if (!pt) return { x: 0, y: 0, w: W, h: Math.round(H * 0.32) };
   const w = Math.min(W, Math.max(W * 0.5, 280));
   const h = Math.min(H, Math.round(H * 0.3));
-  const tx = Number.isFinite(target.x) ? target.x : 0;
-  const ty = H - target.y;
-  return { x: clamp(tx - 20, 0, W - w), y: clamp(ty - 16, 0, H - h), w, h };
+  const tx = pt.x ?? 0;
+  return { x: clamp(tx - 20, 0, W - w), y: clamp(pt.y - 16, 0, H - h), w, h };
 }
 
 export function installCitations(ctx, session, { signal }) {

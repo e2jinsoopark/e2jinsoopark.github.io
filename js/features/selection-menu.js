@@ -200,17 +200,18 @@ export function installSelectionMenu(ctx, session, { signal }) {
 
   // --- highlight hit-testing ----------------------------------------------------------------
 
-  /** Annotation under the last pointer position: DOM mark element first, then sentence overlap. */
-  function annotationAtPointer(sentence) {
+  /**
+   * Annotation whose mark element is under the last pointer position. Used for viewers that draw
+   * clickable `[data-mark-id]` elements instead of emitting 'markclick' (the real viewer emits it,
+   * so a click on the unhighlighted part of a partly highlighted sentence opens nothing).
+   */
+  function annotationAtPointer() {
     for (const node of document.elementsFromPoint(lastPointer.x, lastPointer.y)) {
       const id = node.dataset?.markId ?? (node.closest?.('[data-layer="annotations"]') ? node.dataset?.id : undefined);
       const hit = id && store.get(id);
       if (hit) return hit;
     }
-    const overlaps = store.overlapping(sentence.start, sentence.end);
-    if (!overlaps.length) return null;
-    const overlap = (a) => Math.min(a.anchor.end, sentence.end) - Math.max(a.anchor.start, sentence.start);
-    return overlaps.reduce((best, a) => (overlap(a) > overlap(best) ? a : best));
+    return null;
   }
 
   // --- wiring -------------------------------------------------------------------------------
@@ -226,7 +227,7 @@ export function installSelectionMenu(ctx, session, { signal }) {
     }
   }, { signal });
 
-  // Not in the viewer contract yet; used when the viewer reports clicks on mark elements.
+  // The viewer hit-tests its (pointer-transparent) marks and reports clicks on them.
   viewer.addEventListener('markclick', (e) => {
     const { layer, id, clientRect } = e.detail || {};
     if (layer && layer !== 'annotations') return;
@@ -238,9 +239,8 @@ export function installSelectionMenu(ctx, session, { signal }) {
 
   viewer.addEventListener('sentenceclick', (e) => {
     if (Date.now() - lastMarkClickAt < MARK_CLICK_DEDUPE_MS || hasTextSelection()) return;
-    const sentence = ctx.doc?.sentenceById?.get(e.detail?.sid);
-    if (!sentence) return;
-    const item = annotationAtPointer(sentence);
+    if (!ctx.doc?.sentenceById?.has(e.detail?.sid)) return;
+    const item = annotationAtPointer();
     if (item) openMarkMenu(item, pointRect(lastPointer.x, lastPointer.y));
   }, { signal });
 

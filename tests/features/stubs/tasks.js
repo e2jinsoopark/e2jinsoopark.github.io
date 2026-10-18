@@ -26,10 +26,13 @@ export async function summarize(doc, { signal } = {}) {
   await sleep(window.__summaryDelay ?? 300, signal);
   const s = (needle) => sidOf(doc, needle);
   const markdown = [
+    '## 한 줄 요약',
+    `간호사 주도 조기 운동이 인공호흡기 환자의 섬망을 줄였다 [${s('Delirium occurred in 28%')}].`,
+    '',
     '## 연구 목적',
     `인공호흡기를 적용한 성인 중환자에서 **간호사 주도 조기 운동 프로토콜**이 섬망 발생을 줄이는지 평가했다 [${s('We evaluated whether')}].`,
     '',
-    '## 방법',
+    '## 연구 방법',
     `- 설계: 6개 중환자실의 계단식(stepped-wedge) 군집 무작위 시험 [${s('stepped-wedge')}]`,
     `- 대상: 48시간 넘게 인공호흡기를 적용한 성인 412명 [${s('412 patients')}]`,
     `- 측정: 훈련받은 간호사가 하루 두 번 CAM-ICU로 섬망 평가 [${s('CAM-ICU')}]`,
@@ -38,7 +41,7 @@ export async function summarize(doc, { signal } = {}) {
     `- 섬망 발생률 **28% vs 41%** (위험비 0.68) [${s('Delirium occurred in 28%')}]`,
     `- 첫 운동 시점 중앙값 2.1일 vs 4.5일, 섬망 없는 날 평균 1.8일 증가 [${s('mobilized earlier')}][${s('Delirium-free days')}]`,
     '',
-    '## 한계',
+    '## 제한점',
     `결과 평가자 눈가림이 불가능했고, 자원이 적은 지역 병원에서의 검증이 필요하다 [${s('A key limitation')}].`,
     '',
     '## 임상·연구적 시사점',

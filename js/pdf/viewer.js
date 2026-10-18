@@ -11,6 +11,8 @@ import { clamp, debounce, el, rafThrottle } from '../core/util.js';
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5;
 const ZOOM_STEP = 1.15;
+// Fit-width never enlarges past this: in full-width layouts a 612 pt page would otherwise reach 230 %+.
+const FIT_WIDTH_MAX = 1.6;
 const PAGE_PADDING = 16; // px around the page column (matches .pdfv-pages padding)
 const RENDER_CONCURRENCY = 2;
 const MAX_LIVE_CANVASES = 10; // pages keeping a rendered canvas
@@ -341,7 +343,7 @@ export class PdfViewer extends EventTarget {
   _fitWidthScale() {
     const maxWidth = Math.max(...this.doc.pages.map((p) => p.width), 1);
     const avail = (this.container.clientWidth || 800) - 2 * PAGE_PADDING;
-    return clamp(avail / maxWidth, ZOOM_MIN, ZOOM_MAX);
+    return clamp(avail / maxWidth, ZOOM_MIN, FIT_WIDTH_MAX);
   }
 
   /** CSS px per PDF unit for a page box (exact, from layout). */

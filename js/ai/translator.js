@@ -122,6 +122,27 @@ export class Translator extends EventTarget {
     };
   }
 
+  /**
+   * Take in translations from a newer copy of the translation file (another device or tab synced it).
+   * Sentences already translated here are kept; queued ones are skipped by the workers once present.
+   * Emits 'update' and 'progress' when anything was added. Returns the added sids.
+   */
+  mergeCached(cached) {
+    const added = [];
+    for (const [sid, item] of this._validCachedItems(cached)) {
+      if (this._map.has(sid)) continue;
+      this._items.set(sid, item);
+      this._map.set(sid, item.t);
+      this._failed.delete(sid);
+      added.push(sid);
+    }
+    if (added.length) {
+      emit(this, 'update', { sids: added });
+      emit(this, 'progress', this.progress);
+    }
+    return added;
+  }
+
   /** Translate every translatable sentence: pages ≥ startPage first, then the pages before it. */
   async translateAll({ startPage = 1 } = {}) {
     const sids = this._translatableSids();
@@ -471,14 +492,19 @@ export class Translator extends EventTarget {
   }
 
   _loadCache(cached) {
+    for (const [sid, item] of this._validCachedItems(cached)) {
+      this._items.set(sid, item);
+      this._map.set(sid, item.t);
+    }
+  }
+
+  /** Cache items that still match the current sentence text (and target language). */
+  *_validCachedItems(cached) {
     if (!cached || typeof cached.items !== 'object' || cached.items === null) return;
     if (cached.targetLang && cached.targetLang !== this._targetLang) return;
     for (const s of this._sentences) {
       const it = cached.items[s.sid];
-      if (it && typeof it.t === 'string' && it.t && it.h === hash(s.text)) {
-        this._items.set(s.sid, { h: it.h, t: it.t, m: it.m || '' });
-        this._map.set(s.sid, it.t);
-      }
+      if (it && typeof it.t === 'string' && it.t && it.h === hash(s.text)) yield [s.sid, { h: it.h, t: it.t, m: it.m || '' }];
     }
   }
 

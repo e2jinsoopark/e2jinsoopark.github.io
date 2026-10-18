@@ -155,14 +155,27 @@ export function installAutoHighlight(ctx, session, { signal }) {
   }
 
   /**
-   * Top-left, just under the toolbar: over the PDF's top gutter (the PDF is the left pane), so it
-   * never covers the right pane's tabs or the toolbar itself.
+   * Top-left of the PDF pane, just under the toolbar, and never wider than that pane: it must not
+   * cover the right pane's tabs (at 1024 px the full legend is wider than half the window) or the
+   * toolbar. Falls back to the window's left edge when the viewer exposes no container.
    */
   function placeLegend() {
     if (!legend) return;
     const r = btn?.el?.isConnected ? btn.el.getBoundingClientRect() : null;
-    const top = r && r.height ? r.bottom + 8 : 64;
-    Object.assign(legend.style, { top: `${Math.round(clamp(top, 8, window.innerHeight - 48))}px`, left: '16px' });
+    const host = ctx.viewer?.container?.isConnected ? ctx.viewer.container.getBoundingClientRect() : null;
+    let top = r && r.height ? r.bottom + 8 : 64;
+    let left = 16;
+    let maxWidth = window.innerWidth - 32;
+    if (host && host.width > 0) {
+      top = Math.max(top, host.top + 8);
+      left = host.left + 12;
+      maxWidth = Math.max(160, host.width - 24);
+    }
+    Object.assign(legend.style, {
+      top: `${Math.round(clamp(top, 8, window.innerHeight - 48))}px`,
+      left: `${Math.round(left)}px`,
+      maxWidth: `${Math.round(maxWidth)}px`,
+    });
   }
 
   function hideLegend() {
@@ -171,6 +184,12 @@ export function installAutoHighlight(ctx, session, { signal }) {
   }
 
   window.addEventListener('resize', placeLegend, { signal });
+  // The split divider and view modes resize the PDF pane without a window resize.
+  if (ctx.viewer?.container && typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(() => placeLegend());
+    ro.observe(ctx.viewer.container);
+    signal.addEventListener('abort', () => ro.disconnect(), { once: true });
+  }
 
   const offSettings = ctx.bus?.on?.('settings:change', ({ settings } = {}) => {
     if (state.settingByUs) return;
