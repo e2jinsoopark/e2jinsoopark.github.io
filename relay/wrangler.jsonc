@@ -8,8 +8,7 @@
     {
       "binding": "DB",
       "database_name": "paper-relay",
-      // Placeholder: replace with the database_id printed by `npx wrangler d1 create paper-relay`.
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "bae6be74-ea88-4d24-93c7-756c69b2dcb5"
     }
   ],
   // Secrets (not here): ANTHROPIC_API_KEY, ADMIN_TOKEN — set with `npx wrangler secret put <NAME>`.

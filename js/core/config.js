@@ -22,7 +22,7 @@ export const VENDOR = {
  * Deploying: set it here AND add the same origin to connect-src in index.html (the page CSP is static);
  * tests/relay-client/run.mjs fails while the two disagree. See docs/notes/relay-client.md.
  */
-export const RELAY_DEFAULT_URL = '';
+export const RELAY_DEFAULT_URL = 'https://paper-relay.e2jinsoopark.workers.dev';
 
 /** Public address of the app; invite links are `${APP_PUBLIC_URL}#/join/<CODE>`. */
 export const APP_PUBLIC_URL = 'https://e2jinsoopark.github.io/';
