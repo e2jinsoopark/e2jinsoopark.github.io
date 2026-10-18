@@ -200,17 +200,21 @@ class SettingsView {
         this.#geminiModels = Array.isArray(models) ? models : [];
         fill();
         const cur = settings.get().gemini;
-        // Pick sensible defaults the first time: a "flash" model for translation, a "pro" model for assist.
-        if (!cur.translateModel && this.#geminiModels.length) {
-          const pick = this.#geminiModels.find((m) => /flash/i.test(m.id) && !/lite|image|tts|live/i.test(m.id)) || this.#geminiModels[0];
-          settings.set({ gemini: { translateModel: pick.id } });
+        // Default (and replace 2.x picks, which new keys cannot use) with the newest stable Flash. Pro models are
+        // not on the free tier, so assist tasks use Flash too.
+        const pick = this.#geminiModels.length ? (provider.pickDefaultModel?.(this.#geminiModels) || '') : '';
+        const replaced = [];
+        const patch = {};
+        for (const key of ['translateModel', 'assistModel']) {
+          if (!pick) break;
+          if (!cur[key]) patch[key] = pick;
+          else if (provider.isLegacyModel?.(cur[key]) && cur[key] !== pick) { replaced.push(cur[key]); patch[key] = pick; }
         }
-        if (!cur.assistModel && this.#geminiModels.length) {
-          const pick = this.#geminiModels.find((m) => /pro/i.test(m.id) && !/image|tts|live/i.test(m.id)) || this.#geminiModels[0];
-          settings.set({ gemini: { assistModel: pick.id } });
-        }
+        if (Object.keys(patch).length) settings.set({ gemini: patch });
         fill();
-        setResult(status, 'ok', `모델 ${this.#geminiModels.length}개를 불러왔습니다.`);
+        const note = replaced.length
+          ? ` 새 키로는 쓸 수 없는 이전 모델(${[...new Set(replaced)].join(', ')})을 ${pick}(으)로 바꿨습니다.` : '';
+        setResult(status, 'ok', `모델 ${this.#geminiModels.length}개를 불러왔습니다.${note}`);
       } catch (err) {
         setResult(status, 'error', err?.message || '모델 목록을 불러오지 못했습니다.');
       }

@@ -110,8 +110,12 @@ export const geminiProvider = {
       }
       pageToken = data.nextPageToken || '';
     } while (pageToken);
-    return out;
+    // Newest first, so the dropdown starts with the models Google recommends.
+    return out.sort((a, b) => geminiVersion(b.id) - geminiVersion(a.id) || a.id.localeCompare(b.id));
   },
+
+  pickDefaultModel: (models) => pickGeminiModel(models),
+  isLegacyModel: (id) => isLegacyGeminiModel(id),
 
   async testKey() {
     try {
@@ -124,6 +128,36 @@ export const geminiProvider = {
 };
 
 // ───────────────────────────── HTTP ─────────────────────────────
+
+/** 3.8 for "gemini-3.8-flash", 0 when the id has no version. */
+function geminiVersion(id) {
+  const m = /^gemini-(\d+(?:\.\d+)?)/.exec(id || '');
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * Older generations (2.x) are listed by the API but are restricted to projects that used them before,
+ * so a new key gets "model not found" with them.
+ */
+export function isLegacyGeminiModel(id) {
+  return /^gemini-[0-2](\.\d+)?-/.test(id || '');
+}
+
+/**
+ * Default model for a free-tier key: the newest stable plain Flash (e.g. gemini-3.8-flash). Pro models are not on
+ * the free tier, so Flash is used for assist tasks as well.
+ * @param {{ id: string }[]} models
+ */
+export function pickGeminiModel(models) {
+  const ids = (models || []).map((m) => m.id);
+  const newest = (re) => ids.filter((id) => re.test(id) && !isLegacyGeminiModel(id))
+    .sort((a, b) => geminiVersion(b) - geminiVersion(a))[0];
+  return newest(/^gemini-\d+(\.\d+)?-flash$/)
+    || (ids.includes('gemini-flash-latest') ? 'gemini-flash-latest' : '')
+    || newest(/^gemini-\d+(\.\d+)?-flash(-preview)?$/)
+    || newest(/flash/)
+    || ids[0] || '';
+}
 
 function apiKey() {
   const key = String(settings.get().gemini?.apiKey || '').trim();

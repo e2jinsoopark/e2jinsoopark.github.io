@@ -24,6 +24,9 @@ export function getProvider(id = settings.get().provider) {
         { id: 'gemini-3.5-pro', label: 'Gemini 3.5 Pro' },
       ];
     },
+    // Same contract as js/ai/gemini.js: newest plain Flash; 2.x ids are legacy.
+    pickDefaultModel: (models) => (models.find((m) => /^gemini-[\d.]+-flash$/.test(m.id)) || models[0])?.id || '',
+    isLegacyModel: (mid) => /^gemini-[0-2](\.\d+)?-/.test(mid || ''),
     async complete() { return { text: '〔모의 응답〕', usage: { model: 'mock', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }; },
     async *stream() { yield { type: 'text', text: '〔모의 응답〕' }; yield { type: 'done', usage: {} }; },
   };

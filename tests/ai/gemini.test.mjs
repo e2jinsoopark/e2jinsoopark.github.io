@@ -109,6 +109,31 @@ const tests = [
     },
   },
   {
+    name: 'default model: newest stable Flash, never a 2.x model new keys cannot use; list sorted newest first',
+    fn: async ({ page }) => {
+      await useGemini(page);
+      const ids = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash',
+        'gemini-3.8-flash-tts', 'gemini-3-flash-preview', 'gemini-3.1-pro-preview'];
+      await recordRoute(page, API, () => ({ json: { models: ids.map((id) => ({ name: `models/${id}`, supportedGenerationMethods: ['generateContent'] })) } }));
+      const r = await page.evaluate(async () => {
+        const g = await import('/js/ai/gemini.js');
+        const models = await g.geminiProvider.listModels();
+        return {
+          order: models.map((m) => m.id),
+          pick: g.geminiProvider.pickDefaultModel(models),
+          onlyLegacy: g.pickGeminiModel([{ id: 'gemini-2.5-flash' }, { id: 'gemini-3-flash-preview' }]),
+          legacy: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.8-flash'].map(g.isLegacyGeminiModel),
+        };
+      });
+      assert.equal(r.pick, 'gemini-3.8-flash');
+      assert.equal(r.onlyLegacy, 'gemini-3-flash-preview');
+      assert.deepEqual(r.legacy, [true, true, false]);
+      assert.equal(r.order[0].startsWith('gemini-3.8'), true);
+      assert.equal(r.order.at(-1).startsWith('gemini-2.5'), true);
+      return `pick ${r.pick}; first ${r.order[0]}, last ${r.order.at(-1)}`;
+    },
+  },
+  {
     name: '429 → Korean free-tier daily-quota message; short RetryInfo delay is retried once',
     fn: async ({ page }) => {
       await useGemini(page);
