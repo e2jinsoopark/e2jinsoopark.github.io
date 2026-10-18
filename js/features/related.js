@@ -1,11 +1,14 @@
 // 관련 논문 panel: Semantic Scholar title match → recommendations, cached in ai.related,
 // s2PaperId stored on the paper, optional abstract translation.
-import { el } from '../core/util.js';
-import { renderMarkdown, spinner, toast } from '../ui/components.js';
+import { el, safeStorage } from '../core/util.js';
+import { renderMarkdown, spinner } from '../ui/components.js';
 import { quickTranslate } from '../ai/tasks.js';
-import { anySignal, button, emptyState, errorMessage, externalLink, formatDateTime, isAbortError } from './shared.js';
+import { anySignal, button, emptyState, errorMessage, externalLink, formatDateTime, isAbortError, notifyAiNotReady } from './shared.js';
 import { formatAuthors, matchPaper, normalizePaper, recommendations } from './s2.js';
 import { ensureStyles } from './styles.js';
+
+/** Remembered once per browser: the user agreed that paper titles are looked up on Semantic Scholar. */
+const S2_CONSENT_KEY = 'pr.features.s2Consent.v1';
 
 class RelatedPanel {
   #ctl = new AbortController();
@@ -17,7 +20,7 @@ class RelatedPanel {
     this.ctx = ctx;
     this.related = null;
     this.meta = el('span', { class: 'pf-muted pf-small' });
-    this.refreshBtn = button('새로고침', { small: true, onClick: () => this.fetch({ rematch: false }), attrs: { 'data-action': 'refresh' } });
+    this.refreshBtn = button('새로 고침', { small: true, onClick: () => this.fetch({ rematch: false }), attrs: { 'data-action': 'refresh' } });
     this.body = el('div', { class: 'pf-related__body' });
     this.root = el('section', { class: 'pf-panel pf-related' },
       el('header', { class: 'pf-panel__head' },
@@ -58,7 +61,21 @@ class RelatedPanel {
     } catch (err) {
       console.warn('[features] related cache read failed', err);
     }
-    if (!this.signal.aborted) this.fetch({ rematch: false });
+    if (this.signal.aborted) return;
+    if (safeStorage.get(S2_CONSENT_KEY, false) === true) this.fetch({ rematch: false });
+    else this.renderConsent();
+  }
+
+  /** The first lookup sends this paper's title to a third party: say so and let the user start it. */
+  renderConsent() {
+    const title = this.paperTitle();
+    this.body.replaceChildren(el('div', { class: 'pf-empty' },
+      el('p', { class: 'pf-empty__title' }, 'Semantic Scholar에서 관련 논문을 찾습니다.'),
+      el('p', { class: 'pf-muted' }, `이 논문의 제목${title ? `(“${title.length > 80 ? `${title.slice(0, 79)}…` : title}”)` : ''}을 Semantic Scholar(api.semanticscholar.org)로 보내 찾습니다. 미출판 원고라면 찾지 않는 편이 안전합니다.`),
+      button('Semantic Scholar에서 찾기', {
+        kind: 'primary', attrs: { 'data-action': 's2-consent' },
+        onClick: () => { safeStorage.set(S2_CONSENT_KEY, true); this.fetch({ rematch: false }); },
+      })));
   }
 
   /**
@@ -156,7 +173,7 @@ class RelatedPanel {
       btn.textContent = target.hidden ? '번역 보기' : '번역 숨기기';
       return;
     }
-    if (!this.ctx.settings.isAiReady()) { toast('AI를 쓰려면 설정에서 API 키를 먼저 입력해 주세요.', { kind: 'error' }); return; }
+    if (!this.ctx.settings.isAiReady()) { notifyAiNotReady(); return; }
     btn.disabled = true;
     target.hidden = false;
     target.replaceChildren(el('div', { class: 'pf-loading' }, spinner(14), el('span', {}, '번역하는 중…')));

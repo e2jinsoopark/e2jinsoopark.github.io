@@ -38,6 +38,10 @@ export const PRICES = {
   'claude-haiku-5-5': { input: 0.10, output: 0.50, long: { threshold: 100_000, input: 0.50, output: 2.50 } },
   'claude-sonnet-5-5': { input: 2.00, output: 10.00, cacheRead: 0.20 },
   'claude-opus-5-5': { input: 4.00, output: 20.00, cacheRead: 0.20 },
+  // Models the server-side refusal fallback may serve a Sonnet 5.5 / Opus 5.5 request with.
+  'claude-sonnet-5': { input: 2.00, output: 10.00 },
+  'claude-opus-5': { input: 5.00, output: 25.00 },
+  'claude-opus-4-8': { input: 5.00, output: 25.00 },
   mock: { input: 0, output: 0 },
 };
 export const CACHE_READ_FACTOR = 0.1;
@@ -47,7 +51,9 @@ export const LIMITS = {
   translateBatchMaxSentences: 40,
   translateBatchMaxChars: 3500,
   translateConcurrency: 3,
-  maxPdfBytes: 95 * 1024 * 1024, // GitHub blob API hard limit is 100 MB
+  // GitHub's blob API takes the file base64-encoded in a JSON body (≈ 1.34 × the file); 70 MB keeps that body
+  // under the 100 MB GitHub accepts. Larger uploads are refused by GitHub (the sync engine then skips them).
+  maxPdfBytes: 70 * 1024 * 1024,
 };
 
 export const STORAGE_KEYS = {

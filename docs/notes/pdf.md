@@ -86,8 +86,13 @@ The suite also covers hover, programmatic and mouse-drag selection, zoom 1.5 and
   - Includes a port of pdf.js's `.endOfContent` selection helper.
   - `copy` puts the de-hyphenated `doc.text` slice on the clipboard.
   - `selectionchange` fires on pointerup, keyup, and debounced document selection changes (once per distinct anchor).
-- **Zoom.** Ctrl or ⌘ + wheel zooms. Fit-width follows container resizes (ResizeObserver) while in fit-width mode. Zoom is a single CSS variable (`--scale-factor`), and every cached geometry stays in PDF units.
-- **Memory.** At most 10 live canvases and 24 live text layers; sentence geometry stays cached after eviction. Rendering is lazy (IntersectionObserver, about 1.5 viewports ahead, 2 pages at a time) and a new canvas is swapped in only when finished, so pages never flash blank on zoom.
+- **Zoom.** Ctrl or ⌘ + wheel / trackpad pinch zoom in proportion to the accumulated delta, once per frame, anchored at the pointer. Fit-width fits the median page width (an A0 appendix or a landscape table page overflows instead of shrinking the paper) and follows container resizes of ≥ 20 px; `.pdfv-root` reserves the scrollbar gutter. A `devicePixelRatio` change (other monitor, browser zoom) re-renders the near pages. Zoom is a single CSS variable (`--scale-factor`), and every cached geometry stays in PDF units.
+- **Memory.** At most 10 live canvases **and** 48 MPx of canvas backing store, 24 live text layers; evicted pages call `page.cleanup()` (pdf.js frees their decoded images and operator lists — a 150-page scan stayed at ~650 MB GPU memory instead of 3.5 GB). A render that finishes after its page left the near zone is dropped, and leaving the zone cancels the render. Sentence geometry stays cached after eviction. Rendering is lazy (IntersectionObserver, about 1.5 viewports ahead, 2 pages at a time) and a new canvas is swapped in only when finished, so pages never flash blank on zoom.
+- **Render failures** are retried after 5 s, at most twice per zoom level, with a "이 쪽을 표시하지 못했습니다" placeholder (no hot loop).
+- **Rotated pages** (/Rotate 90/180/270): `.textLayer[data-main-rotation]` rules rotate pdf.js's unrotated text layer into the page box, and line merging uses span rotation + page rotation.
+- **Translation overlay** redraws only pages whose sentences changed, and only near the viewport (others when they come near); paragraph geometry is computed once per page and text fitting is batched per page.
+- **Links**: external links open only with Ctrl/⌘-click (the hover card has ‘새 탭에서 열기’); external link annotations covering more than 20 % of a page are ignored. Hover is re-hit-tested after a wheel scroll.
+- **Extraction**: a page pdf.js cannot load becomes an empty page instead of failing the whole document.
 - **Container.** The viewer adds class `pdfv-root` to the container, sets `tabindex=0` if absent, and owns its children (`destroy()` removes them).
 - **`getSentenceRects` on never-rendered pages** returns estimates from item boxes, proportional within an item. It is exact once the page has rendered.
 
@@ -108,6 +113,7 @@ A second issue: `Range.getClientRects()` covers the fallback font's whole conten
   - when a paragraph would chain across three pages because the middle page is mostly a figure (lu2025 p.6 → p.8).
 
   The sentence is split at that point.
+- **pdf.js 5.4.624 keeps every closed document alive** (`WorkerTransport` registers a `PagesMapper` listener that is never removed; ~0.3 MB per open). Not fixable from the app without patching the frozen vendor file — upgrade pdf.js when upstream fixes it.
 - **Glyphs without a Unicode mapping are dropped.** For example, κ in simwright2005 comes out as "kappa ( ) statistic".
 - **Tables come out as cell-level sentences** (kind `body`, or `heading` for bold cells). There is no table structure.
 - **Interleaved two-column content streams are not reordered.** pdf.js order is trusted, as the SPEC says. No fixture needed reordering.

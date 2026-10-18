@@ -37,3 +37,38 @@ Results and screenshots: `C:/Users/dindoo/Projects/pr-tools/out/integrate/` (`e2
 
 The fake repo starts with a README (as the in-app how-to asks). Syncing to an *empty* repo works (covered by
 `tests/store/run.mjs`), but Chromium logs the API's expected 409 answers as console errors.
+
+## Review fixes (2026-10-18)
+
+A five-lens review (security, data, pdf, ai, ux) was worked through; module notes describe the new behaviour.
+Cross-module changes:
+
+| Area | Change |
+|---|---|
+| `store/merge.js` (new), `store/sync.js`, `store/library.js` | Merge rules moved to a pure module. Combined records get `updatedAt = max + 1`; ai.json merges `chat`/`explanations` by id; translation.json is always a union. Library memory keeps a merge base and serializes reads/writes. Stale sync bases are merged before a push; refused uploads are skipped and named; repo switches need consent (`settings.github.carryOver`). `Library.updatePaperData` (read-modify-write), `syncTargetChange`, `storagePersisted`, `wipeLocalData`. |
+| `ui/reader-view.js` ↔ store | `ctx.saveAi` is a read-modify-write; ai.json remote changes reload `getAi()` and emit bus `'paper:ai-change'` (chat and summary panels listen). Translation load failures are retried, saves flush on page hide and every ≤ 5 s, a failed save stops the translator. |
+| `features/annotations.js` ↔ store | Imports `mergeRecords` from `store/merge.js` (3-way merge against the last stored version); highlights carry `seg` and are re-anchored by quote. |
+| `ai/translator.js` ↔ reader | Fatal errors release sentences (one fatal `'error'`, no failed sids); `'update'` may carry `warned` and `translator.warnings` (fidelity) → pane `check` marks. Mock translations are now `'〔번역〕 ' + full source text`; `mockControl.translateWith` / `failWhen` support content-specific tests. |
+| `core/settings.js` | Follows other tabs (`storage` event, `settings:change` with `external: true` → `app.js` reconfigures sync); `set()` merges into what is stored; `/tests/` pages off localhost are forced to mock. |
+| `core/config.js` | `LIMITS.maxPdfBytes` 70 MB; prices for fallback models. |
+| `index.html` | CSP narrowed to the exact jsDelivr paths (SDK 0.131.0 and its three pinned dependencies, Pretendard v1.3.9); jsDelivr removed from `connect-src`. |
+| `ui/components.js` | `renderMarkdown`: explicit tag/attribute allow-list (no class/id/data-*/aria-*), raw HTML in model output escaped. |
+| `app.js` | `#/settings/<section>` deep links. |
+
+Deferred (not done here):
+- **Vendoring the Anthropic SDK with an integrity check** — needs the bundle (and its three dependencies) downloaded
+  into `vendor/`; the CSP now allows only those exact package versions. Do it when a download can be approved.
+- **Dedicated hosting origin** — a deployment choice (see README › 배포); the app warns when it runs on a shared
+  `*.github.io/<project>/` origin.
+- **pdf.js `PagesMapper` listener leak** — in the frozen vendor file (see pdf notes).
+- **Translator batches in flight on 중지/close** are still aborted (their input may be billed); summaries and key
+  points now finish and are saved.
+
+Regression tests added: `tests/store/unit.test.mjs` (tie stamps, ai unions, segVersion union, internal repos, classic
+tokens, protected branch), `tests/store/run.mjs` 17–20 (rename vs. touch, push after a failed download, chat on two
+devices, a refused PDF) and the consent step in 16, `tests/ai/translator.test.mjs` (fatal release, URL/DOI copy,
+max_tokens salvage + scaled caps, refusal bisection, fidelity, first mention, hash cache, failed save),
+`tests/ai/claude.test.mjs` (credit 400, streaming fallback, chat caching), `tests/ai/unit.test.mjs` (fallback prices),
+`tests/pdf/viewer.test.mjs` regressions (rotated pages via `harness.html?rotate=1:90,2:180`, page cleanup + pixel
+budget, render-failure backoff), `tests/shell/run.mjs` (sanitizer classes, 연결 테스트 saves, onboarding deep link),
+`tests/shell/run-real.mjs` (bad key → one toast with 설정 열기), `tests/features/run.mjs` (no auto summary, S2 consent).

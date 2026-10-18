@@ -45,7 +45,8 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
   `client.beta.messages.create({..., betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default'})`. If that
   request is a `BadRequestError`, the identical request is sent once without the beta; only if *that* succeeds is the
   beta remembered as rejected (module memory, per page load). This avoids matching error text: a genuinely bad
-  request fails twice and is reported as `bad_request`. Streams (chat/explain) do not use the beta. Haiku has no
+  request fails twice and is reported as `bad_request`. Streams (chat/explain) use it too
+  (`client.beta.messages.stream`); a 400 before the first event retries the stream without it. Haiku has no
   server-side fallback.
 - **Stop reasons**: `refusal` → Korean `refusal` error (with `category`), never retried. `max_tokens` on a JSON
   request → `max_tokens` error (translator splits the batch in half); on text → returned with
@@ -66,11 +67,22 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
   (cache written), so parallel batches read the cached prefix instead of each paying the 1.25× write. "Warm" lasts
   4 minutes after the last response (cache TTL is 5 min).
 - **Failure policy**: missing ids → retried once in a batch of just those ids, then `failed`. JSON parse error →
-  retried once. `max_tokens` → halves, recursively, down to single sentences. Refusal → failed, no retry. Fatal
+  retried once. `max_tokens` → the finished `{id, ko}` entries of the cut-off answer are kept, the rest is
+  bisected; a batch's `max_tokens` scales with its size (4K–16K) so a runaway costs little. Refusal → bisected the
+  same way, so only the refused sentence fails (with a hint to switch the translation model). Fatal
   (auth, permission, billing, not_found, no key) or `bad_request`/`quota` → the run stops at once. Other transient
   errors (rate limit after SDK retries, 5xx, network) fail their batch; 3 in a row stop the run. `'error'` is emitted
   once per distinct message per run (no toast storms).
-- **Wordless sentences** (no `[A-Za-z]{2,}`: "3.5 ± 3.1", lone numbers) are "translated" locally as themselves,
+- **Fidelity checks** on every accepted translation: multi-digit numbers of the source must survive, a prose
+  sentence must come back with Hangul, a long sentence must not shrink below 20 %. A failing answer is re-requested
+  once; if the retry fails too it is kept with `items[sid].w` (warning) and the pane marks it ("원문과 비교").
+- **First mention across batches**: each request lists English terms earlier translations already gave in
+  parentheses (`<introduced>`) and the Korean of the context sentences (`<context_ko>`).
+- **Cache by hash**: a sid whose stored item does not match falls back to any stored item with the same text hash.
+- **A failed save** (storage full) stops the run; **fatal / run-stopping errors** (no key, auth, billing, 400, quota)
+  release the sentences (not "failed") and emit one fatal error.
+- **Wordless sentences** (no `[A-Za-z]{2,}`: "3.5 ± 3.1", lone numbers) and sentences that are only a URL, DOI,
+  e-mail address or ORCID (plus a label like "E-mail:") are "translated" locally as themselves,
   never sent, and count as done. They are not written to the translation file (re-derived on load).
 - **Cache file**: `toJSON()` writes only items valid for the current doc (stale hashes are dropped). Items are
   accepted only when `items[sid].h === hash(sentence.text)` and `targetLang` matches.
@@ -81,7 +93,17 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
   model-specific). Thought parts are dropped from text; `thoughtsTokenCount` is counted as output. Retries: 5xx
   (×2, backoff) and 429 only when `RetryInfo.retryDelay ≤ 20 s` (per-minute limits); a 429 without it (daily free-tier
   quota) fails at once with a Korean message about the free tier's daily quota and stops the translation run.
-  The key is sent only as `x-goog-api-key`, never in the URL. Gemini usage is priced at $0 (no Gemini prices in config).
+  The key is sent only as `x-goog-api-key`, never in the URL. Gemini usage is not priced (`isPriced()` false; the
+  UI shows "비용 미집계" instead of $0).
+- **Claude errors**: a 400 "credit balance is too low" is `billing` (fatal, Korean text with the Max-credit hint).
+  `testKey()` says the credit balance is not checked. Requests get a timeout from their output size (2–10 min) and
+  `maxRetries: 2`. Chat turns ask for automatic caching of the conversation tail (`cache_control` top level), and the
+  history is trimmed in chunks of 10 (≤ 30 messages) so the cached prefix stays stable.
+- **Pricing**: fallback targets (claude-opus-4-8, claude-opus-5, claude-sonnet-5) are in `PRICES`; another unknown
+  `claude-*` model is priced at the requested model's rates (`usage.requestedModel`). Usage of stopped/failed streams
+  and of refused/cut-off summaries and key points is recorded too.
+- **Assist prompts** carry the user's glossary and the English-terms setting. Key points use effort `medium` like the
+  other assist tasks (the JSON format may still keep it from sharing their cache entry).
 
 ## Integrator requests
 

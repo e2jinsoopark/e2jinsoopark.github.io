@@ -51,7 +51,11 @@ Owner: features builder. Files: `js/features/*.js`, tests in `tests/features/`.
     - Failures are not stored; a 다시 시도 button is offered.
     - A quote is folded into later history turns as a `> quote` blockquote.
     - Up to 200 messages are stored; `tasks.js` trims what it sends.
-12. **Summary** is generated automatically on the first show of the 요약 tab, only if the AI is configured, there is no cache, and the PDF has text. Afterwards it is regenerated only with 다시 만들기.
+12. **Summary** is generated only when asked (요약 만들기 / 다시 만들기) — opening the tab never makes a paid call. A summary in flight keeps running when the paper closes and is saved; one made on another device or tab appears via the reader's `paper:ai-change` bus event. Key points likewise finish and cache after the paper closes; stored key points carry their sentence's text hash and are dropped when it no longer matches.
+12b. **Chat** messages from another tab/device appear live (`paper:ai-change`); clearing records `chatClearedAt` (chat merges by id).
+12c. **Highlights** store `seg` (segmentation version); on load the quote is checked against `doc.text` at the stored offsets and re-anchored by searching the quote when it moved (not found → `lost`, not drawn). AnnotationStore merges 3-way against the last stored version, retries failed saves with backoff, and flushes when the page is hidden.
+12d. **Missing AI key** → one warning toast with 설정 열기 (`notifyAiNotReady`), never a stacked error; the quick-translate popover shows the gate and no copy button.
+12e. **관련 논문** asks once (per browser) before sending the title to Semantic Scholar.
 13. **Related papers.**
     - Fetched lazily on the first show of the tab; a stored `s2PaperId` is reused.
     - "다른 논문으로 다시 찾기" lets the user fix a wrong title match.

@@ -47,6 +47,7 @@ js/pdf/viewer.js                PDF builder  — page rendering, text layer, ove
 js/store/db.js                  Store builder — IndexedDB wrapper
 js/store/github.js              Store builder — GitHub REST (git data API) client
 js/store/sync.js                Store builder — local-first sync engine
+js/store/merge.js               Store builder — merge rules for the synced JSON files (pure)
 js/store/library.js             Store builder — Library model (folders, papers, per-paper data)
 js/ai/providers.js              AI builder — provider registry
 js/ai/claude.js                 AI builder — Claude via @anthropic-ai/sdk
@@ -282,7 +283,7 @@ export function getProvider(id = settings.get().provider) → Provider
 // gemini.js: fetch https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent (header x-goog-api-key),
 //   :streamGenerateContent?alt=sse for streams, responseMimeType 'application/json' + responseSchema for json,
 //   GET /v1beta/models for listModels (filter generateContent-capable).
-// mock.js: no network. translate → '〔번역〕 ' + first 60 chars; json schemas answered with plausible fake data;
+// mock.js: no network. translate → '〔번역〕 ' + the source text; json schemas answered with plausible fake data;
 //   stream yields a canned Korean answer word by word with small delays.
 
 // usage.js

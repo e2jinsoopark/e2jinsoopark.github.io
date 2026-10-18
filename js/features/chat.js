@@ -5,17 +5,17 @@ import { confirmDialog, toast } from '../ui/components.js';
 import { chat } from '../ai/tasks.js';
 import {
   NO_TEXT_MESSAGE, aiGate, anySignal, button, clip, copyText, drainStream, errorMessage, hasDocText,
-  isAbortError, markdownStream, renderModelMarkdown, wireSidLinks,
+  isAbortError, markdownStream, notifyAiNotReady, renderModelMarkdown, wireSidLinks,
 } from './shared.js';
 import { getSession } from './session.js';
 import { ensureStyles } from './styles.js';
 
 const MAX_HISTORY = 200;
 const SUGGESTIONS = [
-  '이 연구의 목적과 주요 결과를 쉽게 설명해 줘.',
-  '연구 방법(설계·대상·도구)을 정리해 줘.',
+  '이 연구의 목적과 주요 결과를 쉽게 설명해 주세요.',
+  '연구 방법(설계·대상·도구)을 정리해 주세요.',
   '간호 실무에 주는 시사점은 무엇인가요?',
-  '이 연구의 한계와 후속 연구 방향은?',
+  '이 연구의 한계와 후속 연구 방향은 무엇인가요?',
 ];
 
 /**
@@ -69,6 +69,15 @@ class ChatPanel {
     }, { signal });
     this.input.addEventListener('input', () => this.autosize(), { signal });
     this.session.addEventListener('chatquote', () => this.takeQuote(), { signal });
+    // Messages added in another tab or on another device appear here (when no answer is streaming).
+    const off = ctx.bus?.on?.('paper:ai-change', ({ paperId, ai } = {}) => {
+      if (paperId !== ctx.paper?.id || this.#stream) return;
+      const next = chatFrom(ai);
+      if (sameIds(next, this.history)) return;
+      this.history = next;
+      this.renderAll();
+    });
+    if (off) signal.addEventListener('abort', off, { once: true });
 
     this.loading = this.load();
     this.takeQuote();
@@ -76,8 +85,7 @@ class ChatPanel {
 
   async load() {
     try {
-      const ai = (await this.ctx.getAi()) || {};
-      this.history = Array.isArray(ai.chat) ? ai.chat.filter((m) => m && (m.role === 'user' || m.role === 'assistant')) : [];
+      this.history = chatFrom((await this.ctx.getAi()) || {});
     } catch (err) {
       console.warn('[features] chat load failed', err);
       this.history = [];
@@ -129,7 +137,7 @@ class ChatPanel {
     if (!this.ctx.settings.isAiReady()) return aiGate();
     return el('div', { class: 'pf-chat__intro' },
       el('p', { class: 'pf-empty__title' }, '이 논문에 대해 무엇이든 물어보세요.'),
-      el('p', { class: 'pf-muted pf-small' }, '답변에 붙는 p.3 같은 칩을 누르면 근거 문장으로 이동합니다.'),
+      el('p', { class: 'pf-muted pf-small' }, '답변에 붙는 ‘3쪽’ 같은 칩을 누르면 근거 문장으로 이동합니다.'),
       el('div', { class: 'pf-chat__suggest' },
         SUGGESTIONS.map((q) => el('button', { type: 'button', class: 'pf-chip', onclick: () => this.send(q) }, q))));
   }
@@ -168,7 +176,7 @@ class ChatPanel {
     const question = String(text ?? '').trim();
     if (!question || this.#stream) return;
     if (!this.ctx.settings.isAiReady()) {
-      toast('AI를 쓰려면 설정에서 API 키를 먼저 입력해 주세요.', { kind: 'error' });
+      notifyAiNotReady();
       return;
     }
     const quote = this.quote;
@@ -285,7 +293,8 @@ class ChatPanel {
     this.history = [];
     await this.renderAll();
     try {
-      await this.ctx.saveAi({ chat: [] });
+      // chat merges by message id across tabs and devices, so a clear is recorded as a cut-off time.
+      await this.ctx.saveAi({ chat: [], chatClearedAt: Date.now() });
     } catch (err) {
       console.warn('[features] chat clear failed', err);
       toast('채팅 기록을 지우지 못했습니다.', { kind: 'error' });
@@ -315,6 +324,18 @@ class ChatPanel {
     this.#stream?.abort();
     this.root.remove();
   }
+}
+
+/** Stored chat messages (after the last clear), oldest first. */
+function chatFrom(ai) {
+  const cleared = Number(ai?.chatClearedAt) || 0;
+  return Array.isArray(ai?.chat)
+    ? ai.chat.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && !(cleared && (Number(m.ts) || 0) <= cleared))
+    : [];
+}
+
+function sameIds(a, b) {
+  return a.length === b.length && a.every((m, i) => m.id === b[i]?.id);
 }
 
 export const chatPanel = {

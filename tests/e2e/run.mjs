@@ -561,11 +561,14 @@ try {
     const last = samples.at(-1);
     assert(growing >= 3, `pane did not fill progressively (${growing} growth steps)`);
     assert(/\$/.test(last.status) || /\$/.test(mid.cost), `cost never shown: ${JSON.stringify(last)}`);
-    const sample = await page.$eval('.tp-s.is-translated.tp-kind-body', (e) => e.textContent);
-    assert(/^〔번역〕/.test(sample), `mock translation text ${sample}`);
+    const shown = await page.$$eval('.tp-s.is-translated.tp-kind-body', (els) => els.map((e) => e.textContent));
+    const sample = shown.find((t) => /^〔번역〕/.test(t));
+    assert(sample, `mock translation text ${shown.slice(0, 3)}`);
+    // A sentence that is only a DOI/URL is shown as is (never sent for translation).
+    const doiAsIs = shown.find((t) => /^https?:\/\/doi\.org\/\S+$/.test(t));
     await shot(page, 'e2e-10-translated');
     const saved = await waitFor(async () => Object.keys((await fileJson(page, `papers/${paperIds.lu2025}/translation.json`))?.items || {}).length, 8000, 'translation.json saved');
-    return `${samples.length} samples, ${growing} growth steps; midway ${mid.done} translated / pct ${mid.pct} / cost “${mid.cost}”; end “${last.status.trim()}”; translation.json holds ${saved} items`;
+    return `${samples.length} samples, ${growing} growth steps; midway ${mid.done} translated / pct ${mid.pct} / cost “${mid.cost}”; end “${last.status.trim()}”; translation.json holds ${saved} items; DOI-only sentence shown as is: ${doiAsIs || '(none)'}`;
   });
 
   await test('hover sync after translation (Korean pane spans ↔ PDF)', async () => {
@@ -702,6 +705,7 @@ try {
 
   await test('요약: generated once, aligned headings, Korean bold rendered', async () => {
     await page.locator('.tab[data-tab="summary"]').click();
+    await page.locator('[data-action="generate"]').click(); // generated only on request (no paid call on first view)
     await page.waitForFunction(() => document.querySelectorAll('.pf-summary__body h2').length >= 5, null, { timeout: 15000 });
     const info = await page.evaluate(() => ({
       heads: [...document.querySelectorAll('.pf-summary__body h2')].map((h) => h.textContent.trim()),
@@ -730,12 +734,18 @@ try {
         paren: await html('값은**(n = 3)**이다'),
         plain: await html('**plain** text, a ** b ** c'),
         evil: await html('**<img src=x onerror=alert(1)>**에서 **[링크](javascript:alert(1))**로 <script>alert(1)</script>'),
+        evilDom: await (async () => {
+          const box = document.createElement('div');
+          box.append(await renderMarkdown('**<img src=x onerror=alert(1)>**에서 **[링크](javascript:alert(1))**로 <script>alert(1)</script>'));
+          return { elements: box.querySelectorAll('img, script, [onerror]').length, jsHref: [...box.querySelectorAll('a')].some((a) => /javascript:/i.test(a.getAttribute('href') || '')) };
+        })(),
       };
     });
     assert(/<strong>41%<\/strong>에서/.test(out.pct) && /class="sid-link"/.test(out.pct), out.pct);
     assert(/<strong>\(n = 3\)<\/strong>이다/.test(out.paren), out.paren);
     assert(/<strong>plain<\/strong>/.test(out.plain) && /a \*\* b \*\* c/.test(out.plain), out.plain);
-    assert(!/onerror|<script|javascript:|<img/i.test(out.evil), out.evil);
+    // Raw HTML in model output is shown as text (escaped), never as elements.
+    assert(out.evilDom.elements === 0 && !out.evilDom.jsHref && !/<script|<img|javascript:/i.test(out.evil), out.evil);
     return `“**41%**에서” → ${out.pct.match(/<strong>[^<]*<\/strong>에서/)[0]}; “**(n = 3)**이다” bold; “a ** b ** c” left alone; hostile input → ${out.evil.replace(/\s+/g, ' ').slice(0, 90)}`;
   });
   await test('핵심 밑줄: key points underlined on the PDF and in the pane', async () => {
@@ -929,7 +939,9 @@ try {
     const ann = repoJson(`papers/${lu}/annotations.json`);
     const ai = repoJson(`papers/${lu}/ai.json`);
     const lib = repoJson('library.json');
-    assert(Object.keys(tr.items).length === 448 && ann.items.length === 1 && ai.summary && ai.keyPoints, 'repo contents');
+    // 448 translatable sentences; ones that are only a URL/DOI are shown as is and not stored.
+    assert(Object.keys(tr.items).length >= 440 && Object.keys(tr.items).length <= 448 && ann.items.length === 1 && ai.summary && ai.keyPoints,
+      `repo contents: ${Object.keys(tr.items).length} translation items, ${ann.items.length} annotations, ai keys ${Object.keys(ai)}`);
     assert(lib.papers.length === 3 && lib.folders.length === 4, `library.json ${lib.papers.length} papers ${lib.folders.length} folders`);
     await shot(page, 'e2e-23-sync-A');
     return `${files.length} files in me/${REPO}: ${files.map((f) => f.replace(/papers\/[^/]+\//, 'papers/…/')).filter((v, i, a) => a.indexOf(v) === i).join(', ')}; translation.json ${Object.keys(tr.items).length} items, annotations ${ann.items.length}, ai keys [${Object.keys(ai).join(',')}]; ${fake.commits(OWNER, REPO).length} commit(s)`;

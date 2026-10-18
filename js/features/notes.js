@@ -62,7 +62,7 @@ class NotesPanel {
     const items = this.visibleItems();
     if (!all.length) {
       this.listEl.replaceChildren(emptyState('아직 하이라이트가 없습니다.',
-        'PDF에서 문장을 드래그해 선택하면 색을 칠하거나 메모를 남길 수 있어요.'));
+        'PDF에서 문장을 드래그해 선택하면 색을 칠하거나 메모를 남길 수 있습니다.'));
       return;
     }
     if (!items.length) {
@@ -77,7 +77,7 @@ class NotesPanel {
     }
     const sections = [...groups.entries()].sort((x, y) => x[0] - y[0]).map(([page, list]) =>
       el('section', { class: 'pf-notes__group', dataset: { page: String(page) } },
-        el('h3', { class: 'pf-notes__page' }, `p. ${page}`, el('span', { class: 'pf-muted' }, ` · ${list.length}`)),
+        el('h3', { class: 'pf-notes__page' }, `${page}쪽`, el('span', { class: 'pf-muted' }, ` · ${list.length}`)),
         list.map((a) => this.itemView(a))));
     const top = this.listEl.parentElement?.scrollTop ?? 0;
     this.listEl.replaceChildren(...sections);
@@ -188,7 +188,7 @@ class NotesPanel {
     let lastPage = null;
     for (const a of items) {
       const page = pageAt(this.ctx.doc, a.anchor.start);
-      if (page !== lastPage) { lines.push(`## p. ${page}`, ''); lastPage = page; }
+      if (page !== lastPage) { lines.push(`## ${page}쪽`, ''); lastPage = page; }
       lines.push(`- (${COLOR_LABELS[a.color]}) “${a.quote}”`);
       if (a.note) lines.push(`  - 메모: ${a.note.replace(/\n+/g, ' ')}`);
     }

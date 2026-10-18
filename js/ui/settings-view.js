@@ -1,7 +1,7 @@
 // Settings view (#/settings): AI provider & keys, GitHub sync, translation options, display, usage, secrets.
-import { APP_VERSION, CLAUDE_MODELS, PRICES } from '../core/config.js';
+import { APP_VERSION, CLAUDE_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
 import { settings } from '../core/settings.js';
-import { debounce, el, formatUsd } from '../core/util.js';
+import { debounce, el, formatUsd, safeStorage } from '../core/util.js';
 import { button, confirmDialog, iconButton, modal, spinner, toast } from './components.js';
 import { icon } from './icons.js';
 
@@ -19,8 +19,9 @@ const SECTIONS = [
  * @param {{ deps: object, navigate: (hash: string) => void, backHref?: string }} opts
  * @returns {{ destroy: () => void }}
  */
-export function mountSettingsView(container, { deps, navigate, backHref = '#/' }) {
+export function mountSettingsView(container, { deps, navigate, backHref = '#/', section = null }) {
   const view = new SettingsView(container, deps, navigate, backHref);
+  if (section) view.scrollToSection(section);
   return { destroy: () => view.destroy() };
 }
 
@@ -51,12 +52,39 @@ class SettingsView {
 
   destroy() {
     for (const off of this.#cleanup) off();
+    if (this.#githubUnsaved()) toast('GitHub 동기화 설정은 저장되지 않았습니다. 다시 열어 ‘저장하고 동기화 시작’을 눌러야 적용됩니다.', { kind: 'warning', timeout: 7000 });
     this.#root.remove();
+  }
+
+  /** `#/settings/sync` etc.: open at that section. */
+  scrollToSection(id) {
+    const target = this.#root.querySelector(`#set-${CSS.escape(String(id))}`);
+    if (target) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
+  }
+
+  /** The GitHub fields hold something other than what is saved (e.g. a freshly generated token). */
+  #githubUnsaved() {
+    const e = this.#els;
+    if (!e.gh_owner?.isConnected) return false;
+    const saved = settings.get().github || {};
+    const form = this.#githubForm();
+    return Boolean(form.token) && (form.owner !== (saved.owner || '') || form.repo !== (saved.repo || '')
+      || form.branch !== (saved.branch || 'main') || form.token !== (saved.token || ''));
+  }
+
+  async #goBack() {
+    if (this.#githubUnsaved()) {
+      const leave = await confirmDialog('GitHub 동기화 설정(토큰 포함)을 아직 저장하지 않았습니다. GitHub는 토큰을 한 번만 보여 주므로, 저장하지 않으면 새로 만들어야 할 수 있습니다. 저장하지 않고 나갈까요?',
+        { okLabel: '저장하지 않고 나가기', danger: true, title: '저장하지 않은 설정' });
+      if (!leave) return;
+      this.#els.gh_token.value = settings.get().github?.token || ''; // don't warn again on destroy
+    }
+    this.#navigate(this.#backHref);
   }
 
   #render() {
     const header = el('header', { class: 'settings-header' },
-      iconButton('arrow-left', '뒤로', () => this.#navigate(this.#backHref)),
+      iconButton('arrow-left', '뒤로', () => this.#goBack()),
       el('h1', {}, '설정'));
     const nav = el('nav', { class: 'settings-nav', 'aria-label': '설정 항목' },
       SECTIONS.map((s) => button(s.label, {
@@ -138,10 +166,11 @@ class SettingsView {
       el('details', { class: 'howto' },
         el('summary', {}, 'Claude API 키 만드는 법'),
         el('ol', {},
-          el('li', {}, extLink('https://console.anthropic.com/settings/keys', 'Anthropic Console → API Keys'), ' 페이지에 로그인합니다.'),
+          el('li', {}, extLink('https://platform.claude.com/settings/keys', 'Claude Console → API Keys'), ' 페이지에 로그인합니다.'),
           el('li', {}, el('b', {}, 'Create Key'), '를 눌러 이름(예: paper-reader)을 정하고 키를 만듭니다.'),
           el('li', {}, '표시된 키(', el('code', {}, 'sk-ant-'), '로 시작)를 복사해 위 칸에 붙여 넣고 ', el('b', {}, '테스트'), '를 누릅니다.'),
-          el('li', {}, 'API 사용료는 Console 계정의 크레딧·결제 설정으로 청구됩니다. Console의 ', el('b', {}, 'Limits'), '에서 월 사용 한도를 정해 두면 안심입니다.'))));
+          el('li', {}, 'API 사용료는 Claude Console 조직의 크레딧으로 청구됩니다. Claude Console의 ', el('b', {}, 'Limits'), '에서 월 사용 한도를 정해 두면 안심입니다.'),
+          el('li', {}, el('b', {}, 'Claude Max'), '(5x: 월 $100, 20x: 월 $200) 요금제라면 claude.ai에서 요금제에 포함된 API 크레딧을 Claude Console 조직에 연결하세요. 키는 크레딧이 연결된 그 조직에서 만들어야 합니다. 채팅 사용 한도와는 별개이며, Pro 요금제는 해당되지 않습니다.'))));
   }
 
   #geminiDetail() {
@@ -195,6 +224,7 @@ class SettingsView {
         onSave: (v) => { settings.set({ gemini: { apiKey: v } }); },
         onTest: () => this.#testProvider('gemini'),
       }),
+      note('shield', '무료 등급에서는 입력 내용(번역할 문장, 질문)이 Google 제품 개선에 쓰일 수 있습니다. 미출판 원고·민감 자료에는 Claude 또는 Gemini 유료 등급을 쓰세요. Gemini 사용 비용은 이 앱의 사용량에 집계되지 않습니다.'),
       el('div', { class: 'field-row', style: { marginTop: '14px' } },
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '번역 모델'), translateSel),
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '요약·채팅·설명 모델'), assistSel)),
@@ -309,7 +339,8 @@ class SettingsView {
         field('브랜치', 'branch', { placeholder: 'main' }),
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '토큰 (Fine-grained personal access token)'), el('div', { class: 'input-group' }, token, reveal))),
       el('div', { class: 'btn-row' },
-        button('연결 테스트', { icon: 'check-circle', onClick: () => this.#testGithub(result) }),
+        // Like the AI keys' 테스트: a successful test also saves (GitHub shows a new token only once).
+        button('연결 테스트', { icon: 'check-circle', onClick: () => this.#testAndSaveGithub(result) }),
         button('저장하고 동기화 시작', { icon: 'cloud', kind: 'primary', onClick: () => this.#saveGithub(result) })),
       result,
       el('div', { class: 'subsection' },
@@ -335,7 +366,7 @@ class SettingsView {
           '로 바꿉니다. (Metadata: Read-only는 자동으로 붙습니다.) 다른 권한은 주지 않습니다.'),
         el('li', {}, el('b', {}, 'Generate token'), '을 누르고, 표시된 토큰(', el('code', {}, 'github_pat_'), '으로 시작)을 바로 복사합니다. 이 화면을 벗어나면 다시 볼 수 없습니다.'),
         el('li', {}, '위 칸에 소유자(내 GitHub 아이디)·저장소 이름·토큰을 넣고 ', el('b', {}, '연결 테스트'), ' → ', el('b', {}, '저장하고 동기화 시작'), '을 누릅니다.')),
-      note('shield', '토큰은 이 브라우저에만 저장되고 GitHub API(api.github.com)로만 전송됩니다. 이 토큰으로는 선택한 저장소 하나의 파일만 읽고 쓸 수 있습니다. 공용 PC에서는 사용 후 아래 ‘이 기기에서 키·토큰 지우기’를 누르세요.'));
+      note('shield', '토큰은 이 브라우저에만 저장되고 GitHub API(api.github.com)로만 전송됩니다. 이 토큰으로는 선택한 저장소 하나의 파일만 읽고 쓸 수 있습니다. 공용 PC에서는 사용 후 아래 ‘이 기기의 데이터 모두 지우기’를 누르세요.'));
   }
 
   #githubForm() {
@@ -365,7 +396,9 @@ class SettingsView {
         setResult(result, 'error', '읽기만 가능하고 쓰기 권한이 없습니다. 토큰의 Contents 권한을 ‘Read and write’로 바꾸세요.');
         return false;
       }
-      setResult(result, 'ok', r.message || `연결되었습니다 · 비공개 저장소 · 쓰기 가능 (${form.owner}/${form.repo})`);
+      const message = r.message || `연결되었습니다 · 비공개 저장소 · 쓰기 가능 (${form.owner}/${form.repo})`;
+      setResult(result, 'ok', message);
+      this.#lastTestMessage = message;
       return true;
     } catch (err) {
       setResult(result, 'error', err?.message || 'GitHub에 연결하지 못했습니다.');
@@ -373,18 +406,46 @@ class SettingsView {
     }
   }
 
-  async #saveGithub(result) {
+  #lastTestMessage = '';
+
+  async #testAndSaveGithub(result) {
+    const form = this.#githubForm();
+    if (!form.owner || !form.repo || !form.token) { setResult(result, 'error', '소유자, 저장소 이름, 토큰을 모두 입력하세요.'); return; }
+    await this.#saveGithub(result, { fromTest: true });
+  }
+
+  async #saveGithub(result, { fromTest = false } = {}) {
     const form = this.#githubForm();
     if ((form.owner || form.repo || form.token) && !(form.owner && form.repo && form.token)) {
       setResult(result, 'error', '소유자, 저장소 이름, 토큰을 모두 입력하세요. (동기화를 끄려면 세 칸을 모두 비우세요.)');
       return;
     }
     if (form.token && this.#deps.GitHubClient && !(await this.#testGithub(result))) return;
-    settings.set({ github: form });
+    const tested = this.#lastTestMessage;
+    // This device's library came from another repository (or another person used this browser before):
+    // upload it to the new one only if the user says so.
+    const lib = this.#deps.library;
+    let next = { ...form };
+    if (form.token && typeof lib?.syncTargetChange === 'function') {
+      let change = null;
+      try { change = await lib.syncTargetChange(form); } catch (err) { console.warn('[settings-view] syncTargetChange', err); }
+      if (change) {
+        const choice = await this.#askCarryOver(change, form);
+        if (choice === 'cancel') { setResult(result, 'error', '저장하지 않았습니다. 동기화 대상은 바뀌지 않았습니다.'); return; }
+        if (choice === 'upload') next = { ...form, carryOver: change.to };
+        if (choice === 'wipe') {
+          settings.set({ github: { ...form, carryOver: '' } });
+          await lib.wipeLocalData?.();
+          location.reload();
+          return;
+        }
+      }
+    }
+    settings.set({ github: { carryOver: '', ...next } });
     try {
-      await this.#deps.library?.reconfigureSync?.();
+      await lib?.reconfigureSync?.();
       if (settings.isSyncReady()) {
-        setResult(result, 'ok', '저장했습니다. 동기화를 시작합니다.');
+        setResult(result, 'ok', fromTest && tested ? `${tested} · 저장했고 동기화를 시작합니다.` : '저장했습니다. 동기화를 시작합니다.');
         toast('GitHub 동기화를 켰습니다.', { kind: 'success' });
       } else {
         setResult(result, 'ok', '저장했습니다. GitHub 동기화가 꺼져 있습니다.');
@@ -393,6 +454,28 @@ class SettingsView {
       setResult(result, 'error', err?.message || '동기화를 시작하지 못했습니다.');
     }
     this.#renderSyncStatus();
+  }
+
+  /** @returns {Promise<'upload'|'wipe'|'cancel'>} */
+  #askCarryOver(change, form) {
+    const repoOf = (target) => String(target || '').replace(/^https?:\/\/[^/]+\//, '').replace(/#.*$/, '');
+    return new Promise((resolve) => {
+      let choice = 'cancel';
+      modal({
+        title: '다른 저장소로 바꿉니다',
+        size: 'sm',
+        body: el('div', {},
+          el('p', {}, `이 기기에는 다른 저장소(${repoOf(change.from)})와 동기화하던 논문 ${change.papers}편과 번역·메모가 있습니다.`),
+          el('p', {}, `이 데이터를 새 저장소(${form.owner}/${form.repo})에 올릴까요?`),
+          el('p', { class: 'field-hint' }, '공용 PC에서 다른 사람이 쓰던 브라우저라면 ‘이 기기 데이터 지우고 시작’을 고르세요. GitHub에 있는 데이터는 지워지지 않습니다.')),
+        actions: [
+          { label: '취소', onClick: () => { choice = 'cancel'; } },
+          { label: '이 기기 데이터 지우고 시작', kind: 'danger', onClick: () => { choice = 'wipe'; } },
+          { label: '올리기', kind: 'primary', onClick: () => { choice = 'upload'; } },
+        ],
+        onClose: () => resolve(choice),
+      });
+    });
   }
 
   #renderSyncStatus() {
@@ -549,24 +632,31 @@ class SettingsView {
         host.replaceChildren(el('p', { class: 'field-hint' }, this.#deps.usage ? '아직 사용 기록이 없습니다.' : '사용량 모듈을 불러오지 못했습니다.'));
         return;
       }
+      const isPriced = typeof this.#deps.usage?.isPriced === 'function' ? this.#deps.usage.isPriced : () => true;
+      let unpriced = false;
       const rows = Object.entries(summary.byModel || {}).map(([model, v]) => {
         const info = typeof v === 'number' ? { usd: v } : (v || {});
+        const priced = isPriced(model);
+        if (!priced) unpriced = true;
         return el('tr', {},
-          el('td', {}, model),
+          el('td', {}, modelName(model)),
           el('td', { class: 'num' }, fmtInt(info.calls)),
           el('td', { class: 'num' }, fmtInt(info.inputTokens)),
           el('td', { class: 'num' }, fmtInt(info.outputTokens)),
-          el('td', { class: 'num' }, formatUsd(info.usd ?? info.costUsd ?? 0)));
+          el('td', { class: 'num', title: priced ? null : '이 모델은 요금 정보가 없어 비용을 계산하지 않습니다.' },
+            priced ? formatUsd(info.usd ?? info.costUsd ?? 0) : '비용 미집계'));
       });
-      host.replaceChildren(
+      host.replaceChildren(...[
         el('div', { class: 'usage-stats' },
           stat('기간', formatMonth(summary.month)),
-          stat('예상 비용', formatUsd(summary.usd || 0)),
+          stat('예상 비용', `${formatUsd(summary.usd || 0)}${unpriced ? ' + Gemini' : ''}`),
           stat('AI 호출', `${fmtInt(summary.calls || 0)}회`)),
         rows.length ? el('div', { class: 'md-table-wrap' }, el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {}, el('th', {}, '모델'), el('th', { class: 'num' }, '호출'), el('th', { class: 'num' }, '입력 토큰'), el('th', { class: 'num' }, '출력 토큰'), el('th', { class: 'num' }, '비용'))),
           el('tbody', {}, rows))) : null,
-        note('info', '토큰 수와 공개 요금표로 계산한 추정치이며 이 브라우저에서 쓴 양만 집계됩니다. 실제 청구액은 각 AI 서비스 콘솔에서 확인하세요.'));
+        unpriced ? note('info', 'Gemini 사용 비용은 요금 정보가 없어 예상 비용에 포함되지 않습니다. Google AI Studio의 결제 화면에서 확인하세요.') : null,
+        note('info', '토큰 수와 공개 요금표로 계산한 추정치이며 이 브라우저에서 쓴 양만 집계됩니다. 실제 청구액은 각 AI 서비스 콘솔에서 확인하세요.'),
+      ].filter(Boolean));
     };
     render();
     const body = el('div', {}, host, el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: render })));
@@ -582,14 +672,45 @@ class SettingsView {
       hint: '‘관련 논문’과 인용 정보 조회에 씁니다. 키가 없으면 공용 한도로 동작합니다.',
     });
     const clearBtn = button('이 기기에서 키·토큰 지우기', { icon: 'trash', kind: 'danger', onClick: () => this.#clearSecrets() });
+    const wipeBtn = button('이 기기의 데이터 모두 지우기', { icon: 'trash', kind: 'danger', onClick: () => this.#wipeDevice() });
+    const persisted = el('p', { class: 'field-hint', style: { margin: '0 0 12px' } });
+    this.#deps.library?.storagePersisted?.().then((granted) => {
+      if (granted === false) {
+        persisted.textContent = '주의: 브라우저가 이 사이트의 저장 공간을 “영구 보관”으로 허용하지 않았습니다. 디스크가 부족하면 아직 GitHub에 올라가지 않은 변경 내용이 지워질 수 있으니 동기화를 켜 두세요.';
+      }
+    }).catch(() => {});
+    const shared = sharedOriginWarning();
     const body = el('div', {},
       s2,
       el('div', { class: 'subsection' },
         el('h3', { class: 'subsection-title' }, icon('shield', { size: 16 }), '저장 위치'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
           'API 키와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
-        clearBtn));
+        el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
+          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic 또는 Google) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
+        shared ? note('alert-triangle', shared) : null,
+        persisted,
+        el('div', { class: 'btn-row' }, clearBtn, wipeBtn),
+        el('p', { class: 'field-hint' }, '공용 PC에서는 사용 후 ‘이 기기의 데이터 모두 지우기’를 누르세요. 키·토큰과 함께 이 브라우저에 있는 논문·번역·메모·사용 기록까지 지웁니다(GitHub 저장소의 데이터는 그대로입니다).')));
     return section('data', '보안·데이터', 'shield', '키 관리와 저장 위치를 확인합니다.', body);
+  }
+
+  async #wipeDevice() {
+    const ok = await confirmDialog('이 브라우저에 저장된 논문 PDF, 번역, 하이라이트·메모, AI 요약·채팅, 사용 기록과 모든 설정(API 키·GitHub 토큰 포함)을 지울까요?\nGitHub 저장소에 동기화된 데이터는 지워지지 않습니다. 아직 올라가지 않은 변경 내용은 사라집니다.',
+      { okLabel: '모두 지우기', danger: true, title: '이 기기의 데이터 모두 지우기' });
+    if (!ok) return;
+    try {
+      await this.#deps.library?.wipeLocalData?.();
+    } catch (err) {
+      console.warn('[settings-view] wipeLocalData', err);
+      toast(`일부 데이터를 지우지 못했습니다: ${err?.message || err}`, { kind: 'error' });
+    }
+    for (const key of Object.values(STORAGE_KEYS)) safeStorage.remove(key);
+    try {
+      for (const key of Object.keys(localStorage)) if (key.startsWith('pr.')) localStorage.removeItem(key);
+    } catch { /* storage blocked */ }
+    location.hash = '#/';
+    location.reload();
   }
 
   async #clearSecrets() {
@@ -604,6 +725,20 @@ class SettingsView {
 }
 
 // ------------------------------------------------------------------ helpers
+
+/**
+ * GitHub Pages project sites of one account share one origin (user.github.io/a, user.github.io/b): localStorage
+ * and IndexedDB are per origin, so every page there could read this app's keys, token and library.
+ */
+function sharedOriginWarning() {
+  try {
+    const { hostname, pathname } = location;
+    if (!/\.github\.io$/i.test(hostname)) return '';
+    const firstSegment = pathname.split('/').filter(Boolean)[0] || '';
+    if (!firstSegment || /\.html?$/i.test(firstSegment)) return '';
+    return `이 앱은 ${hostname} 아래의 한 프로젝트 페이지(/${firstSegment}/)에서 열려 있습니다. 같은 계정의 다른 GitHub Pages 사이트와 브라우저 저장소를 함께 쓰므로, 그 사이트의 스크립트가 API 키·토큰·논문을 읽을 수 있습니다. 이 앱 전용 주소(전용 계정의 ${'<이름>'}.github.io 또는 사용자 도메인)에서 쓰는 것을 권장합니다.`;
+  } catch { return ''; }
+}
 
 function section(id, title, iconName, desc, body) {
   return el('section', { class: 'settings-section', id: `set-${id}`, 'aria-labelledby': `set-${id}-title` },
@@ -646,10 +781,16 @@ function savedToast() {
   savedTimer = setTimeout(() => toast('저장했습니다.', { kind: 'success', timeout: 1600 }), 250);
 }
 
+/** 'Claude Haiku 5.5' for a known Claude model id; other ids as they are. */
+function modelName(id) {
+  const known = CLAUDE_MODELS.find((m) => m.id === id);
+  return known ? known.label.replace(/\s*\(.*\)$/, '') : id;
+}
+
 function priceText(translateModel, assistModel) {
   const fmt = (id) => {
     const p = PRICES[id];
-    return p ? `${id}: 입력 $${p.input} / 출력 $${p.output}` : null;
+    return p ? `${modelName(id)}: 입력 $${p.input} / 출력 $${p.output}` : null;
   };
   const parts = [...new Set([translateModel, assistModel])].map(fmt).filter(Boolean);
   return parts.length ? `요금(100만 토큰당): ${parts.join(' · ')}` : '';

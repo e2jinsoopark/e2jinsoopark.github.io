@@ -4,7 +4,7 @@ import { el } from '../core/util.js';
 import { spinner, toast } from '../ui/components.js';
 import { summarize } from '../ai/tasks.js';
 import {
-  NO_TEXT_MESSAGE, aiGate, anySignal, button, copyText, emptyState, errorMessage, formatDateTime,
+  NO_TEXT_MESSAGE, aiGate, button, copyText, emptyState, errorMessage, formatDateTime,
   hasDocText, isAbortError, renderModelMarkdown, wireSidLinks,
 } from './shared.js';
 import { ensureStyles } from './styles.js';
@@ -32,6 +32,14 @@ class SummaryPanel {
       el('div', { class: 'pf-panel__scroll' }, this.paperCard(), this.toc, this.status, this.body));
     container.append(this.root);
     wireSidLinks(this.body, ctx, this.#ctl.signal);
+    // A summary made in another tab or on another device shows up here (and is never paid for twice).
+    const off = ctx.bus?.on?.('paper:ai-change', ({ paperId, ai } = {}) => {
+      if (paperId !== ctx.paper?.id || this.#run || !ai?.summary?.markdown) return;
+      if (this.summary?.markdown === ai.summary.markdown) return;
+      this.summary = ai.summary;
+      this.renderSummary();
+    });
+    if (off) this.#ctl.signal.addEventListener('abort', off, { once: true });
     this.load();
   }
 
@@ -55,22 +63,12 @@ class SummaryPanel {
     this.#loaded = true;
     if (this.#ctl.signal.aborted) return;
     if (this.summary) await this.renderSummary();
-    else {
-      this.renderIdle();
-      if (this.#shown) this.autoStart();
-    }
+    else this.renderIdle();
   }
 
+  /** Opening the tab never spends money by itself: the summary is made when the user asks (요약 만들기). */
   onShow() {
-    const first = !this.#shown;
     this.#shown = true;
-    if (first && !this.summary) this.autoStart();
-  }
-
-  /** Generate once automatically the first time the tab is opened (only when it can succeed). */
-  autoStart() {
-    if (!this.#loaded || this.summary || this.#run || !hasDocText(this.ctx.doc) || !this.ctx.settings.isAiReady()) return;
-    this.generate();
   }
 
   renderIdle() {
@@ -85,7 +83,8 @@ class SummaryPanel {
       this.status.replaceChildren(el('div', { class: 'pf-empty' },
         el('p', { class: 'pf-empty__title' }, '이 논문의 핵심을 한국어로 정리합니다.'),
         el('p', { class: 'pf-muted' }, '한 줄 요약 · 연구 목적 · 연구 방법 · 주요 결과 · 제한점 · 임상·연구적 시사점'),
-        button('요약 만들기', { kind: 'primary', onClick: () => this.generate(), attrs: { 'data-action': 'generate' } })));
+        button('요약 만들기', { kind: 'primary', onClick: () => this.generate(), attrs: { 'data-action': 'generate' } }),
+        el('p', { class: 'pf-muted pf-small' }, `요약·채팅 모델(${this.ctx.settings.model('assist') || '미설정'})로 논문 전체를 한 번 읽습니다. 만든 요약은 저장되어 다시 열 때 비용이 들지 않습니다.`)));
     }
   }
 
@@ -95,7 +94,8 @@ class SummaryPanel {
     this.#run?.abort();
     const run = new AbortController();
     this.#run = run;
-    const signal = anySignal(run.signal, this.#ctl.signal, this.ctx.signal);
+    // Only 취소 stops the request: closing the paper lets it finish and be saved (its input is already billed).
+    const signal = run.signal;
     this.setButtons(true);
     this.status.replaceChildren(el('div', { class: 'pf-loading' },
       spinner(18), el('span', {}, this.summary ? '요약을 다시 만드는 중…' : '요약을 만드는 중… (보통 10~30초)'),
@@ -108,8 +108,9 @@ class SummaryPanel {
         model: model || usage?.model || this.ctx.settings.model('assist'),
         createdAt: Date.now(),
       };
-      await this.renderSummary();
-      await this.ctx.saveAi({ summary: this.summary });
+      const saved = this.ctx.saveAi({ summary: this.summary });
+      if (!this.#ctl.signal.aborted) await this.renderSummary();
+      await saved;
     } catch (err) {
       if (this.#run !== run) return; // superseded by a newer generate()
       if (isAbortError(err, signal)) {
@@ -161,8 +162,7 @@ class SummaryPanel {
   }
 
   destroy() {
-    this.#ctl.abort();
-    this.#run?.abort();
+    this.#ctl.abort(); // an in-flight summary keeps running and is saved when it arrives
     this.root.remove();
   }
 }

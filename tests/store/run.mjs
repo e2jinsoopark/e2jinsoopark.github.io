@@ -100,6 +100,7 @@ let A;
 let B;
 let a; // ids created on A
 let bPaper;
+let tie = null; // devices H, I and a paper shared by the regression scenarios below
 
 try {
   // ------------------------------------------------------------------ 1
@@ -519,7 +520,13 @@ try {
   await test('switching to another repo re-uploads this device\'s library, including PDFs only cached from the old repo', async () => {
     fake.createRepo(OWNER, 'second', { private: true });
     const before = await B.ev(() => window.__dump());
+    // Regression (repo-switch-reuploads-all-local-data): without the user's consent nothing is uploaded.
+    const info = await B.ev((gh) => window.__lib.syncTargetChange(gh), { ...GH, repo: 'second' });
+    assert(info && info.localFiles > 0 && info.papers === before.papers.length && /second#main$/.test(info.to), `targetChange: ${JSON.stringify(info)}`);
     await B.ev((gh) => window.__configure(gh), { ...GH, repo: 'second' });
+    const refused = await B.ev(() => window.__waitSync({ state: 'error', pending: null }));
+    assert(/저장소가 바뀌었/.test(refused.message) && fake.files(OWNER, 'second').size === 0, `without consent: ${JSON.stringify(refused)}, files=${fake.files(OWNER, 'second').size}`);
+    await B.ev((gh) => window.__configure(gh), { ...GH, repo: 'second', carryOver: info.to });
     await B.ev(() => window.__waitSync({ timeout: 60000 }));
     const files = [...fake.files(OWNER, 'second').keys()];
     const lib = repoJson('library.json');
@@ -531,7 +538,115 @@ try {
     }
     assert(livePapers.join() === before.papers.map((p) => p.id).sort().join(), `papers ${livePapers}`);
     assert(lib.papers.length >= livePapers.length, 'old repo untouched');
-    return `second repo now has ${files.length} files: [${files.map((p) => p.replace(/^papers\/[^/]+\//, '…/')).join(', ')}]; ${before.papers.length} PDFs byte-identical to the old repo`;
+    return `without consent: “${refused.message}” and 0 files uploaded; with consent the second repo has ${files.length} files: [${files.map((p) => p.replace(/^papers\/[^/]+\//, '…/')).join(', ')}]; ${before.papers.length} PDFs byte-identical to the old repo`;
+  });
+
+  // ----------------------------------------------------------------- 17
+  await test('regression library-tie-reverts-remote-fields: a rename on one device survives the other device touching the paper before its pull', async () => {
+    fake.createRepo(OWNER, 'tie', { private: true });
+    const TIE = { ...GH, repo: 'tie' };
+    const H = await device('H');
+    const I = await device('I');
+    await H.ev((gh) => window.__boot({ github: gh }), TIE);
+    const pid = await H.ev(async () => {
+      const p = await window.__lib.addPaper(window.__makePdf(30_000, 41), { fileName: 'tie.pdf', meta: { title: 'Old title' } });
+      await window.__lib.flush();
+      return p.id;
+    });
+    await H.ev(() => window.__waitSync());
+    tie = { H, I, pid };
+    await I.ev((gh) => window.__boot({ github: gh }), TIE);
+    await I.ev(() => window.__waitSync());
+    // Laptop (H) renames and pushes; the desktop (I) opens the paper (lastOpenedAt) before its pull lands.
+    await H.ev((id) => { window.__lib.updatePaper(id, { title: 'New title' }); return window.__lib.flush(); }, pid);
+    await H.ev(() => window.__waitSync());
+    await I.ev((id) => { window.__lib.updatePaper(id, { lastOpenedAt: Date.now() + 5 }); return window.__lib.whenSaved(); }, pid);
+    await I.ev(() => window.__lib.sync.syncNow());
+    await I.ev(() => window.__waitSync());
+    const afterPull = await I.ev((id) => window.__lib.getPaper(id).title, pid);
+    // Any later write on I (here: a star and a new folder) must not push the stale title back.
+    await I.ev((id) => { window.__lib.updatePaper(id, { starred: true }); window.__lib.createFolder('나중 폴더'); return window.__lib.flush(); }, pid);
+    await I.ev(() => window.__waitSync());
+    await H.ev(() => window.__lib.sync.syncNow());
+    await H.ev(() => window.__waitSync());
+    const repoPaper = JSON.parse(fake.readFile(OWNER, 'tie', 'library.json').toString('utf8')).papers.find((p) => p.id === pid);
+    const onH = await H.ev((id) => window.__lib.getPaper(id), pid);
+    const onI = await I.ev((id) => window.__lib.getPaper(id), pid);
+    assert(afterPull === 'New title', `I still shows ${afterPull} after its pull`);
+    assert(repoPaper.title === 'New title' && repoPaper.starred === true && repoPaper.lastOpenedAt, `repo: ${JSON.stringify(repoPaper)}`);
+    assert(onH.title === 'New title' && onH.starred && onI.title === 'New title' && onI.lastOpenedAt === onH.lastOpenedAt, `devices: ${JSON.stringify({ onH, onI })}`);
+    return `I after pull: “${afterPull}”; repo after I's next write: title “${repoPaper.title}”, starred=${repoPaper.starred}, lastOpenedAt kept`;
+  });
+
+  // ----------------------------------------------------------------- 18
+  await test('regression blind-push-stale-base: a data file written after a failed download is merged with the remote copy, not pushed over it', async () => {
+    const { H, I, pid } = tie;
+    await H.ev(async (id) => {
+      await window.__lib.savePaperData(id, 'translation', { version: 1, targetLang: 'ko', segVersion: 1, items: { 'p1-0': { h: 'h0', t: '첫 문장', m: 'mock' }, 'p1-1': { h: 'h1', t: '둘째 문장', m: 'mock' } } });
+      await window.__lib.flush();
+    }, pid);
+    await H.ev(() => window.__waitSync());
+    await I.ev(() => window.__lib.sync.syncNow());
+    await I.ev(() => window.__waitSync());
+    // I has never downloaded translation.json; GitHub fails the download (3 × 500 → the client gives up) …
+    fake.failNext({ method: 'GET', path: /\/git\/blobs\//, status: 500, count: 3 });
+    const readErr = await I.ev(async (id) => { try { await window.__lib.getPaperData(id, 'translation'); return null; } catch (err) { return err.message; } }, pid);
+    // … so the reader starts empty and saves only its own new sentence.
+    await I.ev(async (id) => {
+      await window.__lib.savePaperData(id, 'translation', { version: 1, targetLang: 'ko', segVersion: 1, items: { 'p2-0': { h: 'h2', t: 'I에서 번역', m: 'mock' } } });
+    }, pid);
+    await I.ev(() => window.__lib.sync.syncNow());
+    await I.ev(() => window.__waitSync());
+    const repoItems = Object.keys(JSON.parse(fake.readFile(OWNER, 'tie', `papers/${pid}/translation.json`).toString('utf8')).items).sort();
+    const local = Object.keys((await I.ev((id) => window.__lib.getPaperData(id, 'translation'), pid)).items).sort();
+    assert(readErr && /[가-힣]/.test(readErr), `download should have failed: ${readErr}`);
+    assert(repoItems.join() === 'p1-0,p1-1,p2-0', `repo translation.json items: ${repoItems}`);
+    assert(local.join() === 'p1-0,p1-1,p2-0', `I local items: ${local}`);
+    return `download failed (“${readErr.slice(0, 60)}…”); after I's push the repo has [${repoItems}] (H's sentences kept)`;
+  });
+
+  // ----------------------------------------------------------------- 19
+  await test('regression stale-ai-snapshot-overwrites: chat messages appended on two devices before syncing both survive', async () => {
+    const { H, I, pid } = tie;
+    const append = (d, msg) => d.ev(({ id, m }) => window.__lib.updatePaperData(id, 'ai', (ai) => ({ ...ai, chat: [...(ai.chat || []), m] })), { id: pid, m: msg });
+    await append(H, { id: 'mH', role: 'user', content: 'H 질문', ts: Date.now() });
+    await append(I, { id: 'mI', role: 'user', content: 'I 질문', ts: Date.now() + 1 });
+    await H.ev(() => window.__lib.flush());
+    await H.ev(() => window.__waitSync());
+    await I.ev(() => window.__lib.flush());
+    await I.ev(() => window.__waitSync());
+    await H.ev(() => window.__lib.sync.syncNow());
+    const repoChat = JSON.parse(fake.readFile(OWNER, 'tie', `papers/${pid}/ai.json`).toString('utf8')).chat.map((m) => m.id);
+    const onH = (await H.ev((id) => window.__lib.getPaperData(id, 'ai'), pid)).chat.map((m) => m.id);
+    assert(repoChat.join() === 'mH,mI' && onH.join() === 'mH,mI', `repo chat ${repoChat}, H chat ${onH}`);
+    return `repo ai.json chat=[${repoChat}], H=[${onH}]`;
+  });
+
+  // ----------------------------------------------------------------- 20
+  await test('regression one-bad-file-blocks-sync: a PDF GitHub refuses (413) is kept locally and named; everything else still syncs', async () => {
+    const { H } = tie;
+    await H.ev(() => { window.__events.errors.length = 0; });
+    const ids = await H.ev(async () => {
+      const big = await window.__lib.addPaper(window.__makePdf(60_000, 51), { fileName: 'huge-scan.pdf', meta: { title: 'Huge scan' } });
+      await window.__lib.whenSaved();
+      return { big: big.id };
+    });
+    fake.failNext({ method: 'POST', path: /\/git\/blobs$/, status: 413, count: 1, minBodyBytes: 50_000 }); // the PDF, not library.json
+    await H.ev(() => window.__lib.flush());
+    const st = await H.ev(() => window.__waitSync({ timeout: 20000 }));
+    const errors = await H.ev(() => window.__events.errors);
+    const repoLib = JSON.parse(fake.readFile(OWNER, 'tie', 'library.json').toString('utf8'));
+    const pdfInRepo = fake.files(OWNER, 'tie').has(`papers/${ids.big}/paper.pdf`);
+    assert(st.state === 'idle' && st.pending === 0 && st.rejected === 1, `status: ${JSON.stringify(st)}`);
+    assert(repoLib.papers.some((p) => p.id === ids.big) && !pdfInRepo, `library.json synced=${repoLib.papers.some((p) => p.id === ids.big)}, pdf in repo=${pdfInRepo}`);
+    assert(errors.some((m) => /Huge scan/.test(m) && /너무 커서/.test(m)), `error event: ${JSON.stringify(errors)}`);
+    const local = await H.ev((id) => window.__lib.getPdf(id).then((b) => b.byteLength), ids.big);
+    assert(local === 60_000, 'the refused PDF must stay readable locally');
+    // A manual sync retries it (here GitHub accepts it now).
+    await H.ev(() => window.__lib.sync.syncNow());
+    const st2 = await H.ev(() => window.__waitSync());
+    assert(st2.rejected === 0 && fake.files(OWNER, 'tie').has(`papers/${ids.big}/paper.pdf`), `retry: ${JSON.stringify(st2)}`);
+    return `status after the 413: idle, pending 0, rejected 1; library.json pushed; message: “${errors.find((m) => /Huge scan/.test(m))}”; 지금 동기화 retried and uploaded it`;
   });
 } finally {
   await browser.close();

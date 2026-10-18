@@ -57,8 +57,32 @@ try {
   } else {
     log.push(`translate button disabled: ${await page.locator('.tb-tr-main').isDisabled()}; pane: ${(await page.locator('.tp-root').innerText()).slice(0, 120)}`);
   }
+  // Regression (fatal-ai-error-marks-sentences-failed): a bad key stops the run with ONE error toast that links to
+  // 설정; no sentence gets a 다시 시도 pill and no "N개 문장을 번역하지 못했습니다" toast follows.
+  const p2 = await ctx.newPage();
+  await p2.goto(`${BASE}/tests/shell/harness-real.html?mock=1&reset=1&fixture=${fixture}#/paper/pap_bundle`);
+  await p2.waitForFunction(() => document.querySelector('.tp-s[data-sid]'), null, { timeout: 60000 });
+  await p2.evaluate(async () => { (await import('/js/ai/mock.js')).mockControl.failNext = [{ code: 'auth' }]; });
+  await p2.click('.tb-tr-main');
+  await p2.waitForSelector('.toast', { timeout: 10000 });
+  await p2.waitForTimeout(1500);
+  const fatal = await p2.evaluate(() => ({
+    toasts: [...document.querySelectorAll('.toast')].map((t) => t.textContent.replace(/\s+/g, ' ').trim()),
+    retryPills: document.querySelectorAll('.tp-retry').length,
+    failed: document.querySelectorAll('.tp-s.is-failed').length,
+  }));
+  await p2.screenshot({ path: `${OUT}/real-${fixture}-7-bad-key.png` });
+  await p2.close();
+  log.push(`bad key: ${JSON.stringify(fatal)}`);
+  const ok = fatal.retryPills === 0 && fatal.failed === 0 && fatal.toasts.length === 1
+    && /API 키/.test(fatal.toasts[0]) && /설정 열기/.test(fatal.toasts[0]) && !fatal.toasts.some((t) => /번역하지 못했습니다/.test(t));
+  if (!ok) {
+    errors.push(`FAIL bad-key run: ${JSON.stringify(fatal)}`);
+    process.exitCode = 1;
+  }
 } catch (err) {
   errors.push(`test error: ${err.message}`);
+  process.exitCode = 1;
   await page.screenshot({ path: `${OUT}/real-${fixture}-error.png` }).catch(() => {});
 } finally {
   await browser.close();

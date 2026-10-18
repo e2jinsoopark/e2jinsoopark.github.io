@@ -6,7 +6,7 @@ import { quickTranslate } from '../ai/tasks.js';
 import { removeWithUndo } from './annotations.js';
 import { explainSelection } from './explain.js';
 import {
-  AI_NOT_READY_MESSAGE, HIGHLIGHT_COLORS, anySignal, clip, copyText, errorMessage, isAbortError,
+  HIGHLIGHT_COLORS, aiGate, anySignal, clip, copyText, errorMessage, isAbortError,
   pointRect, toRect,
 } from './shared.js';
 
@@ -147,7 +147,9 @@ export function installSelectionMenu(ctx, session, { signal }) {
       body,
       el('div', { class: 'pf-pop__foot' }, copyBtn, el('button', { type: 'button', class: 'pf-btn pf-btn--sm', onclick: close }, '닫기')));
     if (!ctx.settings.isAiReady()) {
-      body.append(el('p', { class: 'pf-error' }, AI_NOT_READY_MESSAGE));
+      // A setup step, not an error: the gate links to 설정, and there is nothing to copy.
+      copyBtn.hidden = true;
+      body.append(aiGate());
       open('translate', rect, content);
       return;
     }

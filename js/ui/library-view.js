@@ -66,8 +66,12 @@ class LibraryView {
   destroy() {
     for (const off of this.#cleanup) off();
     this.#cleanup = [];
+    // "…을(를) 추가했습니다 [열기]" is stale once the library is left (and would cover the reader's panes).
+    this.#uploadToast?.close?.();
     this.#root.remove();
   }
+
+  #uploadToast = null;
 
   // ---------------------------------------------------------------- build
 
@@ -169,7 +173,7 @@ class LibraryView {
 
     const tree = this.#folderTree(folders, null, 0, counts);
     const section = el('div', { class: 'lib-nav-section' }, heading,
-      tree.childElementCount ? tree : el('p', { class: 'field-hint', style: { padding: '2px 10px' } }, '폴더가 없습니다. + 를 눌러 만들어 보세요.'));
+      tree.childElementCount ? tree : el('p', { class: 'field-hint', style: { padding: '2px 10px' } }, '폴더가 없습니다. 위의 새 폴더 버튼을 눌러 만들어 보세요.'));
     this.#els.nav.replaceChildren(smart, section);
   }
 
@@ -432,10 +436,10 @@ class LibraryView {
         step(1, ai, 'AI 번역 연결',
           mock ? '테스트 모드(모의 AI)로 실행 중입니다. 실제 번역에는 설정에서 API 키가 필요합니다.'
             : ai ? 'AI API 키가 설정되어 있습니다.' : '설정에서 Claude 또는 Gemini API 키를 입력하세요. 키는 이 브라우저에만 저장됩니다.',
-          button(ai && !mock ? '변경' : '설정 열기', { kind: ai && !mock ? 'ghost' : 'subtle', icon: 'key', size: 'sm', onClick: () => this.#navigate('#/settings') })),
+          button(ai && !mock ? '변경' : '설정 열기', { kind: ai && !mock ? 'ghost' : 'subtle', icon: 'key', size: 'sm', onClick: () => this.#navigate('#/settings/ai') })),
         step(2, sync, '(선택) GitHub 동기화',
           sync ? 'GitHub 비공개 저장소와 동기화하도록 설정되어 있습니다.' : '비공개 저장소 하나를 연결하면 여러 기기에서 같은 라이브러리·번역·메모를 사용할 수 있습니다.',
-          button(sync ? '변경' : '설정 열기', { kind: sync ? 'ghost' : 'subtle', icon: 'git-branch', size: 'sm', onClick: () => this.#navigate('#/settings') })),
+          button(sync ? '변경' : '설정 열기', { kind: sync ? 'ghost' : 'subtle', icon: 'git-branch', size: 'sm', onClick: () => this.#navigate('#/settings/sync') })),
         step(3, false, 'PDF 올리고 읽기', '논문을 열고 ‘번역 시작’을 누르면 현재 페이지부터 번역됩니다. 번역은 저장되어 다시 열 때 비용이 들지 않습니다.')));
   }
 
@@ -678,7 +682,8 @@ class LibraryView {
     }
     if (added.length === 1) {
       const paper = added[0];
-      toast(`‘${paperTitle(paper)}’을(를) 추가했습니다.`, {
+      const title = paperTitle(paper);
+      this.#uploadToast = toast(`‘${title.length > 60 ? `${title.slice(0, 59)}…` : title}’을(를) 추가했습니다.`, {
         kind: 'success', timeout: 6000,
         action: { label: '열기', onClick: () => this.#navigate(`#/paper/${encodeURIComponent(paper.id)}`) },
       });

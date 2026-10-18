@@ -6,6 +6,7 @@ Nothing outside these was touched.
 | File | Role |
 |---|---|
 | `db.js` | IndexedDB `paper-reader` v1: `files` (key = repo path, index `dirty`), `meta`, `blobs` (key = git sha). SPEC API plus atomic `update()`. |
+| `merge.js` | The merge rules (pure functions). `sync.js` re-exports them; `features/annotations.js` uses `mergeRecords`. |
 | `github.js` | `GitHubClient` (Git Data API), `GitHubError`, `GitHubConflictError`, `gitBlobSha()`. |
 | `sync.js` | `SyncEngine` (local-first, debounced push, pull, merge) and the merge functions. |
 | `library.js` | `Library` (SPEC §2.3 / §3.3) on top of the engine. |
@@ -57,8 +58,9 @@ Nothing outside these was touched.
   - A cached clean text file is refreshed on pull.
 - **Merges.**
   - *library.json / annotations.json*, per item id: newer `updatedAt` wins, and a tombstone wins a tie. When the common base version of an item is known (always after the first sync), the merge is per field: a rename on A and a move on B both survive. A delete on one side sticks even if the other side edited another field.
-  - *translation.json*: union of items, local wins per sid; a higher `segVersion` replaces the lower one wholesale.
-  - *ai.json*: per top-level key, 3-way with the base (a key changed on one side only takes that side); otherwise the newer file's value.
+  - *translation.json*: union of items, local wins per sid; on a sid both sides have, the higher `segVersion` wins. Nothing is dropped wholesale: readers validate every item by its text hash.
+  - *ai.json*: `chat` and `explanations` are unions by record id (time order, capped at 200 / 100); a clear sets `chatClearedAt` (max of both sides wins). Other keys: 3-way with the base (a key changed on one side only takes that side); changed on both sides → the value with the newer `createdAt`/`fetchedAt`, else the newer file's.
+  - A record merged field by field from both sides gets `updatedAt = max(both) + 1`, so it supersedes both in any later merge that has no base (the in-memory library, another tab, an annotation store). Without this, a tie kept the stale side and the next write reverted the other device's change.
   - *paper.pdf* and other files: local wins.
 - **Push.**
   - Debounce 3 s, at most 30 s after the first pending write, and immediately on `visibilitychange→hidden` / `pagehide`.
@@ -85,8 +87,16 @@ Nothing outside these was touched.
   - A BroadcastChannel tells other tabs which paths changed, so they reload (`origin:'tab'`).
   - `writeFile` merges mergeable JSON with what is already stored, so a stale tab cannot drop another tab's records.
 - **Losing the page.** Library changes are written to IndexedDB immediately. If the page is hidden or closed while a write is unconfirmed, a synchronous copy goes to `localStorage['pr.store.libraryJournal.v1']`, which the next `Library.open` merges and removes. In the reload test the journal is what saved the change.
-- **Switching repo** (or the remote branch being deleted): all local data, including PDFs only cached from the old repo, becomes pending and is pushed to the new target.
-- `navigator.storage.persist()` is requested once, when the first PDF is stored.
+- **Switching repo** needs consent: when `meta.target` is another repo and this device has data, the engine stops with `code: 'target_changed'` (fatal, nothing uploaded) unless `settings.github.carryOver` equals the new target. `SyncEngine.targetChange(cfg)` / `Library.syncTargetChange(cfg)` tell the settings screen, which asks 올리기 / 이 기기 데이터 지우고 시작 / 취소. With consent (or when the remote branch was deleted) all local data, including PDFs only cached from the old repo, becomes pending and is pushed to the new target.
+- **Stale sync base before a push**: a dirty mergeable file whose `baseSha` is not the remote's current sha (its first edit happened while the download failed, a download raced a pull, a repo switch) is merged with the remote version before it is uploaded (`#reconcileStale`). A download that finishes after a pull moved the path to a newer blob is not cached as a clean copy, and `readFile` refreshes a clean copy whose sha is behind the tree.
+- **A file GitHub refuses** (413 / 422 on its blob) is marked `dirty: 2` ("rejected"), skipped, and reported (`'rejected'` event → Library `'error'` naming the paper); everything else keeps syncing. `status.rejected` counts them; 지금 동기화 retries them. `LIMITS.maxPdfBytes` is 70 MB so the base64 JSON body stays under GitHub's 100 MB.
+- **Library memory** keeps `#base` (the stored version memory was last reconciled with): remote versions are absorbed 3-way (or simply replace memory when nothing is unsaved), writes pass the base to `writeFile`, and reads/writes of library.json share one chain so versions are absorbed in order. The page-hide journal stores its base too and is removed once the write it covers has landed.
+- `Library.updatePaperData(id, kind, mutate)` is a read-modify-write on what is stored now (a failed read throws instead of overwriting). The reader's `saveAi` uses it. `savePaperData(id, kind, obj, { base })` stamps `updatedAt = max(now, base.updatedAt + 1)` and returns what is stored; it refuses papers that were deleted (tombstoned).
+- The repo must be `visibility: 'private'` (an enterprise `internal` repo is refused); the quick check is repeated every 10 min and at most 60 s before a push. Classic `ghp_`/`repo`-scope tokens get a warning. A 422 on the ref update that names a protection rule is a fatal `protected` error, not an endless conflict.
+- Blob downloads have a 60 s stall watchdog and uploads a size-based timeout (both → `timeout`, retried with backoff).
+- IndexedDB request errors abort their transaction (no `preventDefault`), so a failed read can no longer resolve as "no record".
+- `navigator.storage.persist()` is requested on every `Library.open` (`storagePersisted()` reports the answer; 설정 shows a warning when it was denied). A downloaded PDF that cannot be cached (quota) still opens.
+- `Library.wipeLocalData()` stops sync and deletes the IndexedDB database (설정 → 이 기기의 데이터 모두 지우기).
 - Commit messages are Korean, e.g. `논문 리더 동기화: library.json, papers/p_x/annotations.json 외 2개`.
 
 ## Test hooks — pointing the app at the fake server

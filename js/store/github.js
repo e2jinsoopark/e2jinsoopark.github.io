@@ -8,6 +8,9 @@ const JSON_MEDIA = 'application/vnd.github+json';
 const RAW_MEDIA = 'application/vnd.github.raw+json';
 const META_TIMEOUT_MS = 30_000; // metadata calls only; blob transfers may legitimately take minutes
 const UPLOAD_CONCURRENCY = 3;
+const BLOB_STALL_MS = 60_000; // a download that receives nothing for this long is aborted (timeout → retried)
+const UPLOAD_BASE_TIMEOUT_MS = 120_000;
+const UPLOAD_MIN_BYTES_PER_MS = 50; // ≈ 50 KB/s: slower uploads than this are treated as stalled
 const MAX_ATTEMPTS = 3; // per request: transient 5xx / short rate-limit waits
 
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
@@ -106,21 +109,29 @@ export class GitHubClient {
     if (invalid) return { ok: false, repoPrivate: null, canPush: false, message: invalid };
     const name = `${this.#owner}/${this.#repo}`;
     let repo;
+    let scopes;
     try {
-      ({ data: repo } = await this.#request('GET', this.#repoPath(''), { signal }));
+      ({ data: repo, scopes } = await this.#request('GET', this.#repoPath(''), { signal }));
     } catch (err) {
       if (err.name === 'AbortError') throw err;
       return { ok: false, repoPrivate: null, canPush: false, message: err.message, code: err.code };
     }
-    const repoPrivate = repo.private === true || (repo.visibility != null && repo.visibility !== 'public');
+    // Only 'private' is private: an enterprise 'internal' repo is readable by every member of the enterprise.
+    const visibility = repo.visibility ?? (repo.private === true ? 'private' : 'public');
+    const repoPrivate = visibility === 'private';
     const perms = repo.permissions;
     let canPush = perms ? Boolean(perms.push || perms.maintain || perms.admin) : true;
     if (!repoPrivate) {
       return {
-        ok: true, repoPrivate: false, canPush,
-        message: `공개(Public) 저장소입니다 (${name}). 여기에 동기화하면 논문 PDF·번역·메모가 누구에게나 공개됩니다. 비공개 저장소를 사용하세요.`,
+        ok: true, repoPrivate: false, canPush, visibility,
+        message: visibility === 'internal'
+          ? `조직 내부(Internal) 저장소입니다 (${name}). 조직의 모든 구성원이 논문 PDF·번역·메모를 볼 수 있습니다. 개인 비공개(Private) 저장소를 사용하세요.`
+          : `공개(Public) 저장소입니다 (${name}). 여기에 동기화하면 논문 PDF·번역·메모가 누구에게나 공개됩니다. 비공개 저장소를 사용하세요.`,
       };
     }
+    // Classic tokens (ghp_…, or any response carrying X-OAuth-Scopes) reach every repository the user can,
+    // so one stolen token would expose all of them, not just this data repo.
+    const broadToken = /(^|[\s,])repo([\s,]|$)/.test(scopes || '') || /^gh[op]_/.test(this.#token);
 
     let empty = false;
     let branchExists = true;
@@ -154,8 +165,9 @@ export class GitHubClient {
     if (empty) notes.push('빈 저장소 — 첫 동기화 때 README.md를 만들고 시작합니다');
     else if (!branchExists) notes.push(`‘${this.#branch}’ 브랜치가 없어 첫 동기화 때 만듭니다`);
     if (foreign) notes.push('주의: 이 저장소에는 논문 리더와 관계없는 파일이 있습니다. 논문 전용 비공개 저장소를 따로 만들어 쓰는 것을 권장합니다');
+    if (broadToken) notes.push('주의: 이 토큰은 내 모든 저장소에 접근할 수 있는 Classic 토큰입니다. 이 저장소 하나만 선택한 Fine-grained 토큰(github_pat_…)으로 바꾸는 것을 권장합니다');
     return {
-      ok: true, repoPrivate, canPush: true, empty, branchExists, foreign, defaultBranch: repo.default_branch,
+      ok: true, repoPrivate, canPush: true, empty, branchExists, foreign, broadToken, defaultBranch: repo.default_branch,
       message: [`연결되었습니다 · 비공개 저장소 · 쓰기 가능 (${name}, ${this.#branch} 브랜치)`, ...notes].join(' · '),
     };
   }
@@ -207,7 +219,7 @@ export class GitHubClient {
   async readBlob(sha, { signal } = {}) {
     this.#assertConfig();
     const res = await this.#request('GET', this.#repoPath(`/git/blobs/${encodeURIComponent(sha)}`), {
-      accept: RAW_MEDIA, responseType: 'bytes', signal, timeoutMs: 0,
+      accept: RAW_MEDIA, responseType: 'bytes', signal, timeoutMs: 0, stallMs: BLOB_STALL_MS,
     });
     let bytes = res.bytes;
     if ((await gitBlobSha(bytes)) === sha) return bytes;
@@ -226,7 +238,9 @@ export class GitHubClient {
     const u8 = bytes instanceof Uint8Array ? bytes : utf8Encode(String(bytes));
     // Build the (possibly ~130 MB) JSON body from parts to avoid another full-size string copy.
     const body = new Blob(['{"encoding":"base64","content":"', bytesToBase64(u8), '"}'], { type: 'application/json' });
-    const { data } = await this.#request('POST', this.#repoPath('/git/blobs'), { rawBody: body, signal, timeoutMs: 0 });
+    // Upload progress cannot be observed with fetch, so bound the whole upload generously by its size.
+    const timeoutMs = UPLOAD_BASE_TIMEOUT_MS + Math.ceil(body.size / UPLOAD_MIN_BYTES_PER_MS);
+    const { data } = await this.#request('POST', this.#repoPath('/git/blobs'), { rawBody: body, signal, timeoutMs });
     if (!data?.sha) throw new GitHubError('GitHub에 파일을 올리지 못했습니다.', { code: 'invalid' });
     return data.sha;
   }
@@ -278,7 +292,11 @@ export class GitHubClient {
         });
       }
     } catch (err) {
-      // 422 = not a fast-forward (PATCH) or the branch appeared meanwhile (POST): someone else pushed.
+      // 422 = not a fast-forward (PATCH) or the branch appeared meanwhile (POST): someone else pushed —
+      // unless the branch is protected (branch protection / rulesets), which no retry can fix.
+      if (err.status === 422 && /protected|rule|violat/i.test(err.ghMessage || '')) {
+        throw new GitHubError(`‘${this.#branch}’ 브랜치에 보호 규칙(branch protection·ruleset)이 있어 앱이 저장할 수 없습니다. 저장소 설정에서 이 브랜치의 보호 규칙을 해제하거나, 보호되지 않은 다른 브랜치를 지정하세요.`, { code: 'protected', status: 422, cause: err });
+      }
       if (err.status === 422) throw new GitHubConflictError(undefined, { cause: err });
       throw err;
     }
@@ -375,7 +393,7 @@ export class GitHubClient {
    * fetch wrapper: auth + API headers, Korean errors, short rate-limit waits, 5xx retries.
    * @returns {Promise<{ status: number, data?: any, bytes?: Uint8Array, etag?: string }>}
    */
-  async #request(method, path, { body, rawBody, accept = JSON_MEDIA, etag, responseType = 'json', signal, timeoutMs = META_TIMEOUT_MS } = {}) {
+  async #request(method, path, { body, rawBody, accept = JSON_MEDIA, etag, responseType = 'json', signal, timeoutMs = META_TIMEOUT_MS, stallMs = 0 } = {}) {
     const url = `${this.#apiBase}${path}`;
     for (let attempt = 1; ; attempt++) {
       const headers = {
@@ -385,7 +403,11 @@ export class GitHubClient {
       };
       if (body !== undefined || rawBody) headers['Content-Type'] = 'application/json';
       if (etag) headers['If-None-Match'] = etag;
-      const signals = [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : null].filter(Boolean);
+      // Blob transfers have no overall timeout (they may take minutes); a stall watchdog aborts a download
+      // that stops moving (half-open connection after sleep/Wi-Fi switch), so the sync cycle cannot hang.
+      const stall = stallMs ? stallWatchdog(stallMs) : null;
+      const signals = [signal, timeoutMs ? AbortSignal.timeout(timeoutMs) : null, stall?.signal].filter(Boolean);
+      const timeoutError = (cause) => new GitHubError('GitHub 응답이 너무 늦습니다. 인터넷 연결을 확인하세요.', { code: 'timeout', cause });
       let res;
       try {
         res = await this.#fetch(url, {
@@ -398,23 +420,32 @@ export class GitHubClient {
           signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
         });
       } catch (err) {
+        stall?.stop();
         if (signal?.aborted) throw signal.reason ?? err;
-        if (err?.name === 'TimeoutError') {
-          throw new GitHubError('GitHub 응답이 너무 늦습니다. 인터넷 연결을 확인하세요.', { code: 'timeout', cause: err });
-        }
+        if (err?.name === 'TimeoutError') throw timeoutError(err);
         throw new GitHubError('인터넷에 연결되어 있지 않거나 GitHub에 접속할 수 없습니다.', { code: 'network', cause: err });
       }
 
-      if (res.status === 304) return { status: 304, etag };
+      if (res.status === 304) { stall?.stop(); return { status: 304, etag }; }
       if (res.ok) {
-        const out = { status: res.status, etag: res.headers.get('etag') || undefined };
-        if (responseType === 'bytes') out.bytes = new Uint8Array(await res.arrayBuffer());
-        else out.data = res.status === 204 ? null : await res.json().catch(() => null);
+        const out = { status: res.status, etag: res.headers.get('etag') || undefined, scopes: res.headers.get('x-oauth-scopes') };
+        try {
+          if (responseType === 'bytes') out.bytes = await readBytes(res, stall);
+          else out.data = res.status === 204 ? null : await res.json().catch(() => null);
+        } catch (err) {
+          if (signal?.aborted) throw signal.reason ?? err;
+          if (err?.name === 'TimeoutError') throw timeoutError(err);
+          throw new GitHubError('GitHub에서 파일을 받는 중 연결이 끊어졌습니다.', { code: 'network', cause: err });
+        } finally {
+          stall?.stop();
+        }
         return out;
       }
+      stall?.stop();
 
       const errBody = await res.json().catch(() => null);
       const err = this.#errorFor(res, errBody, method, path);
+      err.ghMessage = String(errBody?.message || '');
       console.warn('[store] GitHub', method, path, res.status, errBody?.message || '');
       if (attempt < MAX_ATTEMPTS) {
         if (err.code === 'rate_limit' && err.retryAt - Date.now() <= this.#rateLimitMaxWaitMs) {
@@ -512,6 +543,38 @@ function normalizeApiBase(apiBase) {
   } catch { /* fall through */ }
   console.warn('[store] ignoring invalid GitHub apiBase', raw);
   return DEFAULT_API_BASE;
+}
+
+/** An AbortSignal that fires (TimeoutError) when `kick()` has not been called for `ms`. */
+function stallWatchdog(ms) {
+  const ac = new AbortController();
+  let timer = null;
+  const kick = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ac.abort(new DOMException('GitHub 전송이 멈췄습니다.', 'TimeoutError')), ms);
+  };
+  kick();
+  return { signal: ac.signal, kick, stop: () => clearTimeout(timer) };
+}
+
+/** Response body as bytes; every chunk resets the stall watchdog. */
+async function readBytes(res, stall) {
+  if (!stall || !res.body?.getReader) return new Uint8Array(await res.arrayBuffer());
+  stall.kick();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    stall.kick();
+    chunks.push(value);
+    size += value.byteLength;
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out;
 }
 
 async function sleepUnlessAborted(ms, signal) {

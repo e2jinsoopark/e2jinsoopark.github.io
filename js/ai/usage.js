@@ -42,7 +42,7 @@ export function priceFor(model) {
 }
 
 /**
- * Cost of one request in USD. Unknown models (e.g. Gemini, whose free tier is the expected use) cost 0.
+ * Cost of one request in USD. Gemini and other non-Claude models are not priced (0; the UI says so, see isPriced).
  * The long-context rate card (Claude Haiku 5.5 above 100K prompt tokens) is chosen by the TOTAL prompt size:
  * uncached input + cache reads + cache writes, and applies to every token of that request, output included.
  * A usage with `parts` (one entry per attempt, e.g. after a server-side refusal fallback) is the sum of its parts,
@@ -51,8 +51,10 @@ export function priceFor(model) {
  */
 export function costUsd(usage) {
   if (!usage) return 0;
-  if (Array.isArray(usage.parts) && usage.parts.length) return usage.parts.reduce((sum, p) => sum + costUsd(p), 0);
-  const price = priceFor(usage.model);
+  if (Array.isArray(usage.parts) && usage.parts.length) {
+    return usage.parts.reduce((sum, p) => sum + costUsd({ requestedModel: usage.requestedModel, ...p }), 0);
+  }
+  const price = priceFor(usage.model) ?? claudeFallbackPrice(usage);
   if (!price) return 0;
   const input = num(usage.inputTokens);
   const output = num(usage.outputTokens);
@@ -67,6 +69,26 @@ export function costUsd(usage) {
   const cacheWriteRate = price.cacheWrite ?? rates.input * CACHE_WRITE_FACTOR;
   const usd = input * rates.input + output * rates.output + cacheRead * cacheReadRate + cacheWrite * cacheWriteRate;
   return usd / 1_000_000;
+}
+
+/** True when cost can be estimated for this model (Gemini and unknown models are not priced). */
+export function isPriced(model) {
+  return Boolean(priceFor(model)) || /^claude-/.test(String(model || ''));
+}
+
+const warnedUnpriced = new Set();
+/**
+ * A Claude model missing from PRICES (e.g. a new fallback target) is priced at the requested model's rates rather
+ * than booked as free.
+ */
+function claudeFallbackPrice(usage) {
+  if (!/^claude-/.test(String(usage.model || ''))) return null;
+  const price = priceFor(usage.requestedModel);
+  if (price && !warnedUnpriced.has(usage.model)) {
+    warnedUnpriced.add(usage.model);
+    console.warn('[ai] no price for', usage.model, '— estimating at', usage.requestedModel, 'rates');
+  }
+  return price;
 }
 
 /** "YYYY-MM" for a timestamp in local time. */
@@ -92,7 +114,7 @@ export function recordUsage(usage, { paperId, task } = {}) {
   for (const part of parts) {
     const model = part.model || 'unknown';
     const m = (month.byModel[model] ||= { usd: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-    m.usd += costUsd(part);
+    m.usd += costUsd({ requestedModel: usage.requestedModel, ...part });
     m.calls += 1;
     m.inputTokens += num(part.inputTokens);
     m.outputTokens += num(part.outputTokens);

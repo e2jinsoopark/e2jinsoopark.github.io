@@ -74,10 +74,20 @@ promise), `onShow()` on every show, `destroy()` on close; `signal` aborts when t
 - Narrow screens (≤ 860 px): panes stack (PDF on top), divider becomes horizontal; toolbar labels collapse progressively (1180 / 980 / 860 / 640 px). Library sidebar becomes a drawer (☰, Esc closes).
 - Translation controls: 번역 시작 / 이어서 번역 / 번역 완료 + ▾ menu (전체 번역 현재 페이지부터, 이 페이지만, 실패한 문장 다시 번역, 중지, model + this month's usage). Progress bar, %, running cost (`progress.costUsd`), stop button. If `settings.isAiReady()` is false → modal pointing to 설정.
   Requested sentences are marked `pending` up front; at the end each is resolved via `translator.statusOf(sid)` when that optional method exists (real Translator), otherwise untranslated = failed. Also uses the optional `'pending'` event and `update.detail.failed`. A retry may run while a full translation is running; a second full run may not.
-- Persistence: translation saves are debounced 1.5 s (`library.savePaperData(id,'translation',obj)`) and flushed on close; `translatedCount`/`sentenceCount` (= `progress.done/total`) are pushed to the library every ≤ 2.5 s and on close; `lastOpenedAt` on open.
+- Persistence: translation saves are debounced 1.5 s but never held back more than 5 s, flushed on close and when the page is hidden (pagehide / visibilitychange); a failed save is handed back to the translator, which stops the run. `ctx.saveAi(patch)` is a read-modify-write on the stored ai.json (`library.updatePaperData`); ai.json changes from other tabs/devices reload `getAi()` and emit `bus` `'paper:ai-change'`. A paper deleted on another device stops the translator and saving.
+- Fatal AI errors (bad key, no credit, no access) show one toast with 설정 열기 and no failed-sentence toast; 이 페이지만 번역 sends exactly the sentences it marks pending; translations that failed a fidelity check get a dotted underline (`check` mark layer).
+- Library counts: `translatedCount`/`sentenceCount` (= `progress.done/total`) are pushed to the library every ≤ 2.5 s and on close; `lastOpenedAt` on open.
 
 ## Settings
 
+`#/settings/<section>` (e.g. `#/settings/sync`) opens at that section; the onboarding steps use it.
+연결 테스트 now saves on success (like the AI 테스트) and starts sync; leaving with unsaved GitHub fields asks first.
+Saving a repo different from the one this device's data came from asks 올리기 / 이 기기 데이터 지우고 시작 / 취소
+(see store notes: `carryOver`). 보안·데이터 has **이 기기의 데이터 모두 지우기** (IndexedDB + every `pr.*` key) and warns
+when the app runs on a shared `*.github.io/<project>/` origin or persistent storage was denied. Usage shows
+"비용 미집계" for unpriced (Gemini) models and model labels instead of ids.
+Settings follow other tabs (`storage` event); `settings.set()` merges into what is stored now. Test harness pages
+under `/tests/` always use the mock provider when not served from localhost.
 AI keys save on change (blur/Enter); 테스트 saves first, then `getProvider(id).testKey()`. Gemini models come
 from `getProvider('gemini').listModels()` (auto-loaded when a key exists); empty model fields get defaults
 (first `flash` model → 번역, first `pro` model → 요약·채팅). GitHub fields save only with **저장하고 동기화 시작**:

@@ -5,6 +5,9 @@ import { emit } from '../core/bus.js';
 import { sleep, uid, utf8Decode, utf8Encode } from '../core/util.js';
 import { db as defaultDb, DELETE } from './db.js';
 import { GitHubClient, GitHubConflictError, GitHubError, README_PATH, README_TEXT, gitBlobSha, mapLimit } from './github.js';
+import { deepEqual, mergeAi, mergeAnnotations, mergeLibrary, mergeRecords, mergeTranslation, toMillis } from './merge.js';
+
+export { deepEqual, mergeAi, mergeAnnotations, mergeLibrary, mergeRecords, mergeTranslation, toMillis };
 
 const PUSH_DELAY_MS = 3_000;
 const PUSH_MAX_DELAY_MS = 30_000; // continuous writes (e.g. a running translation) still push this often
@@ -15,6 +18,13 @@ const MAX_CONFLICT_RETRIES = 4;
 const TRANSFER_CONCURRENCY = 3;
 const COMMIT_BATCH_BYTES = 48 * 1024 * 1024;
 const LOCK_NAME = 'paper-reader-sync';
+const VERIFY_EVERY_MS = 10 * 60_000; // re-check that the repo is still private while a tab stays open
+const VERIFY_BEFORE_PUSH_MS = 60_000; // …and shortly before uploading anything
+// 'dirty' index values: 1 = waiting to be pushed, 2 = GitHub refused the upload (kept locally, not retried
+// until the file is written again or the user syncs by hand).
+const PENDING = 1;
+const REJECTED = 2;
+
 const CHANNEL_NAME = 'paper-reader-sync';
 const META_KEY = 'remote';
 const LIBRARY_PATH = 'library.json';
@@ -43,10 +53,11 @@ export class SyncEngine extends EventTarget {
   #createClient;
   #opts;
   #id = uid('sync');
-  #status = { state: 'disabled', message: '', pending: 0, lastSyncAt: null };
+  #status = { state: 'disabled', message: '', pending: 0, rejected: 0, lastSyncAt: null };
   #client = null;
   #running = false;
   #verified = false;
+  #verifiedAt = 0;
   #fatal = false;
   #cycle = null;
   #again = false;
@@ -137,8 +148,24 @@ export class SyncEngine extends EventTarget {
   async syncNow() {
     if (!this.#client) return this.status;
     this.#fatal = false; // the user may have fixed the cause (token, permissions) on GitHub
+    await this.#retryRejected();
     await this.#runCycle('manual');
     return this.status;
+  }
+
+  /**
+   * Would applying `cfg` point sync at a different repository than the one this device's data came from?
+   * Returns `{ from, to, localFiles }` (targets as GitHubClient.target strings) or null. The settings screen
+   * asks the user before uploading the local library to a new repository; passing `to` back as
+   * `cfg.carryOver` is that consent. Without it the engine refuses to upload to the new repo.
+   */
+  async targetChange(cfg) {
+    if (!(cfg?.owner && cfg?.repo && cfg?.token)) return null;
+    const to = this.#createClient({ ...cfg }).target;
+    const meta = await this.#loadMeta();
+    if (!meta?.target || meta.target === to) return null;
+    const localFiles = await this.#db.count('files');
+    return localFiles ? { from: meta.target, to, localFiles } : null;
   }
 
   /** Push pending writes right away (page hidden / closing). */
@@ -159,20 +186,33 @@ export class SyncEngine extends EventTarget {
    */
   async readFile(path, { as = defaultAs(path), local = false } = {}) {
     const rec = await this.#db.get('files', path);
-    if (rec) return rec.deleted ? null : decode(rec.data, as, path);
-    if (local) return null;
-    const entry = (await this.#currentMeta())?.tree?.[path];
+    if (rec && (rec.deleted || local || rec.dirty || !isTextPath(path))) return rec.deleted ? null : decode(rec.data, as, path);
+    const entry = local ? null : (await this.#currentMeta())?.tree?.[path];
+    if (rec) {
+      // A clean copy older than the remote (a download that raced a pull): refresh it, or keep it offline.
+      if (entry && rec.baseSha && entry.sha !== rec.baseSha) {
+        try {
+          return decode(await this.#fetchRemote(path, entry.sha), as, path);
+        } catch (err) {
+          console.warn('[store] refreshing a stale local copy failed; using it', path, err);
+        }
+      }
+      return decode(rec.data, as, path);
+    }
     if (!entry) return null;
     return decode(await this.#fetchRemote(path, entry.sha), as, path);
   }
 
   /**
    * Store locally and mark dirty. JSON files with a merge rule are merged with what is already
-   * stored (another tab may have written it), so a stale writer cannot drop records.
+   * stored (another tab may have written it), so a stale writer cannot drop records. `base` (optional) is
+   * the version the caller's object was derived from: with it the merge is 3-way, so fields only the stored
+   * copy changed (a pull, another tab) are kept even when the caller's items carry the same or newer stamps.
    * @returns {Promise<any>} what is now stored (the merged object for mergeable JSON)
    */
-  async writeFile(path, value) {
+  async writeFile(path, value, { base = null } = {}) {
     let data = encode(value);
+    const mergeBase = base && typeof base === 'object' ? base : null;
     const merger = mergerFor(path);
     const wid = uid('w');
     let merged = null;
@@ -185,7 +225,7 @@ export class SyncEngine extends EventTarget {
         const incoming = parseJson(data);
         const existing = parseJson(rec.data);
         if (incoming && existing) {
-          const m = merger(incoming, existing, null);
+          const m = merger(incoming, existing, mergeBase);
           if (!deepEqual(m, incoming)) { merged = m; next = stringify(m); }
         }
       }
@@ -300,14 +340,16 @@ export class SyncEngine extends EventTarget {
       const quiet = (reason === 'interval' || reason === 'focus') && !this.#status.pending && this.#status.state === 'idle';
       if (!quiet) this.#setStatus({ state: 'syncing' });
       try {
-        if (!this.#verified) {
+        const sinceVerify = Date.now() - this.#verifiedAt;
+        if (!this.#verified || sinceVerify > (this.#status.pending ? VERIFY_BEFORE_PUSH_MS : VERIFY_EVERY_MS)) {
           await this.#verify(client, ac.signal);
           this.#verified = true;
+          this.#verifiedAt = Date.now();
         }
         for (let attempt = 1; ; attempt++) {
           try {
             let meta = await this.#pull(client, ac.signal);
-            if (!meta.commitSha && (await this.#db.count('files', 'dirty')) && (await client.bootstrap({ signal: ac.signal }))) {
+            if (!meta.commitSha && (await this.#db.count('files', 'dirty', IDBKeyRange.only(PENDING))) && (await client.bootstrap({ signal: ac.signal }))) {
               meta = await this.#pull(client, ac.signal); // empty repo: README.md commit first, data on top
             }
             await this.#push(client, meta, ac.signal);
@@ -393,9 +435,19 @@ export class SyncEngine extends EventTarget {
     const r = await client.checkAccess({ quick: true, signal });
     if (!r.ok) throw new GitHubError(r.message, { code: r.code || 'access' });
     if (r.repoPrivate === false) {
-      throw new GitHubError(`공개(Public) 저장소에는 동기화하지 않습니다. 논문과 메모가 공개될 수 있어 동기화를 멈췄습니다. 설정에서 비공개 저장소를 지정하세요.`, { code: 'public' });
+      const kind = r.visibility === 'internal' ? '조직 내부(Internal)' : '공개(Public)';
+      throw new GitHubError(`${kind} 저장소에는 동기화하지 않습니다. 논문과 메모가 다른 사람에게 보일 수 있어 동기화를 멈췄습니다. 설정에서 비공개(Private) 저장소를 지정하세요.`, { code: 'public' });
     }
     if (r.canPush === false) throw new GitHubError(r.message, { code: 'forbidden' });
+  }
+
+  /** The user asked to sync by hand: give uploads GitHub refused earlier another chance. */
+  async #retryRejected() {
+    const rejected = await this.#db.indexKeys('files', 'dirty', IDBKeyRange.only(REJECTED));
+    for (const path of rejected) {
+      await this.#db.update('files', path, (rec) => (rec?.dirty === REJECTED ? { ...rec, dirty: PENDING, rejected: undefined } : undefined));
+    }
+    if (rejected.length) await this.#refreshPending();
   }
 
   /** Bring local files up to the remote head, merging into pending local edits. */
@@ -491,7 +543,9 @@ export class SyncEngine extends EventTarget {
    * library.json last, so other devices never see a paper whose PDF is not there yet.
    */
   async #push(client, meta, signal) {
-    const paths = (await this.#db.indexKeys('files', 'dirty')).sort((x, y) => pushRank(x) - pushRank(y) || (x < y ? -1 : 1));
+    await this.#reconcileStale(client, meta, signal);
+    const paths = (await this.#db.indexKeys('files', 'dirty', IDBKeyRange.only(PENDING)))
+      .sort((x, y) => pushRank(x) - pushRank(y) || (x < y ? -1 : 1));
     let batch = [];
     let bytes = 0;
     for (let i = 0; i < paths.length; i += TRANSFER_CONCURRENCY) {
@@ -511,10 +565,47 @@ export class SyncEngine extends EventTarget {
     return batch.length ? this.#commitBatch(client, meta, batch, signal) : meta;
   }
 
+  /**
+   * A dirty data file whose sync base is not the remote's current version would overwrite the remote copy
+   * (its first edit happened while the download failed, a download raced a pull, the repo was switched).
+   * Merge the remote version into it first — without a base when none is known (union of items).
+   */
+  async #reconcileStale(client, meta, signal) {
+    const stale = [];
+    for (const path of await this.#db.indexKeys('files', 'dirty', IDBKeyRange.only(PENDING))) {
+      const remoteSha = meta.tree[path]?.sha;
+      if (!remoteSha || !mergerFor(path)) continue;
+      const rec = await this.#db.get('files', path);
+      if (rec?.dirty && !rec.deleted && typeof rec.data === 'string' && rec.baseSha !== remoteSha) stale.push(path);
+    }
+    if (!stale.length) return;
+    console.warn('[store] merging the remote version into stale local edits before pushing:', stale.join(', '));
+    const notify = [];
+    await mapLimit(stale, TRANSFER_CONCURRENCY, async (path) => {
+      if (await this.#applyRemote(client, path, meta.tree[path].sha, signal)) notify.push(path);
+    });
+    if (notify.length) {
+      notify.sort();
+      emit(this, 'remotechange', { paths: notify, origin: 'remote' });
+      this.#post({ type: 'write', paths: notify });
+    }
+  }
+
+  async #reject(path, wid, err) {
+    console.warn('[store] GitHub refused', path, err);
+    let marked = false;
+    await this.#db.update('files', path, (cur) => {
+      if (!cur || cur.wid !== wid || cur.dirty !== PENDING) return undefined;
+      marked = true;
+      return { ...cur, dirty: REJECTED, rejected: { code: err.code, message: err.message, at: Date.now() } };
+    });
+    if (marked) emit(this, 'rejected', { path, code: err.code, message: err.message });
+  }
+
   /** Upload one dirty record's blob (unless the remote already has these bytes). */
   async #prepareItem(client, meta, path, signal) {
     const rec = await this.#db.get('files', path);
-    if (!rec?.dirty) return null;
+    if (rec?.dirty !== PENDING) return null;
     const remoteSha = meta.tree[path]?.sha ?? null;
     if (rec.deleted) return { path, wid: rec.wid, delete: true, remote: Boolean(remoteSha), size: 0 };
     const key = `${client.target}
@@ -524,7 +615,19 @@ ${rec.wid}`;
     let sha = this.#uploaded.get(key);
     if (!sha) {
       const localSha = await gitBlobSha(bytes);
-      sha = localSha === remoteSha ? localSha : await client.createBlob(bytes, { signal });
+      if (localSha === remoteSha) sha = localSha;
+      else {
+        try {
+          sha = await client.createBlob(bytes, { signal });
+        } catch (err) {
+          // GitHub refuses this one file for good (too large, invalid): keep it here, sync everything else.
+          if (err instanceof GitHubError && (err.code === 'too_large' || err.code === 'invalid')) {
+            await this.#reject(path, rec.wid, err);
+            return null;
+          }
+          throw err;
+        }
+      }
       this.#uploaded.set(key, sha);
     }
     return { path, wid: rec.wid, sha, unchanged: sha === remoteSha, text: baseTextFor(path, rec.data), size: bytes.byteLength, key };
@@ -576,12 +679,24 @@ ${rec.wid}`;
       }
       const bytes = await client.readBlob(sha);
       if (!isTextPath(path)) {
-        await this.#db.put('blobs', sha, bytes);
+        try {
+          await this.#db.put('blobs', sha, bytes);
+        } catch (err) {
+          // e.g. storage quota: the bytes are here, so open the file anyway, just uncached.
+          console.warn('[store] could not cache the downloaded file', path, err);
+        }
         return bytes;
       }
       const text = utf8Decode(bytes);
-      // Keep a clean local copy so later edits have a merge base and it works offline.
-      const stored = await this.#db.update('files', path, (rec) => (rec ? undefined : cleanRecord(path, text, sha)));
+      // Keep a clean local copy so later edits have a merge base and it works offline — unless a pull
+      // moved the path to a newer blob while this download was in flight (that copy would be stale).
+      const current = this.#meta?.tree?.[path]?.sha ?? null;
+      const stored = await this.#db.update('files', path, (rec) => {
+        if (current && current !== sha) return undefined;
+        if (!rec) return cleanRecord(path, text, sha);
+        if (!rec.dirty && !rec.deleted && rec.baseSha !== sha) return cleanRecord(path, text, sha);
+        return undefined;
+      });
       if (!stored) return text;
       return stored.deleted ? null : stored.data;
     })();
@@ -610,6 +725,11 @@ ${rec.wid}`;
     const meta = await this.#loadMeta();
     if (meta?.target === target) return meta;
     if (meta) {
+      // Data that came from another repository is uploaded to the new one only with the user's consent
+      // (settings.github.carryOver, set by the settings screen after asking).
+      if (meta.target && this.#getConfig()?.carryOver !== target && (await this.#db.count('files'))) {
+        throw new GitHubError('동기화할 GitHub 저장소가 바뀌었습니다. 이 기기의 논문·메모를 새 저장소에 올릴지 설정 → GitHub 동기화에서 정한 뒤 다시 저장하세요.', { code: 'target_changed' });
+      }
       console.warn('[store] sync target changed; re-pushing local data to', target);
       await this.#rebaseAllLocal(meta.tree);
     }
@@ -654,9 +774,10 @@ ${rec.wid}`;
   }
 
   async #refreshPending({ silent = false } = {}) {
-    const pending = await this.#db.count('files', 'dirty');
-    if (silent) this.#status.pending = pending;
-    else this.#setStatus({ pending });
+    const pending = await this.#db.count('files', 'dirty', IDBKeyRange.only(PENDING));
+    const rejected = await this.#db.count('files', 'dirty', IDBKeyRange.only(REJECTED));
+    if (silent) Object.assign(this.#status, { pending, rejected });
+    else this.#setStatus({ pending, rejected });
   }
 
   #setStatus(patch) {
@@ -701,144 +822,9 @@ export function mergerFor(path) {
   return m ? MERGERS[m[1]] : null;
 }
 
-/** library.json: folders and papers merge per item id. */
-export function mergeLibrary(local, remote, base = null) {
-  return {
-    ...remote,
-    ...local,
-    version: 1,
-    updatedAt: newerTime(local.updatedAt, remote.updatedAt),
-    folders: mergeRecords(local.folders, remote.folders, base?.folders),
-    papers: mergeRecords(local.papers, remote.papers, base?.papers),
-  };
-}
-
-/** annotations.json: items merge per id (tombstones included). */
-export function mergeAnnotations(local, remote, base = null) {
-  return {
-    ...remote,
-    ...local,
-    version: 1,
-    updatedAt: newerTime(local.updatedAt, remote.updatedAt),
-    items: mergeRecords(local.items, remote.items, base?.items),
-  };
-}
-
-/** translation.json: union of items, local wins per sid. A newer segmentation replaces the older one. */
-export function mergeTranslation(local, remote) {
-  const ls = Number(local.segVersion) || 0;
-  const rs = Number(remote.segVersion) || 0;
-  if (ls !== rs) return ls > rs ? local : remote;
-  if ((local.targetLang || 'ko') !== (remote.targetLang || 'ko')) return local;
-  return {
-    ...remote,
-    ...local,
-    updatedAt: newerTime(local.updatedAt, remote.updatedAt),
-    items: { ...(isObject(remote.items) ? remote.items : {}), ...(isObject(local.items) ? local.items : {}) },
-  };
-}
-
-/**
- * ai.json: shallow merge of top-level keys. With a base, a key changed on one side only takes
- * that side; a key changed on both sides (or without a base) takes the newer file's value.
- */
-export function mergeAi(local, remote, base = null) {
-  const localNewer = toMillis(local.updatedAt) >= toMillis(remote.updatedAt);
-  const out = { version: 1, updatedAt: newerTime(local.updatedAt, remote.updatedAt) };
-  const keys = new Set([...Object.keys(remote), ...Object.keys(local)]);
-  keys.delete('version');
-  keys.delete('updatedAt');
-  for (const k of keys) {
-    const lv = local[k];
-    const rv = remote[k];
-    let v;
-    if (deepEqual(lv, rv)) v = lv;
-    else if (base) v = deepEqual(lv, base[k]) ? rv : deepEqual(rv, base[k]) ? lv : localNewer ? lv : rv;
-    else if (lv === undefined) v = rv;
-    else if (rv === undefined) v = lv;
-    else v = localNewer ? lv : rv;
-    if (v !== undefined) out[k] = v;
-  }
-  return out;
-}
-
 const MERGERS = { annotations: mergeAnnotations, translation: mergeTranslation, ai: mergeAi };
 
-/**
- * Merge two lists of `{ id, updatedAt, deleted? }` records.
- * Without a base version of an item the newer `updatedAt` wins (a tombstone wins a tie, then local).
- * With one, fields changed on only one side are kept from that side (so a rename on one device and
- * a move on another both survive), and fields changed on both sides take the newer item's value.
- */
-export function mergeRecords(local, remote, base = null) {
-  const valid = (x) => x && typeof x === 'object' && x.id != null;
-  const l = Array.isArray(local) ? local.filter(valid) : [];
-  const r = Array.isArray(remote) ? remote.filter(valid) : [];
-  const remoteById = new Map(r.map((x) => [x.id, x]));
-  const baseById = Array.isArray(base) ? new Map(base.filter(valid).map((x) => [x.id, x])) : null;
-  const out = [];
-  const seen = new Set();
-  for (const item of l) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    const other = remoteById.get(item.id);
-    out.push(other ? mergeItem(item, other, baseById?.get(item.id) ?? null) : item);
-  }
-  for (const item of r) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    out.push(item);
-  }
-  return out;
-}
-
-function mergeItem(l, r, b) {
-  if (deepEqual(l, r)) return l;
-  const lt = toMillis(l.updatedAt);
-  const rt = toMillis(r.updatedAt);
-  const winner = lt > rt ? l : rt > lt ? r : r.deleted && !l.deleted ? r : l;
-  if (!b) return winner;
-  const out = {};
-  for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
-    const lv = l[k];
-    const rv = r[k];
-    const v = deepEqual(lv, rv) ? lv : deepEqual(lv, b[k]) ? rv : deepEqual(rv, b[k]) ? lv : winner[k];
-    if (v !== undefined) out[k] = v;
-  }
-  out.updatedAt = lt >= rt ? l.updatedAt : r.updatedAt;
-  return out;
-}
-
-/** Structural equality for JSON values; a key holding `undefined` counts as absent. */
-export function deepEqual(a, b) {
-  if (a === b) return true;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a)) return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
-  const ka = Object.keys(a).filter((k) => a[k] !== undefined);
-  const kb = Object.keys(b).filter((k) => b[k] !== undefined);
-  return ka.length === kb.length && ka.every((k) => deepEqual(a[k], b[k]));
-}
-
-/** Epoch ms from a number or an ISO string (0 when missing). */
-export function toMillis(v) {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string') {
-    const t = Date.parse(v);
-    return Number.isFinite(t) ? t : 0;
-  }
-  return 0;
-}
-
-function newerTime(a, b) {
-  return toMillis(a) >= toMillis(b) ? a ?? b : b;
-}
-
 // ---------------------------------------------------------------- helpers
-
-function isObject(v) {
-  return v != null && typeof v === 'object' && !Array.isArray(v);
-}
 
 function isTextPath(path) {
   return /\.(json|md|txt)$/i.test(path);

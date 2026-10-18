@@ -390,8 +390,13 @@ await test('chat: quote prefill, incremental streaming, chips, persistence, stop
   return `streamed ${distinct.length} distinct partial lengths (${samples.slice(0, 12).join(',')}…); 4 sid chips, click → jump ${chips[1][0]}; ai.chat persisted (quote kept), stop → partial stored with stopped:true, reload → 4 bubbles, hostile HTML neutralised, clear → []`;
 });
 
-await test('summary panel: auto-generate, sections+toc, chips jump, cache on reopen', async () => {
+await test('summary panel: no paid call on first view, 요약 만들기 → sections+toc, chips jump, cache on reopen', async () => {
   const { page, ctx, errors } = await open({ tab: 'summary' });
+  // Regression (summary-autostart-paid-call): opening the tab shows the idle card; nothing is generated yet.
+  await page.waitForSelector('[data-action="generate"]');
+  await page.waitForTimeout(300);
+  assert((await taskCalls(page, 'summarize')) === 0, 'opening the 요약 tab must not call the AI');
+  await page.click('[data-action="generate"]');
   await page.waitForFunction(() => document.querySelectorAll('.pf-summary__body h2').length === 6, null, { timeout: 5000 });
   const heads = await page.$$eval('.pf-summary__body h2', (hs) => hs.map((h) => h.textContent));
   const toc = await page.$$eval('.pf-toc .pf-chip', (cs) => cs.length);
@@ -456,7 +461,7 @@ await test('notes panel: grouped by page, colour filter, jump, edit note, delete
   await page.waitForFunction((n) => document.querySelectorAll('.pf-note').length === n - 1, count0);
   await page.click('.toast .toast-action');
   await page.waitForFunction((n) => document.querySelectorAll('.pf-note').length === n, count0);
-  assert(groups.length === 2 && groups[0].startsWith('p. 1') && groups[1].startsWith('p. 2'), `groups ${groups}`);
+  assert(groups.length === 2 && groups[0].startsWith('1쪽') && groups[1].startsWith('2쪽'), `groups ${groups}`);
   assert(jumps.length === 1, 'click → jump');
   assert(!errors.length, `page errors: ${errors}`);
   await ctx.close();
@@ -468,6 +473,10 @@ await test('related panel: match → recommendations, s2PaperId stored, cache, a
   const { page, ctx, errors } = await open({ s2: { log } });
   await page.evaluate(() => __h.ctx.settings.set({ semanticScholar: { apiKey: 'test-key-123' } }));
   await page.click('#tabs [data-tab="related"]');
+  // Regression (third-party-flows-not-disclosed): nothing is sent until the user agrees once.
+  await page.waitForSelector('[data-action="s2-consent"]');
+  assert(log.length === 0, `no Semantic Scholar request before consent (${log.length})`);
+  await page.click('[data-action="s2-consent"]');
   await page.waitForSelector('.pf-related__item');
   const titles = await page.$$eval('.pf-related__title', (ts) => ts.map((t) => t.textContent));
   const updates = await page.evaluate(() => __h.library.updates);
@@ -496,6 +505,7 @@ await test('related panel: 429 → friendly Korean retry message', async () => {
   const log = [];
   const { page, ctx } = await open({ s2: { mode: '429', log } });
   await page.click('#tabs [data-tab="related"]');
+  await page.click('[data-action="s2-consent"]');
   await page.waitForSelector('.pf-error-box', { timeout: 6000 });
   const msg = await page.textContent('.pf-error-box p');
   await shot(page, '15-related-429');
@@ -685,6 +695,7 @@ await test('no AI key: panels show settings gate instead of calling the API', as
 
 await test('dark theme renders panels legibly', async () => {
   const { page, ctx } = await open({ query: 'mock=1&reset=1&theme=dark', tab: 'summary' });
+  await page.click('[data-action="generate"]'); // summaries are made on request only
   await page.waitForSelector('.pf-summary__body h2');
   await seedAnnotations(page);
   await selectText(page, 'Staffing shortages were the most frequently', 60);

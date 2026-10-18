@@ -151,7 +151,7 @@ export function installCitations(ctx, session, { signal }) {
     const searchBtn = button('Semantic Scholar 검색', { small: true, attrs: { 'data-action': 's2-search' } });
     searchBtn.addEventListener('click', () => lookup(ref, result, searchBtn, abortSignal));
     const node = el('div', { class: 'pf-cite pf-cite--ref' },
-      el('div', { class: 'pf-pop__head' }, label, el('span', { class: 'pf-muted' }, ` · p.${ref.page}`)),
+      el('div', { class: 'pf-pop__head' }, label, el('span', { class: 'pf-muted' }, ` · ${ref.page}쪽`)),
       el('p', { class: 'pf-cite__text' }, clip(ref.text, 700)),
       result,
       el('div', { class: 'pf-pop__foot' }, searchBtn,
@@ -199,7 +199,7 @@ export function installCitations(ctx, session, { signal }) {
     const frame = el('div', { class: 'pf-cite__frame', style: { width: `${PREVIEW_CSS_WIDTH}px`, aspectRatio: `${region.w} / ${region.h}` } },
       el('div', { class: 'pf-loading' }, spinner(16)));
     const node = el('div', { class: 'pf-cite pf-cite--preview' },
-      el('div', { class: 'pf-pop__head' }, `p.${target.page} 미리보기`),
+      el('div', { class: 'pf-pop__head' }, `${target.page}쪽 미리보기`),
       frame,
       el('div', { class: 'pf-pop__foot' }, button('이 위치로 이동', { small: true, onClick: () => goTo(target), attrs: { 'data-action': 'goto' } })));
     const signalForRender = anySignal(abortSignal, ctx.signal);

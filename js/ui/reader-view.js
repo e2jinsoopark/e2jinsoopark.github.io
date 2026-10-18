@@ -1,5 +1,6 @@
 // Reader view (#/paper/<id>): toolbar, PDF viewer (left) ↔ tabs (right), translation controls, feature host.
 import { bus } from '../core/bus.js';
+import { CLAUDE_MODELS } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { clamp, debounce, el, formatUsd, hash, rafThrottle } from '../core/util.js';
 import {
@@ -18,6 +19,12 @@ const MIN_SIDE_PX = 260;
 const DEFAULT_SPLIT = { h: 0.5, v: 0.55 };
 const MAX_REMEMBERED_PAGES = 60;
 const HOVER_REVEAL_MS = 350;
+// Translation saves are debounced, but never held back longer than this while batches keep arriving.
+const TRANSLATION_SAVE_MAX_WAIT_MS = 5000;
+const TRANSLATION_RELOAD_RETRY_MS = [10_000, 30_000, 90_000];
+// Errors a retry cannot fix: the user has to change something in 설정 first.
+const SETUP_ERROR_CODES = new Set(['no_key', 'auth', 'permission', 'billing', 'not_found']);
+const CHECK_TITLE = '번역에서 숫자나 내용이 빠졌을 수 있습니다. 원문과 비교해 보세요.';
 
 /**
  * @param {HTMLElement} container
@@ -69,7 +76,12 @@ class ReaderView {
   #lastSyncedSid = null;
   #lastError = { message: '', at: 0 };
   #pendingTranslation = null;
+  #pendingTranslationSince = null;
+  #translationSaveError = null;
+  #translationReloadTimer = null;
   #countsTimer = null;
+  #paperDeleted = false;
+  #runStoppedByFatal = false;
 
   #saveTranslationSoon = debounce(() => this.#flushTranslationSave(), 1500);
   #refreshOverlaySoon = debounce(() => this.#refreshOverlay(), 400);
@@ -94,6 +106,7 @@ class ReaderView {
     this.#destroyed = true;
     this.#abort.abort();
     clearTimeout(this.#revealTimer);
+    clearTimeout(this.#translationReloadTimer);
     if (this.#runs.size) { try { this.#translator?.cancel(); } catch { /* ignore */ } }
     this.#saveTranslationSoon.cancel();
     this.#flushTranslationSave();
@@ -142,17 +155,29 @@ class ReaderView {
 
     const [cached, ai] = await Promise.all([this.#loadData('translation'), this.#loadData('ai')]);
     if (this.#destroyed) return;
-    if (ai && typeof ai === 'object') this.#ai = ai;
-    await this.#buildReader(cached);
+    if (ai.value && typeof ai.value === 'object') this.#ai = ai.value;
+    await this.#buildReader(cached.value);
+    // A failed download is not "no data": what other devices translated is merged in once it can be read
+    // (saves meanwhile only add sentences; the sync engine merges them with the remote copy before pushing).
+    if (cached.error) this.#retryTranslationLoad(0);
   }
 
+  /** @returns {Promise<{ value: object|null, error: Error|null }>} */
   async #loadData(kind) {
     try {
-      return await this.#lib.getPaperData(this.#paperId, kind);
+      return { value: await this.#lib.getPaperData(this.#paperId, kind), error: null };
     } catch (err) {
       console.warn('[reader-view] getPaperData', kind, err);
-      return null;
+      return { value: null, error: err };
     }
+  }
+
+  #retryTranslationLoad(attempt) {
+    if (this.#destroyed || attempt >= TRANSLATION_RELOAD_RETRY_MS.length) return;
+    this.#translationReloadTimer = setTimeout(async () => {
+      const ok = await this.#mergeRemoteTranslations();
+      if (!ok) this.#retryTranslationLoad(attempt + 1);
+    }, TRANSLATION_RELOAD_RETRY_MS[attempt]);
   }
 
   #onExtractProgress(a, b) {
@@ -197,6 +222,7 @@ class ReaderView {
     this.#pane = new TranslationPane(els.tpHost, { doc: this.#doc });
     this.#translator = this.#createTranslator(cached);
     this.#syncPaneMap(true);
+    this.#refreshCheckMarks();
 
     this.#buildToolbar();
     this.#wirePane();
@@ -226,9 +252,21 @@ class ReaderView {
   #createTranslator(cached) {
     const { Translator } = this.#deps;
     const save = (obj) => {
+      if (this.#paperDeleted) return Promise.reject(new Error('다른 기기에서 이 논문을 삭제해 번역을 저장할 수 없습니다.'));
       this.#pendingTranslation = obj;
-      this.#saveTranslationSoon();
-      return Promise.resolve();
+      const now = Date.now();
+      this.#pendingTranslationSince ??= now;
+      // Debounced, but never held back for long while batches keep resetting the debounce.
+      if (now - this.#pendingTranslationSince >= TRANSLATION_SAVE_MAX_WAIT_MS) {
+        this.#saveTranslationSoon.cancel();
+        this.#flushTranslationSave();
+      } else {
+        this.#saveTranslationSoon();
+      }
+      // A previous save failed (e.g. storage full): tell the translator, which stops paying for more batches.
+      const failed = this.#translationSaveError;
+      this.#translationSaveError = null;
+      return failed ? Promise.reject(failed) : Promise.resolve();
     };
     if (Translator) {
       try {
@@ -273,12 +311,33 @@ class ReaderView {
     }
   }
 
+  /**
+   * ctx.saveAi(patch): applied to what is stored NOW (read-modify-write), not to the copy loaded when the paper
+   * opened — so chat messages, explanations or a summary another tab or device saved meanwhile are kept.
+   * (chat / explanations are additionally merged by id in storage; clearing the chat sets chatClearedAt.)
+   */
   #saveAi(patch) {
-    this.#ai = { ...this.#ai, ...(patch || {}), version: 1 };
-    const snapshot = this.#ai;
-    const p = this.#aiChain.then(() => this.#lib.savePaperData(this.#paperId, 'ai', snapshot));
+    const lib = this.#lib;
+    const id = this.#paperId;
+    this.#ai = { ...this.#ai, ...(patch || {}), version: 1 }; // getAi() sees the change right away
+    const fallback = this.#ai;
+    const p = this.#aiChain.then(async () => {
+      const stored = typeof lib.updatePaperData === 'function'
+        ? await lib.updatePaperData(id, 'ai', (cur) => ({ ...cur, ...(patch || {}), version: 1 }))
+        : await lib.savePaperData(id, 'ai', fallback);
+      if (stored && typeof stored === 'object' && !this.#destroyed) this.#ai = stored;
+      return stored;
+    });
     this.#aiChain = p.catch((err) => console.warn('[reader-view] saveAi', err));
     return p;
+  }
+
+  /** ai.json changed in another tab or on another device: reload it and tell the panels. */
+  async #reloadAi() {
+    const { value, error } = await this.#loadData('ai');
+    if (this.#destroyed || error || !value || typeof value !== 'object') return;
+    this.#ai = value;
+    bus.emit('paper:ai-change', { paperId: this.#paperId, ai: value });
   }
 
   // --------------------------------------------------------------- toolbar
@@ -361,6 +420,8 @@ class ReaderView {
     const available = this.#canTranslate();
     const usage = this.#deps.usage?.usageSummary ? safely(() => this.#deps.usage.usageSummary()) : null;
     const { done, total } = tr?.progress || { done: 0, total: 0 };
+    const isPriced = this.#deps.usage?.isPriced;
+    const unpriced = usage && typeof isPriced === 'function' && Object.keys(usage.byModel || {}).some((m) => !isPriced(m));
     const r = anchor.getBoundingClientRect();
     contextMenu([
       { label: '전체 번역 (현재 페이지부터)', icon: 'languages', disabled: running || !available || done >= total, onClick: () => this.#runTranslation('all') },
@@ -368,8 +429,8 @@ class ReaderView {
       { label: `실패한 문장 다시 번역${failed.length ? ` (${failed.length})` : ''}`, icon: 'rotate-ccw', disabled: !available || !failed.length, onClick: () => this.#runTranslation('sids', failed) },
       ...(running ? [{ label: '번역 중지', icon: 'stop', onClick: () => this.#cancelTranslation() }] : []),
       'sep',
-      { note: `번역 모델: ${settings.model('translate') || '미설정'} · ${done}/${total} 문장` },
-      ...(usage ? [{ note: `이번 달 AI 사용액(추정): ${formatUsd(usage.usd)} · ${usage.calls ?? 0}회` }] : []),
+      { note: `번역 모델: ${modelLabel(settings.model('translate')) || '미설정'} · ${done}/${total} 문장` },
+      ...(usage ? [{ note: `이번 달 AI 사용액(추정): ${formatUsd(usage.usd)} · ${usage.calls ?? 0}회${unpriced ? ' (Gemini 비용은 집계하지 않음)' : ''}` }] : []),
     ], Math.max(8, r.right - 260), r.bottom + 4);
   }
 
@@ -388,8 +449,10 @@ class ReaderView {
     const label = running ? '번역 중…' : complete ? '번역 완료' : done > 0 ? '이어서 번역' : '번역 시작';
     main.querySelector('.btn-label').textContent = label;
     main.replaceChild(running ? spinner(15) : icon(complete ? 'check' : 'languages', { size: 18 }), main.firstChild);
-    main.disabled = running || complete || !available;
-    main.title = !available ? this.#unavailableReason() : complete ? '모든 문장을 번역했습니다' : `현재 페이지부터 번역 (${done}/${total} 문장 완료)`;
+    main.disabled = running || complete || !available || this.#paperDeleted;
+    const estimate = this.#costEstimateText();
+    main.title = !available ? this.#unavailableReason() : complete ? '모든 문장을 번역했습니다'
+      : `현재 쪽부터 논문 전체를 번역합니다 (${done}/${total} 문장 완료${estimate ? ` · 남은 문장 ${estimate}` : ''})`;
     wrap.classList.toggle('is-complete', complete && !running);
     progress.hidden = !(running || (done > 0 && !complete));
     bar.set(ratio);
@@ -400,10 +463,38 @@ class ReaderView {
     const failed = this.#pane?.failedSids.length || 0;
     const status = [];
     if (!total) status.push(this.#doc?.hasTextLayer === false ? '스캔 PDF — 번역할 텍스트가 없습니다' : '번역할 문장이 없습니다');
-    else status.push(`번역 ${done.toLocaleString('ko-KR')} / ${total.toLocaleString('ko-KR')} 문장 (${pct}%)`);
+    else if (!done && !running && available) {
+      // Before the first run, say what the button does and roughly what it costs.
+      const estimate = this.#costEstimateText();
+      status.push(`아직 번역 전입니다 · ‘번역 시작’을 누르면 현재 쪽부터 논문 전체(${total.toLocaleString('ko-KR')}문장${estimate ? `, ${estimate}` : ''})를 번역합니다`);
+    } else status.push(`번역 ${done.toLocaleString('ko-KR')} / ${total.toLocaleString('ko-KR')} 문장 (${pct}%)`);
     if (failed) status.push(`실패 ${failed}`);
     if (costUsd) status.push(`비용 ${formatUsd(costUsd)}`);
     els.tpStatus.replaceChildren(...(running ? [spinner(13)] : []), el('span', {}, status.join(' · ')));
+  }
+
+  /**
+   * "예상 약 $0.02" for the sentences not translated yet with the selected translation model (Claude only), from
+   * their length: ≈ 4 chars per input token, ≈ 0.5 output token per char, plus the per-batch prompt.
+   */
+  #costEstimateText() {
+    const price = this.#deps.usage?.priceFor?.(settings.model('translate'));
+    const tr = this.#translator;
+    if (!price || !tr || !this.#doc) return '';
+    const map = tr.translations;
+    let chars = 0;
+    let n = 0;
+    for (const s of this.#doc.sentences) {
+      if (!isTranslatableSentence(s) || map.has(s.sid)) continue;
+      chars += s.text.length;
+      n++;
+    }
+    if (!n) return '';
+    const batches = Math.ceil(n / 30);
+    const input = chars / 4 + batches * 2500; // + rules/abstract prompt per batch (mostly cache reads, kept simple)
+    const output = chars * 0.5 + n * 15;
+    const usd = (input * price.input + output * price.output) / 1e6;
+    return `예상 약 ${formatUsd(Math.max(usd, 0.01))}`;
   }
 
   #canTranslate() {
@@ -757,6 +848,7 @@ class ReaderView {
       this.#pane.update(sids);
       // Optional detail from the AI module: sentences that just failed for good.
       for (const sid of e.detail?.failed || []) this.#pane.setStatus(sid, 'failed');
+      if (e.detail?.warned?.length) this.#refreshCheckMarks();
       if (this.#viewMode === 'overlay') this.#refreshOverlaySoon();
       this.#refreshProgress();
     });
@@ -764,7 +856,8 @@ class ReaderView {
     this.#on(tr, 'error', (e) => {
       const d = e.detail || {};
       for (const sid of d.sids || []) this.#pane.setStatus(sid, 'failed');
-      this.#reportError(d.message, d.fatal);
+      if (d.fatal) this.#runStoppedByFatal = true;
+      this.#reportError(d.message, d.fatal, d.code);
     });
     // Optional event from the AI module: a batch went in flight.
     this.#on(tr, 'pending', (e) => {
@@ -788,15 +881,27 @@ class ReaderView {
     this.#on(this.#lib, 'change', () => {
       const paper = this.#lib.getPaper(this.#paperId);
       if (paper) this.#setTitle(paper);
+      else if (!this.#paperDeleted) this.#onPaperDeleted();
     });
-    // Sentences translated on another device (or tab) while this paper is open.
+    // Sentences translated, chat or summaries made on another device (or tab) while this paper is open.
     const sync = this.#lib.sync;
     if (sync?.addEventListener) {
       const path = `papers/${this.#paperId}/translation.json`;
+      const aiPath = `papers/${this.#paperId}/ai.json`;
       this.#on(sync, 'remotechange', (e) => {
-        if (e.detail?.paths?.includes(path)) this.#mergeRemoteTranslations();
+        const paths = e.detail?.paths || [];
+        if (paths.includes(path)) this.#mergeRemoteTranslations();
+        if (paths.includes(aiPath) && e.detail?.origin !== 'merge') this.#reloadAi();
       });
     }
+    // Closing the tab, F5 or the laptop going to sleep: save what was translated (already paid for) right away.
+    const flushNow = () => {
+      this.#saveTranslationSoon.cancel();
+      this.#flushTranslationSave();
+      if (this.#translator && this.#doc) this.#flushCounts();
+    };
+    this.#on(window, 'pagehide', flushNow);
+    this.#on(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow(); });
 
     // [p3-12] sentence links rendered anywhere in the reader (summary, chat, notes…)
     const sidLink = (t) => /** @type {Element} */ (t)?.closest?.('.sid-link[data-sid]');
@@ -938,8 +1043,10 @@ class ReaderView {
 
   async #runTranslation(kind, sids = []) {
     const tr = this.#translator;
+    if (this.#paperDeleted) { toast('다른 기기에서 삭제된 논문이라 번역할 수 없습니다.', { kind: 'warning' }); return; }
     if (!this.#canTranslate()) { toast(this.#unavailableReason(), { kind: 'warning' }); return; }
     if (!settings.isAiReady()) { this.#promptAiSetup(); return; }
+    if (!this.#runs.size) this.#runStoppedByFatal = false;
     // Retrying single sentences may join a running translation; a second full run may not.
     if (kind !== 'sids' && this.#runs.size) { toast('번역이 이미 진행 중입니다.', { kind: 'warning' }); return; }
     const requested = this.#requestedSids(kind, sids);
@@ -953,8 +1060,9 @@ class ReaderView {
     this.#refreshProgress();
     let error = null;
     try {
+      // 'page' sends exactly the sentences marked pending, including one that starts on the previous page and
+      // runs onto this one (translatePages() would only take sentences that start here).
       if (kind === 'all') await tr.translateAll({ startPage: this.#viewer?.currentPage || 1 });
-      else if (kind === 'page') await tr.translatePages([this.#viewer?.currentPage || 1]);
       else await tr.translateSids(requested);
     } catch (err) {
       error = err;
@@ -996,6 +1104,7 @@ class ReaderView {
     this.#scheduleCounts();
     if (run.cancelled) toast('번역을 중지했습니다. 지금까지 번역한 문장은 저장됩니다.');
     else if (error) this.#reportError(error.message || '번역 중 오류가 발생했습니다.', true);
+    else if (this.#runStoppedByFatal) { /* the setup error was already shown once, with a link to 설정 */ }
     else if (failed) toast(`${failed}개 문장을 번역하지 못했습니다. 문장 옆 ‘다시 시도’나 번역 메뉴에서 다시 번역할 수 있습니다.`, { kind: 'warning', timeout: 7000 });
     else if (!this.#runs.size) toast('번역을 마쳤습니다.', { kind: 'success' });
   }
@@ -1010,12 +1119,43 @@ class ReaderView {
     }
   }
 
-  #reportError(message, fatal = false) {
+  #reportError(message, fatal = false, code = '') {
     const text = message || '번역 중 오류가 발생했습니다.';
     const now = Date.now();
     if (this.#lastError.message === text && now - this.#lastError.at < 6000) return;
     this.#lastError = { message: text, at: now };
-    toast(text, { kind: fatal ? 'error' : 'warning', timeout: fatal ? 9000 : 5000 });
+    // A bad key, missing credit or model access is fixed in 설정, not by retrying sentences.
+    const setup = SETUP_ERROR_CODES.has(code);
+    toast(text, {
+      kind: fatal ? 'error' : 'warning',
+      timeout: setup ? 0 : fatal ? 9000 : 5000,
+      ...(setup ? { action: { label: '설정 열기', onClick: () => this.#navigate('#/settings') } } : {}),
+    });
+  }
+
+  /** The paper was deleted on another device while open here: stop spending on it and stop writing its files. */
+  #onPaperDeleted() {
+    this.#paperDeleted = true;
+    if (this.#runs.size) safely(() => this.#translator?.cancel());
+    this.#pendingTranslation = null;
+    this.#saveTranslationSoon.cancel();
+    this.#refreshProgress();
+    toast('다른 기기에서 이 논문을 삭제했습니다. 번역과 메모는 더 저장되지 않습니다.', {
+      kind: 'warning', timeout: 0,
+      action: { label: '라이브러리로', onClick: () => this.#navigate('#/') },
+    });
+  }
+
+  /** Sentences whose translation failed a fidelity check: a dotted underline + tooltip in the pane. */
+  #refreshCheckMarks() {
+    const warnings = this.#translator?.warnings;
+    if (!(warnings instanceof Map)) return;
+    const marks = [];
+    for (const sid of warnings.keys()) {
+      const s = this.#doc?.sentenceById?.get(sid);
+      if (s) marks.push({ id: `check-${sid}`, start: s.start, end: s.end, color: 'orange', style: 'underline', title: CHECK_TITLE });
+    }
+    safely(() => this.#pane.setMarks('check', marks));
   }
 
   #promptAiSetup() {
@@ -1032,23 +1172,31 @@ class ReaderView {
     });
   }
 
+  /** @returns {Promise<boolean>} whether the stored file could be read */
   async #mergeRemoteTranslations() {
-    if (typeof this.#translator?.mergeCached !== 'function') return;
-    const cached = await this.#loadData('translation');
-    if (this.#destroyed || !cached) return;
-    const added = this.#translator.mergeCached(cached);
+    if (typeof this.#translator?.mergeCached !== 'function') return true;
+    const { value, error } = await this.#loadData('translation');
+    if (this.#destroyed) return true;
+    if (error) return false;
+    if (!value) return true;
+    const added = this.#translator.mergeCached(value);
     if (added.length) this.#scheduleCounts();
+    return true;
   }
 
   #flushTranslationSave() {
     const obj = this.#pendingTranslation;
-    if (!obj) return;
+    this.#pendingTranslationSince = null;
+    if (!obj || this.#paperDeleted) return;
     this.#pendingTranslation = null;
     Promise.resolve()
       .then(() => this.#lib.savePaperData(this.#paperId, 'translation', obj))
+      .then(() => { this.#translationSaveError = null; })
       .catch((err) => {
         console.warn('[reader-view] save translation', err);
-        toast(`번역 결과를 저장하지 못했습니다: ${err?.message || err}`, { kind: 'error' });
+        // Handed to the translator on its next batch (it stops the run); shown here only when nothing runs.
+        this.#translationSaveError = err;
+        if (!this.#runs.size) this.#reportError(`번역 결과를 저장하지 못했습니다: ${err?.message || err}`, true);
       });
   }
 
@@ -1129,6 +1277,12 @@ class OfflineTranslator extends EventTarget {
   async translatePages() { return this.translateAll(); }
   async translateSids() { return this.translateAll(); }
   cancel() {}
+}
+
+/** 'Claude Haiku 5.5' instead of the raw model id (other providers' ids are shown as they are). */
+function modelLabel(id) {
+  const known = CLAUDE_MODELS.find((m) => m.id === id);
+  return known ? known.label.replace(/\s*\(.*\)$/, '') : id;
 }
 
 function safely(fn) {

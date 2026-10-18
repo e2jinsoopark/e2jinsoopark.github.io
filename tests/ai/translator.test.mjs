@@ -60,7 +60,7 @@ const tests = [
         return {
           progress, batches, kindsSent, saves: saves.length, limits: LIMITS, translatable: translatable.length,
           wordlessSent: wordless.filter((s) => sent.has(s.sid)).length, wordlessCopied: wordless.every((s) => t.translations.get(s.sid) === s.text),
-          exact: translatable.filter((s) => /[A-Za-z]{2,}/.test(s.text)).every((s) => t.translations.get(s.sid) === ('〔번역〕 ' + s.text.slice(0, 60)).trim()),
+          exact: translatable.filter((s) => /[A-Za-z]{2,}/.test(s.text)).every((s) => t.translations.get(s.sid) === ('〔번역〕 ' + s.text).trim()),
           savedItems: Object.keys(last.items).length, savedValid: Object.entries(last.items).every(([sid, it]) => it.h === hash(doc.sentenceById.get(sid).text) && it.m === 'mock'),
           savedShape: { version: last.version, targetLang: last.targetLang, segVersion: last.segVersion, hasUpdatedAt: typeof last.updatedAt === 'number' },
           refTranslated: doc.sentences.some((s) => s.kind === 'reference' && t.translations.has(s.sid)),
@@ -168,7 +168,7 @@ const tests = [
       assert.ok(r.before.keep);
       assert.deepEqual(r.sent, [...r.changed].sort(), 'only the changed sentences are sent');
       assert.equal(r.after.done, r.after.total);
-      assert.equal(r.newText, ('〔번역〕 ' + r.src.slice(0, 60)).trim());
+      assert.equal(r.newText, ('〔번역〕 ' + r.src).trim());
       assert.ok(r.wrongLang < 20, 'cache for another target language is ignored (only wordless copies count)');
       return `first run ${r.firstRun} requests; reopened with cache: ${r.before.progress.done}/${r.before.progress.total} done, re-sent only ${r.sent.join(',')}`;
     },
@@ -352,6 +352,197 @@ const tests = [
       assert.ok(r.ctxOk);
       assert.equal(r.secondCtx.length, 2);
       return `system blocks ${JSON.stringify(r.blocks)}; first ctx ${JSON.stringify(r.firstCtx)}; second ctx ${JSON.stringify(r.secondCtx).slice(0, 120)}…`;
+    },
+  },
+  {
+    name: 'regression fatal-ai-error-marks-sentences-failed: a bad key / no credit stops the run with ONE fatal error and leaves sentences untranslated, not failed',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const run = async (fail) => {
+          mockControl.reset(); mockControl.latencyMs = 5;
+          mockControl.failNext = [fail];
+          const t = new Translator({ doc });
+          const errors = []; const failedUpdates = [];
+          t.addEventListener('error', (e) => errors.push(e.detail));
+          t.addEventListener('update', (e) => e.detail.failed && failedUpdates.push(...e.detail.failed));
+          const p = await t.translateAll();
+          return { p, errors, failedUpdates, statuses: [...new Set(translatable.map((s) => t.statusOf(s.sid)))] };
+        };
+        return { auth: await run({ code: 'auth' }), billing: await run({ code: 'billing' }), badRequest: await run({ code: 'bad_request' }) };
+      `);
+      for (const [k, x] of Object.entries(r)) {
+        assert.equal(x.p.failed, 0, `${k}: no sentence may be marked failed`);
+        assert.deepEqual(x.failedUpdates, [], `${k}: no failed updates`);
+        assert.equal(x.errors.length, 1, `${k}: one error event`);
+        assert.equal(x.errors[0].fatal, true, `${k}: fatal`);
+        assert.deepEqual(x.errors[0].sids, [], `${k}: the error names no sentences`);
+        assert.ok(!x.statuses.includes('failed'), `${k}: statuses ${x.statuses}`);
+      }
+      return Object.entries(r).map(([k, x]) => `${k}: failed=${x.p.failed}, error fatal=${x.errors[0].fatal} code=${x.errors[0].code}`).join('; ');
+    },
+  },
+  {
+    name: 'sentences that are only a URL / DOI / e-mail address are shown as is and never sent (like number-only sentences)',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const ids = ['https://doi.org/10.1111/nicc.70196', 'E-mail: jane.doe@univ.edu', 'www.clinicaltrials.gov', 'doi:10.1097/CCM.0000000000004520'];
+        const body = doc.sentences.filter((s) => s.kind === 'body').slice(5, 9);
+        body.forEach((s, i) => { s.text = ids[i]; });
+        const prose = doc.sentences.filter((s) => s.kind === 'body')[12];
+        prose.text = 'Details are available at https://example.org/protocol for all of the participating sites.';
+        const t = new Translator({ doc });
+        await t.translateAll();
+        const sent = new Set(reqs().flatMap((q) => q.ids));
+        return { copied: body.map((s) => [t.translations.get(s.sid) === s.text, sent.has(s.sid)]), proseSent: sent.has(prose.sid),
+          saved: Object.keys(t.toJSON().items).filter((sid) => body.some((s) => s.sid === sid)).length };
+      `);
+      assert.deepEqual(r.copied, [[true, false], [true, false], [true, false], [true, false]]);
+      assert.equal(r.proseSent, true, 'a sentence with words around a URL is still translated');
+      assert.equal(r.saved, 0, 'copied sentences are not written to the translation file');
+      return `copied as is, not sent: ${JSON.stringify(r.copied)}; prose with a URL sent=${r.proseSent}`;
+    },
+  },
+  {
+    name: 'max_tokens: request cap scales with the batch; finished entries of a cut-off answer are kept, only the rest is re-sent',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const t0 = new Translator({ doc });
+        let caps = null;
+        mockControl.reset(); mockControl.latencyMs = 5;
+        // First batch is cut off after two finished entries.
+        let first = true;
+        mockControl.failWhen = (req) => {
+          if (!first || req.task !== 'translate') return null;
+          first = false;
+          const [a, b] = req.items;
+          const part = '{"translations":[{"id":"' + a.sid + '","ko":"부분 번역 ' + a.text.replace(/"/g, '') + '"},{"id":"' + b.sid + '","ko":"부분 번역 ' + b.text.replace(/"/g, '') + '"},{"id":"' + req.items[2].sid + '","ko":"끝나지 않은';
+          return { code: 'max_tokens', partialText: part };
+        };
+        const p = await t0.translateAll();
+        const rs = reqs();
+        caps = rs.map((q) => ({ n: q.ids.length, chars: q.items.reduce((n, it) => n + it.text.length, 0), max: q.maxTokens }));
+        return { p, caps, firstIds: rs[0].ids, secondIds: rs[1].ids, salvaged: [t0.translations.get(rs[0].ids[0]), t0.translations.get(rs[0].ids[1])] };
+      `);
+      assert.equal(r.p.done, r.p.total);
+      assert.deepEqual(r.secondIds, r.firstIds.slice(2), 'only the unfinished ids are re-sent');
+      assert.ok(r.salvaged.every((x) => x.startsWith('부분 번역')), 'salvaged entries kept');
+      assert.ok(r.caps.every((c) => c.max >= 4000 && c.max <= 16000), JSON.stringify(r.caps.slice(0, 3)));
+      const small = r.caps.reduce((a, b) => (b.chars < a.chars ? b : a));
+      const big = r.caps.reduce((a, b) => (b.chars > a.chars ? b : a));
+      assert.ok(small.max < big.max && big.max < 16000, `cap follows the batch size: ${JSON.stringify({ small, big })}`);
+      return `first batch ${r.firstIds.length} ids cut off → 2 salvaged, ${r.secondIds.length} re-sent; caps ${small.max} (${small.chars} chars) … ${big.max} (${big.chars} chars)`;
+    },
+  },
+  {
+    name: 'refusal of one sentence in a batch: bisected so only that sentence fails',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const bad = translatable[7].sid;
+        mockControl.failWhen = (req) => (req.task === 'translate' && req.ids.includes(bad) ? { code: 'refusal' } : null);
+        const t = new Translator({ doc });
+        const errors = [];
+        t.addEventListener('error', (e) => errors.push(e.detail));
+        const p = await t.translateAll();
+        return { p, bad, failed: translatable.filter((s) => t.statusOf(s.sid) === 'failed').map((s) => s.sid), errors };
+      `);
+      assert.deepEqual(r.failed, [r.bad]);
+      assert.equal(r.p.done, r.p.total - 1);
+      assert.match(r.errors[0].message, /Sonnet 5\.5/);
+      return `failed only ${r.failed}; ${r.p.done}/${r.p.total} done; hint "${r.errors[0].message}"`;
+    },
+  },
+  {
+    name: 'fidelity checks: a translation that drops numbers is re-requested once, then kept with a warning',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const s = translatable.find((x) => x.kind === 'body');
+        s.text = 'The odds ratio for delirium was OR = 1.23 (95% CI 1.01-1.50) among the 214 patients in the unit.';
+        const other = translatable.filter((x) => x.kind === 'body')[3];
+        let calls = 0;
+        mockControl.translateWith = (it) => {
+          if (it.sid === s.sid) { calls++; return calls === 1 ? '섬망의 교차비는 높았다.' : '섬망의 교차비는 OR = 1.23이었다.'; }
+          if (it.sid === other.sid) return '〔번역〕 ' + it.text;
+          return '〔번역〕 ' + it.text;
+        };
+        const t = new Translator({ doc });
+        await t.translateAll();
+        return { calls, kept: t.translations.get(s.sid), warn: t.warnings.get(s.sid), saved: t.toJSON().items[s.sid], otherWarn: t.warnings.has(other.sid) };
+      `);
+      assert.equal(r.calls, 2, 'retried once');
+      assert.equal(r.kept, '섬망의 교차비는 OR = 1.23이었다.');
+      assert.equal(r.warn, 'numbers');
+      assert.equal(r.saved.w, 'numbers', 'the warning is saved with the item');
+      assert.equal(r.otherWarn, false);
+      return `requests for the sentence: ${r.calls}; kept "${r.kept}" with warning ${r.warn}`;
+    },
+  },
+  {
+    name: 'first-mention rule across batches: earlier English parentheticals are listed as introduced; context carries its Korean',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        settings.set({ translate: { keepTermsInEnglish: true, concurrency: 1 } });
+        let n = 0;
+        mockControl.translateWith = (it) => (n++ === 0 ? '섬망(delirium)은 흔하다. ' + it.text : '〔번역〕 ' + it.text);
+        const t = new Translator({ doc });
+        await t.translateAll();
+        const rs = reqs();
+        const second = rs[1].messages[0].content;
+        settings.set({ translate: { concurrency: 3 } });
+        return { second: second.slice(0, 600), hasIntroduced: /<introduced>\\ndelirium\\n<\\/introduced>/.test(second), hasKo: /<context_ko>\\n\\[\\d\\] /.test(second),
+          parse: P.parseTranslationUserMessage(second).items.length === rs[1].ids.length };
+      `);
+      assert.ok(r.hasIntroduced, r.second);
+      assert.ok(r.hasKo, r.second);
+      assert.ok(r.parse);
+      return r.second.split('<translate>')[0].replace(/\n/g, '⏎').slice(0, 300);
+    },
+  },
+  {
+    name: 'cache lookup falls back to the text hash when a resegmentation shifted the sids',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const t1 = new Translator({ doc });
+        await t1.translateAll();
+        const saved = t1.toJSON();
+        // Shift every item one sid later on page 3 (as if a split earlier on the page renumbered them).
+        const items = {};
+        for (const [sid, it] of Object.entries(saved.items)) items[sid.startsWith('p3-') ? 'x' + sid : sid] = it;
+        mockControl.reset();
+        const t2 = new Translator({ doc, cached: { ...saved, items } });
+        const before = t2.progress;
+        await t2.translateAll();
+        return { before, sent: reqs().length };
+      `);
+      assert.equal(r.before.done, r.before.total);
+      assert.equal(r.sent, 0, 'nothing re-sent');
+      return `${r.before.done}/${r.before.total} restored by hash, ${r.sent} requests`;
+    },
+  },
+  {
+    name: 'a failing save (storage full) stops the run instead of paying for translations that cannot be kept',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const t = new Translator({ doc, save: async () => { throw new Error('브라우저 저장 공간이 부족합니다.'); } });
+        const errors = []; const dones = [];
+        t.addEventListener('error', (e) => errors.push(e.detail));
+        t.addEventListener('done', (e) => dones.push(e.detail));
+        await t.translateAll();
+        await new Promise((res) => setTimeout(res, 50));
+        return { n: reqs().length, errors, stopped: dones.map((d) => d.stopped) };
+      `);
+      assert.ok(r.n <= 3, `requests after the failed save: ${r.n}`);
+      assert.equal(r.errors.length, 1);
+      assert.match(r.errors[0].message, /저장하지 못해 번역을 멈췄습니다/);
+      assert.deepEqual(r.stopped, [true]);
+      return `${r.n} request(s), then stopped: "${r.errors[0].message}"`;
     },
   },
 ];

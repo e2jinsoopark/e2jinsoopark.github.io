@@ -31,8 +31,10 @@ API 키와 GitHub 토큰은 **그 브라우저에만** 저장됩니다. 다른 �
 1. <https://platform.claude.com> 에 로그인 → **API Keys** → **Create Key**
 2. 만든 키를 앱의 **설정 → AI** 에 붙여넣고 **테스트**를 누릅니다.
 3. Claude **Max** 요금제라면 claude.ai **설정 → 결제 → API 크레딧**에서 Console 조직을 연결하면
-   매달 $100(Max 5x) / $200(Max 20x) 크레딧이 무료로 들어옵니다. 채팅·Claude Code 사용 한도와는 별개입니다.
-   Pro 요금제는 해당이 없어 Console에서 따로 충전해야 합니다.
+   요금제에 포함된 API 크레딧(Max 5x: 월 $100 / Max 20x: 월 $200)을 쓸 수 있습니다. 키는 크레딧이 연결된 그 조직에서
+   만들어야 합니다. 채팅·Claude Code 사용 한도와는 별개입니다. Pro 요금제는 해당이 없어 Console에서 따로 충전해야 합니다.
+4. **테스트**는 키가 유효한지만 확인합니다(크레딧 잔액은 확인하지 않음). 번역할 때 “크레딧이 없거나 부족합니다”가 나오면
+   Claude Console의 Billing을 확인하세요.
 
 **Gemini (무료 등급 가능)**
 1. <https://aistudio.google.com> → **Get API key**
@@ -46,7 +48,8 @@ API 키와 GitHub 토큰은 **그 브라우저에만** 저장됩니다. 다른 �
    - Repository access: **Only select repositories** → 위 저장소 하나만 선택
    - Permissions → Repository permissions → **Contents: Read and write** (나머지는 건드리지 않음)
    - 만료 기간을 정하고 **Generate token**
-3. 앱 **설정 → GitHub 동기화**에 소유자·저장소 이름·토큰을 넣고 **연결 테스트**.
+3. 앱 **설정 → GitHub 동기화**에 소유자·저장소 이름·토큰을 넣고 **연결 테스트**(성공하면 바로 저장되고 동기화가 시작됩니다).
+   이 기기에 다른 저장소의 데이터가 있으면 새 저장소에 올릴지 먼저 묻습니다.
 
 동기화를 켜지 않아도 브라우저 안(IndexedDB)에 저장되어 그 기기에서는 계속 쓸 수 있습니다.
 
@@ -64,11 +67,26 @@ API 키와 GitHub 토큰은 **그 브라우저에만** 저장됩니다. 다른 �
 
 - 이 사이트의 **코드**는 공개되어 있지만, 올린 **논문·번역·메모**는 내 브라우저와 내 비공개 저장소에만 있습니다.
 - 번역·요약·채팅을 할 때 해당 문장이 선택한 AI 제공자(Anthropic 또는 Google)로 전송됩니다.
-- 공용 PC에서 썼다면 **설정 → 이 기기에서 키·토큰 지우기**를 누르세요.
+- 공용 PC에서 썼다면 **설정 → 이 기기의 데이터 모두 지우기**를 누르세요. 키·토큰과 함께 그 브라우저에 남은
+  논문·번역·메모·사용 기록을 지웁니다(GitHub 저장소의 데이터는 그대로).
+- ‘관련 논문’은 처음 쓸 때 묻고 나서 논문 제목을 Semantic Scholar로 보냅니다.
+
+### 배포(호스팅) 주의
+
+API 키·GitHub 토큰·논문은 **브라우저의 사이트(origin)별 저장소**(localStorage·IndexedDB)에 있습니다. GitHub Pages의
+프로젝트 사이트(`<계정>.github.io/<저장소>/`)는 같은 계정의 **다른 Pages 사이트와 origin을 공유**하므로, 그 사이트들의
+스크립트가 이 앱의 키·토큰·논문을 읽을 수 있습니다. 그래서:
+
+- 이 앱만 올리는 **전용 origin**에서 배포하세요. 예: 이 앱 전용 GitHub 계정(조직)의 `<이름>.github.io` 루트 사이트,
+  또는 사용자 도메인(CNAME, 예: `papers.example.com`). 같은 origin에 다른 프로젝트 페이지나 service worker를 두지 마세요.
+- 앱이 공유 origin(`*.github.io/<프로젝트>/`)에서 열리면 **설정 → 보안·데이터**에 경고가 표시됩니다.
+- 배포에는 앱 파일(`index.html`, `css/`, `js/`, `vendor/`)만 올리는 것을 권장합니다(GitHub Actions의 Pages artifact나
+  배포 전용 브랜치). `tests/` 페이지가 함께 올라가도 localhost가 아니면 항상 모의 AI로만 동작합니다.
 
 ## 한계
 
 - 스캔한 이미지 PDF는 글자 정보가 없어 번역할 수 없습니다 (보기는 가능).
+- PDF 한 개는 최대 70 MB까지 추가할 수 있습니다 (GitHub API가 받는 크기 제한 때문).
 - 수식이 많은 부분, 표 안의 글자, 아주 복잡한 레이아웃은 문장 구분이 어긋날 수 있습니다.
 
 ## 개발

@@ -1,9 +1,9 @@
 // 핵심 밑줄: toolbar toggle that underlines key sentences by category (tasks.keyPoints, run once
 // and cached in ai.keyPoints) on the viewer's and pane's 'auto' layers, with a filterable legend.
-import { clamp, el } from '../core/util.js';
+import { clamp, el, hash } from '../core/util.js';
 import { spinner, toast } from '../ui/components.js';
 import { keyPoints } from '../ai/tasks.js';
-import { AI_NOT_READY_MESSAGE, NO_TEXT_MESSAGE, anySignal, errorMessage, hasDocText, isAbortError } from './shared.js';
+import { NO_TEXT_MESSAGE, errorMessage, hasDocText, isAbortError, notifyAiNotReady } from './shared.js';
 
 /**
  * `color` is a named mark colour: the shell themes these (--mark-<name>[-line]) and they are also
@@ -19,14 +19,24 @@ export const KEYPOINT_CATEGORIES = Object.freeze([
 ]);
 const CATEGORY = Object.fromEntries(KEYPOINT_CATEGORIES.map((c) => [c.id, c]));
 
-/** Drop items whose sentence or category is unknown, and duplicate sids. */
+/**
+ * Drop items whose sentence or category is unknown, duplicate sids, and items saved for a different sentence
+ * text (`h`: a re-segmentation or extraction change moved the sids, so the underline would mark the wrong one).
+ */
 export function cleanKeyPoints(doc, items) {
   const seen = new Set();
   return (Array.isArray(items) ? items : []).filter((it) => {
-    if (!it || !CATEGORY[it.category] || !doc?.sentenceById?.has(it.sid) || seen.has(it.sid)) return false;
+    const s = it && doc?.sentenceById?.get(it.sid);
+    if (!s || !CATEGORY[it.category] || seen.has(it.sid)) return false;
+    if (typeof it.h === 'string' && it.h !== hash(s.text)) return false;
     seen.add(it.sid);
     return true;
   }).map((it) => ({ sid: it.sid, category: it.category }));
+}
+
+/** Stored key points carry the text hash of their sentence (see cleanKeyPoints). */
+function withHashes(doc, items) {
+  return items.map((it) => ({ ...it, h: hash(doc.sentenceById.get(it.sid).text) }));
 }
 
 /** Underline marks for the 'auto' layer, one named colour per category. */
@@ -74,7 +84,7 @@ export function installAutoHighlight(ctx, session, { signal }) {
     if (state.items) { render(); return; }
     if (!user) { setInactive(); return; }
     if (!hasDocText(ctx.doc)) { toast(NO_TEXT_MESSAGE, { kind: 'error' }); setInactive(); return; }
-    if (!ctx.settings.isAiReady()) { toast(AI_NOT_READY_MESSAGE, { kind: 'error' }); setInactive(); return; }
+    if (!ctx.settings.isAiReady()) { notifyAiNotReady(); setInactive(); return; }
     analyze();
   }
 
@@ -98,22 +108,25 @@ export function installAutoHighlight(ctx, session, { signal }) {
     state.running = run;
     showLegend();
     try {
-      const { items, usage, model } = await keyPoints(ctx.doc, { signal: anySignal(run.signal, ctx.signal, signal), paperId: ctx.paper?.id });
+      // Not tied to the reader's lifetime: closing the paper mid-analysis would throw away a request whose
+      // input (the whole paper) is already billed. The result is cached either way.
+      const { items, usage, model } = await keyPoints(ctx.doc, { signal: run.signal, paperId: ctx.paper?.id });
       const clean = cleanKeyPoints(ctx.doc, items);
       state.items = clean;
       await ctx.saveAi({
-        keyPoints: { items: clean, model: model || usage?.model || ctx.settings.model('assist'), createdAt: Date.now() },
+        keyPoints: { items: withHashes(ctx.doc, clean), model: model || usage?.model || ctx.settings.model('assist'), createdAt: Date.now() },
       });
+      if (signal.aborted) return;
       if (!clean.length) toast('핵심 문장을 찾지 못했습니다.');
       if (state.active) render();
     } catch (err) {
-      if (isAbortError(err)) return;
+      if (isAbortError(err) || signal.aborted) return;
       console.warn('[features] keyPoints failed', err);
       toast(errorMessage(err, '핵심 문장을 찾지 못했습니다.'), { kind: 'error' });
       if (state.active) setInactive();
     } finally {
       if (state.running === run) state.running = null;
-      if (state.active && legend) showLegend();
+      if (state.active && legend && !signal.aborted) showLegend();
     }
   }
 
@@ -200,7 +213,7 @@ export function installAutoHighlight(ctx, session, { signal }) {
 
   signal.addEventListener('abort', () => {
     offSettings?.();
-    state.running?.abort();
+    // An analysis in flight is left to finish and cache its (already billed) result.
     hideLegend();
   }, { once: true });
 

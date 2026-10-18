@@ -10,7 +10,10 @@ import { recordUsage } from './usage.js';
 
 const KEY_POINTS_MAX = 25;
 const KEY_POINT_KINDS = new Set(['body', 'caption']);
-const MAX_HISTORY_MESSAGES = 20;
+// History sent with a chat question: at most MAX_HISTORY_MESSAGES, trimmed in whole chunks of HISTORY_TRIM_CHUNK
+// from the oldest end, so the start of the history (the cached prefix) stays the same for many turns.
+const MAX_HISTORY_MESSAGES = 30;
+const HISTORY_TRIM_CHUNK = 10;
 const NEARBY_SENTENCES = 3;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // Claude's per-image limit
 const TRUNCATED_NOTE = '\n\n> (응답이 최대 길이에 도달해 일부가 잘렸습니다.)';
@@ -24,12 +27,11 @@ const TRUNCATED_NOTE = '\n\n> (응답이 최대 길이에 도달해 일부가 �
 export async function summarize(doc, { signal, paperId } = {}) {
   requireText(doc);
   const model = settings.model('assist');
-  const res = await getProvider().complete({
-    task: 'summary', model, system: assistSystem(doc),
+  const res = await billed(getProvider().complete({
+    task: 'summary', model, system: assistSystem(doc, settings.get().translate || {}),
     messages: [{ role: 'user', content: summaryPrompt() }],
     maxTokens: 16000, effort: 'medium', signal,
-  });
-  recordUsage(res.usage, { paperId, task: 'summary' });
+  }), { paperId, task: 'summary' });
   const markdown = res.text.trim();
   if (!markdown) throw aiError('요약 결과가 비어 있습니다. 다시 시도해 주세요.', { code: 'parse' });
   return { markdown: res.stopReason === 'max_tokens' ? markdown + TRUNCATED_NOTE : markdown, usage: res.usage, model };
@@ -46,8 +48,10 @@ export async function* chat(doc, history, question, { signal, quote, paperId } =
   if (!String(question || '').trim()) throw aiError('질문을 입력해 주세요.', { code: 'bad_request' });
   const messages = [...normalizeHistory(history), { role: 'user', content: chatQuestion(question, quote) }];
   yield* streamTask({
-    task: 'chat', model: settings.model('assist'), system: assistSystem(doc), messages,
+    task: 'chat', model: settings.model('assist'), system: assistSystem(doc, settings.get().translate || {}), messages,
     maxTokens: 32000, effort: 'medium', signal,
+    // Earlier turns are re-sent every time: cache them too (the prefix after the cached paper grows by one exchange).
+    cacheMessages: messages.length > 1,
   }, { paperId });
 }
 
@@ -64,7 +68,7 @@ export async function* explain(doc, { quote, imageDataUrl, nearSid } = {}, { sig
   if (imageDataUrl) content.push({ type: 'image', ...parseImageDataUrl(imageDataUrl) });
   content.push({ type: 'text', text: explainPrompt({ quote: text, hasImage: Boolean(imageDataUrl), nearby: nearbySentences(doc, nearSid) }) });
   yield* streamTask({
-    task: 'explain', model: settings.model('assist'), system: assistSystem(doc),
+    task: 'explain', model: settings.model('assist'), system: assistSystem(doc, settings.get().translate || {}),
     messages: [{ role: 'user', content }], maxTokens: 16000, effort: 'medium', signal,
   }, { paperId });
 }
@@ -78,12 +82,12 @@ export async function* explain(doc, { quote, imageDataUrl, nearSid } = {}, { sig
 export async function keyPoints(doc, { signal, paperId } = {}) {
   requireText(doc);
   const model = settings.model('assist');
-  const res = await getProvider().complete({
-    task: 'keyPoints', model, system: assistSystem(doc),
+  // Same effort as the other assist tasks, so the request shape differs from them only by the output format.
+  const res = await billed(getProvider().complete({
+    task: 'keyPoints', model, system: assistSystem(doc, settings.get().translate || {}),
     messages: [{ role: 'user', content: keyPointsPrompt(KEY_POINTS_MAX) }],
-    json: KEYPOINTS_SCHEMA, maxTokens: 8000, effort: 'low', signal,
-  });
-  recordUsage(res.usage, { paperId, task: 'keyPoints' });
+    json: KEYPOINTS_SCHEMA, maxTokens: 8000, effort: 'medium', signal,
+  }), { paperId, task: 'keyPoints' });
   return { items: selectKeyPoints(doc, res.json?.items, KEY_POINTS_MAX), usage: res.usage, model };
 }
 
@@ -96,26 +100,43 @@ export async function keyPoints(doc, { signal, paperId } = {}) {
 export async function quickTranslate(text, { signal, paperId } = {}) {
   const source = String(text || '').replace(/\s+/g, ' ').trim();
   if (!source) throw aiError('번역할 텍스트를 선택해 주세요.', { code: 'bad_request' });
-  const res = await getProvider().complete({
+  const res = await billed(getProvider().complete({
     task: 'quickTranslate', model: settings.model('translate'),
     system: quickTranslateSystem(settings.get().translate || {}),
     messages: [{ role: 'user', content: source }],
     maxTokens: 8000, effort: 'low', signal,
-  });
-  recordUsage(res.usage, { paperId, task: 'quickTranslate' });
+  }), { paperId, task: 'quickTranslate' });
   const out = res.text.trim();
   return { text: res.stopReason === 'max_tokens' ? out + TRUNCATED_NOTE : out, usage: res.usage };
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
 
+/** Record the usage of a completed request — and of a failed one that was still billed (refusal, cut off, …). */
+async function billed(promise, meta) {
+  try {
+    const res = await promise;
+    recordUsage(res.usage, meta);
+    return res;
+  } catch (err) {
+    if (err?.usage) recordUsage(err.usage, meta);
+    throw err;
+  }
+}
+
 async function* streamTask(opts, { paperId }) {
   throwIfAborted(opts.signal);
   let usage = null;
   let stopReason = null;
-  for await (const ev of getProvider().stream(opts)) {
-    if (ev.type === 'text' && ev.text) yield ev.text;
-    else if (ev.type === 'done') ({ usage, stopReason } = ev);
+  try {
+    for await (const ev of getProvider().stream(opts)) {
+      if (ev.type === 'text' && ev.text) yield ev.text;
+      else if (ev.type === 'done') ({ usage, stopReason } = ev);
+    }
+  } catch (err) {
+    // Stopped or failed mid-answer: what was already generated (and the whole prompt) is billed.
+    if (err?.usage) recordUsage(err.usage, { paperId, task: opts.task });
+    throw err;
   }
   if (usage) recordUsage(usage, { paperId, task: opts.task });
   if (stopReason === 'max_tokens') yield TRUNCATED_NOTE;
@@ -124,8 +145,11 @@ async function* streamTask(opts, { paperId }) {
 
 /** Keep the last turns, start with a user turn, merge consecutive same-role turns, drop empty ones. */
 export function normalizeHistory(history) {
+  const list = history || [];
+  const over = list.length - MAX_HISTORY_MESSAGES;
+  const from = over > 0 ? Math.ceil(over / HISTORY_TRIM_CHUNK) * HISTORY_TRIM_CHUNK : 0;
   const turns = [];
-  for (const h of (history || []).slice(-MAX_HISTORY_MESSAGES)) {
+  for (const h of list.slice(from)) {
     const role = h?.role === 'assistant' ? 'assistant' : h?.role === 'user' ? 'user' : null;
     const content = typeof h?.content === 'string' ? h.content.trim() : '';
     if (!role || !content) continue;

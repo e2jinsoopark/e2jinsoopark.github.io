@@ -79,6 +79,15 @@ async function boot() {
     toast(e.detail?.message || '변경 내용을 이 기기에 저장하지 못했습니다.', { kind: 'error', timeout: 8000 });
   });
 
+  // Settings changed in another tab (e.g. the GitHub token was cleared there): this tab's sync must follow.
+  let syncedGithub = JSON.stringify(settings.get().github || {});
+  bus.on('settings:change', ({ external } = {}) => {
+    const now = JSON.stringify(settings.get().github || {});
+    if (now === syncedGithub) return;
+    syncedGithub = now;
+    if (external) library.reconfigureSync?.().catch((err) => console.warn('[app] reconfigureSync', err));
+  });
+
   const deps = buildDeps(modules, library, failures);
   if (failures.length) showBanner(bannerHost, failures);
   startRouter(viewEl, deps);
@@ -135,7 +144,7 @@ export function parseRoute(hash) {
     try { id = decodeURIComponent(id); } catch { /* keep raw */ }
     return { name: 'paper', id };
   }
-  if (parts[0] === 'settings') return { name: 'settings' };
+  if (parts[0] === 'settings') return parts[1] ? { name: 'settings', section: parts[1] } : { name: 'settings' };
   return { name: 'library' };
 }
 
@@ -156,7 +165,7 @@ function startRouter(viewEl, deps) {
       if (r.name === 'paper') {
         current = mountReaderView(viewEl, { paperId: r.id, deps, navigate });
       } else if (r.name === 'settings') {
-        current = mountSettingsView(viewEl, { deps, navigate, backHref: previousHash });
+        current = mountSettingsView(viewEl, { deps, navigate, backHref: previousHash, section: r.section });
       } else {
         document.title = '논문 리더';
         current = mountLibraryView(viewEl, { deps, navigate });

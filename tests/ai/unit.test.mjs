@@ -26,6 +26,9 @@ const tests = [
           dated: costUsd(u('claude-sonnet-5-5-20261001', 1_000_000)),
           parts: costUsd({ ...u('claude-sonnet-5-5', 5), parts: [u('claude-sonnet-5-5', 1_000), u('claude-haiku-5-5', 1_000)] }),
           gemini: costUsd(u('gemini-2.5-flash', 1e6, 1e6)),
+          fallbackOpus48: costUsd(u('claude-opus-4-8', 1e6, 0)),
+          unknownClaude: costUsd({ ...u('claude-future-9', 1e6, 0), requestedModel: 'claude-sonnet-5-5' }),
+          unknownPart: costUsd({ ...u('claude-opus-5-5', 0), requestedModel: 'claude-opus-5-5', parts: [u('claude-opus-5-5', 1e6), u('claude-nextgen-1', 1e6)] }),
           mock: costUsd(u('mock', 1e6, 1e6)),
           junk: costUsd(u('claude-haiku-5-5', -5, Number.NaN)),
           none: costUsd(null),
@@ -44,6 +47,9 @@ const tests = [
         dated: 2,
         parts: (1_000 * 2 + 1_000 * 0.10) / 1e6,
         gemini: 0, mock: 0, junk: 0, none: 0,
+        // Regression (fallback-cost-zero): fallback targets are priced; an unknown claude-* model is estimated at
+        // the requested model's rates instead of $0.
+        fallbackOpus48: 5, unknownClaude: 2, unknownPart: 4 + 4,
       };
       for (const [k, v] of Object.entries(expect)) assert.ok(near(r[k], v), `${k}: ${r[k]} ≠ ${v}`);
       return Object.entries(r).map(([k, v]) => `${k}=$${+v.toFixed(6)}`).join(' ');
@@ -77,7 +83,9 @@ const tests = [
       assert.equal(r.corrupt.calls, 0);
       assert.equal(r.s.month, r.current);
       assert.equal(r.s.calls, 3);
-      assert.ok(near(r.s.usd, 0.002 + 0.012 + 0.002));
+      // Regression (fallback-cost-zero): the fallback attempt on claude-sonnet-5 is priced too ($2/$10), not booked as $0.
+      assert.ok(near(r.s.usd, 0.002 + 0.012 + 0.002 + 0.0021), `usd ${r.s.usd}`);
+      assert.ok(r.s.byModel['claude-sonnet-5'].usd > 0, 'fallback model cost recorded');
       assert.equal(r.s.byModel['claude-haiku-5-5'].inputTokens, 10_000);
       assert.equal(r.s.byModel['claude-sonnet-5-5'].calls, 2);
       assert.equal(r.s.byModel['claude-sonnet-5'].calls, 1); // fallback attempt recorded under its own model
@@ -105,7 +113,10 @@ const tests = [
         const parsed = P.parseTranslationUserMessage(msg);
         const sysOn = P.translationSystem({ meta: { title: 'T', abstract: 'x'.repeat(5000) } }, { keepTermsInEnglish: true, glossary: [{ src: 'delirium', tgt: '섬망' }, { src: ' ', tgt: 'x' }] });
         const sysOff = P.translationSystem({ meta: {} }, { keepTermsInEnglish: false, glossary: [] });
-        return { msg, parsed, sysOn, sysOff, quick: P.quickTranslateSystem({ glossary: [{ src: 'fall', tgt: '낙상' }] }) };
+        // Regression (glossary-not-in-assist): summary/chat/explain/key points follow the same glossary and term style.
+        const assistOn = P.assistSystem({ sentences: [], meta: { title: 'T' } }, { keepTermsInEnglish: true, glossary: [{ src: 'restraint', tgt: '신체보호대' }] });
+        const assistOff = P.assistSystem({ sentences: [], meta: { title: 'T' } }, { keepTermsInEnglish: false, glossary: [] });
+        return { msg, parsed, sysOn, sysOff, assistOn, assistOff, quick: P.quickTranslateSystem({ glossary: [{ src: 'fall', tgt: '낙상' }] }) };
       });
       assert.deepEqual(r.parsed.items.map((i) => [i.sid, i.kind]), [['p1-0', 'heading'], ['p1-1', 'body'], ['p1-2', 'caption']]);
       assert.equal(r.parsed.items[0].text, '2.1 Study design');
@@ -121,6 +132,10 @@ const tests = [
       assert.match(r.sysOn[1].text, /- delirium → 섬망/);
       assert.ok(!r.sysOn[1].text.includes('→ x'), 'blank glossary entries dropped');
       assert.match(r.sysOff[1].text, /\(none\)/);
+      assert.match(r.assistOn[0].text, /- restraint → 신체보호대/);
+      assert.match(r.assistOn[0].text, /섬망\(delirium\)/);
+      assert.match(r.assistOff[0].text, /Korean only/);
+      assert.equal(r.assistOn[1].cache, true);
       assert.ok(r.sysOn[1].text.length < 3000, 'abstract capped at 2000 chars');
       for (const rule of ["'~다' 체", '그림 1.', '표 3.', 'p < .05', 'Never merge, split, reorder, skip']) assert.ok(r.sysOn[0].text.includes(rule), rule);
       assert.match(r.quick, /fall → 낙상/);
@@ -196,7 +211,7 @@ const tests = [
       assert.equal(r.scanErr?.code, 'bad_request');
       assert.deepEqual(r.reqs, [
         { task: 'summary', effort: 'medium', model: 'mock', cache: true, json: false },
-        { task: 'keyPoints', effort: 'low', model: 'mock', cache: true, json: true },
+        { task: 'keyPoints', effort: 'medium', model: 'mock', cache: true, json: true }, // same effort as the other assist tasks (shared cache)
         { task: 'quickTranslate', effort: 'low', model: 'mock', cache: false, json: false },
       ]);
       return `summary ${r.s.markdown.length} chars; keyPoints ${r.k.items.length} over ${r.pages} pages; quickTranslate "${r.q.text}"; scanned → "${r.scanErr.message}"`;

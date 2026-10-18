@@ -167,6 +167,55 @@ const tests = [
     },
   },
   {
+    name: 'regression low-credit-misreported: 400 "credit balance is too low" → fatal billing error in Korean (no English detail), testKey says credit is not checked',
+    fn: async ({ page }) => {
+      await useClaude(page);
+      const calls = await recordRoute(page, API, (c) => (c.method === 'GET'
+        ? { json: { data: [{ type: 'model', id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5' }], has_more: false, first_id: 'a', last_id: 'a' } }
+        : apiError(400, 'invalid_request_error', 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.')));
+      const r = await page.evaluate(async () => {
+        const C = await import('/js/ai/claude.js');
+        const test = await C.claudeProvider.testKey();
+        try {
+          await C.claudeProvider.complete({ model: 'claude-haiku-5-5', system: 'S', messages: [{ role: 'user', content: 'Q' }], maxTokens: 100 });
+          return { test };
+        } catch (e) {
+          return { test, code: e.code, fatal: e.fatal, message: e.message };
+        }
+      });
+      assert.equal(r.test.ok, true);
+      assert.match(r.test.message, /크레딧 잔액은 확인하지 않습니다/);
+      assert.equal(r.code, 'billing');
+      assert.equal(r.fatal, true);
+      assert.match(r.message, /크레딧이 없거나 부족합니다/);
+      assert.match(r.message, /Max/);
+      assert.ok(!/credit balance/i.test(r.message), 'no English API text in the user message');
+      assert.equal(calls.filter((c) => c.method === 'POST').length, 1, 'a 400 is not retried');
+      return `testKey: "${r.test.message}"; translate: ${r.code} (fatal) "${r.message}"`;
+    },
+  },
+  {
+    name: 'stream on Sonnet 5.5: fallback beta rejected (400 before any event) → same stream without it, then remembered',
+    fn: async ({ page }) => {
+      await useClaude(page);
+      const calls = await recordRoute(page, API, (c) => (c.body.fallbacks
+        ? apiError(400, 'invalid_request_error', 'Unexpected value(s) `server-side-fallback-2026-07-01` for the `anthropic-beta` header.')
+        : { contentType: 'text/event-stream', body: streamEvents({ chunks: ['가', '나'] }) }));
+      const r = await page.evaluate(async () => {
+        const C = await import('/js/ai/claude.js');
+        const texts = [];
+        for await (const ev of C.claudeProvider.stream({ model: 'claude-sonnet-5-5', system: 'S', messages: [{ role: 'user', content: 'Q' }], maxTokens: 1000 })) {
+          if (ev.type === 'text') texts.push(ev.text);
+        }
+        return { texts, disabled: C.isFallbackBetaDisabled() };
+      });
+      assert.deepEqual(calls.map((c) => Boolean(c.body.fallbacks)), [true, false]);
+      assert.deepEqual(r.texts, ['가', '나']);
+      assert.equal(r.disabled, true);
+      return `requests: beta(400) → plain stream; text ${r.texts.join('')}; remembered=${r.disabled}`;
+    },
+  },
+  {
     name: 'genuine 400 on Sonnet is not mistaken for a beta rejection (2 requests, bad_request, beta kept)',
     fn: async ({ page }) => {
       await useClaude(page);
@@ -204,7 +253,11 @@ const tests = [
       });
       const c = calls[0];
       assert.equal(calls.length, 1);
-      assert.equal(c.url, 'https://api.anthropic.com/v1/messages'); // streams use plain messages.stream (no fallback beta)
+      // Regression (stream-no-fallback): Sonnet 5.5 streams opt into the server-side refusal fallback too.
+      assert.equal(c.url, 'https://api.anthropic.com/v1/messages?beta=true');
+      assert.ok(c.headers['anthropic-beta'].split(',').includes('server-side-fallback-2026-07-01'), c.headers['anthropic-beta']);
+      assert.equal(c.body.fallbacks, 'default');
+      assert.ok(!('betas' in c.body));
       assert.equal(c.body.stream, true);
       assert.equal(c.body.max_tokens, 32000);
       assert.deepEqual(c.body.output_config, { effort: 'medium' });
@@ -314,10 +367,10 @@ const tests = [
         assert.equal(out[m]?.code, code, `${m}: ${JSON.stringify(out[m])}`);
         assert.match(out[m].message, /[가-힣]/, `${m} message is Korean`);
       }
-      assert.equal(out[429].requests, 4, 'maxRetries 3 → 4 attempts on 429');
-      assert.equal(out[529].requests, 4);
+      assert.equal(out[429].requests, 3, 'maxRetries 2 → 3 attempts on 429');
+      assert.equal(out[529].requests, 3);
       assert.equal(out[500].requests, 1, 'x-should-retry:false honoured');
-      assert.equal(out.network.requests, 4);
+      assert.equal(out.network.requests, 3);
       assert.equal(out[401].fatal, true);
       assert.equal(out[429].fatal, false);
       assert.match(out[529].message, /과부하/);
@@ -444,6 +497,9 @@ const tests = [
       assert.ok(!sum.body.system[1].text.includes('Journal of Synthetic Nursing Research'), 'furniture excluded');
       assert.equal(chat.body.stream, true);
       assert.deepEqual(chat.body.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+      // Regression (chat-history-uncached): multi-turn chat asks for automatic caching of the conversation tail.
+      assert.deepEqual(chat.body.cache_control, { type: 'ephemeral' });
+      assert.equal(sum.body.cache_control, undefined, 'single-turn tasks keep only the paper breakpoint');
       assert.match(chat.body.messages[2].content, /<quote>\nthe quote\n<\/quote>/);
       assert.equal(chat.body.system[1].text, sum.body.system[1].text, 'same cached prefix for summary and chat');
       assert.equal(r.s.markdown, '## 한 줄 요약\n요약 [p1-1]');

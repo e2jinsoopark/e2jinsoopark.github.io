@@ -26,7 +26,15 @@ export class Library extends EventTarget {
   #writeQueued = false;
   #rev = 0; // bumped by every change
   #savedRev = 0; // last change known to be in IndexedDB
+  /**
+   * The stored library.json that memory was last reconciled with (read, written or absorbed). Memory is this
+   * plus local edits, so it is the common ancestor for 3-way merges with any later stored version: a field
+   * that only the stored copy changed (a pull, another tab) is taken even when both items carry equal stamps.
+   */
+  #base = null;
+  #journalWritten = false;
   #listening = new AbortController();
+  #persisted = null;
 
   /**
    * Open the local library and resume sync when GitHub is configured (the first pull runs in the
@@ -36,18 +44,24 @@ export class Library extends EventTarget {
   static async open({ settings, db = defaultDb, sync, syncOptions } = {}) {
     await db.ready?.();
     const engine = sync || new SyncEngine({ db, getConfig: () => settings?.get?.().github ?? null, ...syncOptions });
-    const library = new Library(engine);
+    const library = new Library(engine, db);
     await library.#load();
+    // Local-first data must not be evicted under storage pressure — on every device, not only the one that
+    // added the PDFs (a reading-only device may hold unpushed notes and translations).
+    library.#persisted = requestPersistentStorage();
     await engine.start();
     return library;
   }
 
   /** Use Library.open(). */
-  constructor(sync) {
+  constructor(sync, db = defaultDb) {
     super();
     this.#sync = sync;
+    this.#db = db;
     this.#data = normalizeLibrary(null);
   }
+
+  #db;
 
   // ------------------------------------------------------------------ reads
 
@@ -206,14 +220,78 @@ export class Library extends EventTarget {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   }
 
-  /** Persist a per-paper data file (SPEC §2.2); sets `obj.updatedAt`. */
-  async savePaperData(id, kind, obj) {
+  /**
+   * Persist a per-paper data file (SPEC §2.2); sets `obj.updatedAt`. `base` (optional) is the stored version
+   * `obj` was derived from: the write then merges 3-way with what is stored now, and the stamp is kept newer
+   * than the base's (a device whose clock is behind still wins for its own fresh edits).
+   * @returns {Promise<object>} what is stored now (may include records merged from another tab or device)
+   */
+  async savePaperData(id, kind, obj, { base = null } = {}) {
     assertKind(kind);
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new TypeError('savePaperData: obj must be an object');
-    obj.updatedAt = Date.now();
+    this.#assertNotDeleted(id);
+    obj.updatedAt = Math.max(Date.now(), toMillis(base?.updatedAt) + 1);
     obj.version ??= 1;
-    await this.#sync.writeFile(paperPath(id, `${kind}.json`), obj);
+    const stored = await this.#sync.writeFile(paperPath(id, `${kind}.json`), obj, { base });
     emit(this, 'change', { reason: 'data', paperId: id, kind });
+    return stored;
+  }
+
+  /**
+   * Read-modify-write of a per-paper data file: `mutate(current)` receives a copy of what is stored now
+   * ({ version: 1 } when there is none) and returns the new object (or undefined to leave it). A failed read
+   * throws instead of writing over data this device could not see. Calls for one paper/kind run in order.
+   * @returns {Promise<object|null>} the stored object
+   */
+  updatePaperData(id, kind, mutate) {
+    assertKind(kind);
+    const key = `${id}\n${kind}`;
+    const prev = this.#dataChains.get(key) || Promise.resolve();
+    const run = prev.catch(() => {}).then(async () => {
+      const current = await this.#sync.readFile(paperPath(id, `${kind}.json`), { as: 'json' });
+      const base = current && typeof current === 'object' && !Array.isArray(current) ? current : null;
+      const next = mutate(structuredClone(base || { version: 1 }));
+      if (next === undefined) return base;
+      return this.savePaperData(id, kind, next, { base });
+    });
+    this.#dataChains.set(key, run);
+    run.finally(() => { if (this.#dataChains.get(key) === run) this.#dataChains.delete(key); }).catch(() => {});
+    return run;
+  }
+
+  #dataChains = new Map();
+
+  /** Would `cfg` (settings.github) sync this device's data into a different repository? See SyncEngine. */
+  async syncTargetChange(cfg) {
+    const info = await this.#sync.targetChange?.(cfg);
+    if (!info) return null;
+    return { ...info, papers: this.papers.length };
+  }
+
+  /** Whether the browser granted persistent storage (null: unknown / not supported). */
+  async storagePersisted() {
+    return (await this.#persisted) ?? null;
+  }
+
+  /**
+   * Remove everything this device stores for the app: the library, PDFs, translations, notes, AI results and
+   * sync state (IndexedDB), and the unsaved-change journal. Nothing is deleted on GitHub. The page should be
+   * reloaded afterwards.
+   */
+  async wipeLocalData() {
+    this.#listening.abort();
+    this.#sync.stop();
+    await this.#writeChain.catch(() => {});
+    safeStorage.remove(JOURNAL_KEY);
+    this.#data = normalizeLibrary(null);
+    this.#base = null;
+    this.#view = null;
+    if (this.#db?.destroy) await this.#db.destroy();
+  }
+
+  #assertNotDeleted(id) {
+    const raw = this.#data.papers.find((p) => p.id === id);
+    if (raw?.deleted) throw new Error('이 논문은 삭제되었습니다(다른 기기에서 삭제했을 수 있습니다). 변경 내용을 저장하지 않았습니다.');
   }
 
   /** Call after settings.github changed (turns sync on/off or switches repo). */
@@ -250,10 +328,13 @@ export class Library extends EventTarget {
       console.warn('[store] library.json unreadable', err);
     }
     this.#data = normalizeLibrary(stored);
+    this.#base = normalizeLibrary(stored);
     const journal = safeStorage.get(JOURNAL_KEY, null);
     if (journal?.data) {
-      // The previous page closed before its last changes reached IndexedDB.
-      this.#data = normalizeLibrary(mergeLibrary(normalizeLibrary(journal.data), this.#data, null));
+      // The previous page closed before its last changes reached IndexedDB. The journal carries the stored
+      // version those changes were made on, so the replay is a 3-way merge (it cannot revert newer fields).
+      const base = journal.base ? normalizeLibrary(journal.base) : null;
+      this.#data = normalizeLibrary(mergeLibrary(normalizeLibrary(journal.data), this.#data, base));
       this.#rev++;
       await this.#persist();
       if (this.#savedRev === this.#rev) safeStorage.remove(JOURNAL_KEY);
@@ -263,11 +344,15 @@ export class Library extends EventTarget {
     this.#sync.addEventListener('remotechange', (e) => {
       this.#onRemoteChange(e.detail).catch((err) => console.warn('[store] remote change', err));
     }, { signal });
+    this.#sync.addEventListener('rejected', (e) => this.#onRejected(e.detail), { signal });
     if (typeof window !== 'undefined') {
       // Leaving or backgrounding the page: keep a synchronous copy of unsaved changes, and push what
       // is pending now instead of waiting for the debounce.
       const flush = () => {
-        if (this.#rev !== this.#savedRev) safeStorage.set(JOURNAL_KEY, { at: Date.now(), data: this.#data });
+        if (this.#rev !== this.#savedRev) {
+          safeStorage.set(JOURNAL_KEY, { at: Date.now(), rev: this.#rev, data: this.#data, base: this.#base });
+          this.#journalWritten = true;
+        }
         this.flush().catch((err) => console.warn('[store] flush', err));
       };
       window.addEventListener('pagehide', flush, { signal });
@@ -278,18 +363,45 @@ export class Library extends EventTarget {
 
   async #onRemoteChange({ paths = [], origin } = {}) {
     if (!paths.includes(LIBRARY_PATH) || origin === 'merge') return;
-    const stored = await this.#sync.readFile(LIBRARY_PATH, { as: 'json' });
-    if (stored) this.#absorb(stored, 'remote');
+    // Reads and writes of library.json go through one chain, so stored versions are absorbed in the order
+    // IndexedDB holds them (an older write result can never overwrite a newer pulled version in memory).
+    const step = this.#writeChain.then(async () => {
+      const stored = await this.#sync.readFile(LIBRARY_PATH, { as: 'json' });
+      if (stored) this.#absorb(stored, 'remote');
+    });
+    this.#writeChain = step.catch((err) => console.warn('[store] reading library.json failed', err));
+    await step;
     await this.#gcDeletedPapers();
   }
 
-  /** Merge another version of library.json into memory (memory wins ties). */
+  /**
+   * Take in a newer stored version of library.json. Without unsaved local changes it simply replaces memory
+   * (the stored copy already holds every saved local change, merged 3-way by the sync engine). Otherwise it
+   * is merged 3-way against the version memory was last reconciled with.
+   */
   #absorb(other, reason) {
-    const merged = mergeLibrary(this.#data, normalizeLibrary(other), null);
+    const stored = normalizeLibrary(other);
+    const unsaved = this.#rev !== this.#savedRev;
+    // Always a fresh copy: memory's records are mutated in place by edits, the base must never change.
+    const merged = normalizeLibrary(unsaved ? mergeLibrary(this.#data, stored, this.#base) : stored);
+    this.#base = stored;
     if (deepEqual(merged, this.#data)) return;
-    this.#data = normalizeLibrary(merged);
+    this.#data = merged;
     this.#view = null;
     emit(this, 'change', { reason });
+  }
+
+  /** GitHub refused to store one file (e.g. a PDF over its size limit): say which paper, keep syncing the rest. */
+  #onRejected({ path, code, message } = {}) {
+    const m = /^papers\/([^/]+)\/([^/]+)$/.exec(path || '');
+    const paper = m ? this.#data.papers.find((p) => p.id === m[1]) : null;
+    const what = paper ? `‘${paper.title || paper.fileName}’의 ${m[2] === 'paper.pdf' ? 'PDF' : '데이터'}` : path;
+    const why = code === 'too_large' ? '파일이 너무 커서' : 'GitHub가 받아 주지 않아';
+    emit(this, 'error', {
+      message: `${what}를 ${why} GitHub에 올리지 못했습니다. 이 기기에는 그대로 남아 있고, 나머지는 계속 동기화됩니다.${paper ? ' 다른 기기에서도 보려면 더 작은 PDF로 다시 추가하세요.' : ''}`,
+      error: Object.assign(new Error(message || ''), { code }),
+      path,
+    });
   }
 
   #changed(reason) {
@@ -308,10 +420,19 @@ export class Library extends EventTarget {
       this.#writeQueued = false;
       const rev = this.#rev;
       const snapshot = structuredClone(this.#data);
+      const base = this.#base;
       try {
-        const stored = await this.#sync.writeFile(LIBRARY_PATH, snapshot);
+        // 3-way against the version memory came from: a pull or another tab that changed a field since is
+        // kept even if this write's items carry equal or newer stamps.
+        const stored = await this.#sync.writeFile(LIBRARY_PATH, snapshot, { base });
         this.#savedRev = Math.max(this.#savedRev, rev);
-        if (stored !== snapshot) this.#absorb(stored, 'merge'); // another tab had changes we did not see
+        if (stored !== snapshot) this.#absorb(stored, 'merge'); // another tab or device had changes we did not see
+        else if (this.#base === base) this.#base = snapshot;
+        if (this.#journalWritten && this.#savedRev === this.#rev) {
+          // Everything the journal held is in IndexedDB now; a stale journal must not replay days later.
+          safeStorage.remove(JOURNAL_KEY);
+          this.#journalWritten = false;
+        }
       } catch (err) {
         console.warn('[store] saving library.json failed', err);
         emit(this, 'error', { message: err?.message || '라이브러리를 저장하지 못했습니다.', error: err });
@@ -472,10 +593,18 @@ function assertKind(kind) {
   if (!DATA_KINDS.has(kind)) throw new TypeError(`unknown paper data kind: ${kind}`);
 }
 
-let persistRequested = false;
-/** Ask once, when the first PDF is stored, that local-first data not be evicted under storage pressure. */
+let persistPromise = null;
+/**
+ * Ask (once per page) that local-first data not be evicted under storage pressure.
+ * @returns {Promise<boolean|null>} granted, or null when unsupported
+ */
 function requestPersistentStorage() {
-  if (persistRequested) return;
-  persistRequested = true;
-  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* unsupported */ }
+  persistPromise ??= (async () => {
+    try {
+      if (!navigator.storage?.persist) return null;
+      if (await navigator.storage.persisted?.()) return true;
+      return Boolean(await navigator.storage.persist());
+    } catch { return null; }
+  })();
+  return persistPromise;
 }

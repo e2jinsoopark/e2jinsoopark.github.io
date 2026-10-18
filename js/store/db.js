@@ -74,9 +74,12 @@ async function run(store, mode, body) {
     }
     let result;
     let thrown = null;
+    let requestError = null;
     tx.oncomplete = () => resolve(result);
-    tx.onabort = () => reject(thrown || storageError(tx.error));
-    tx.onerror = (e) => e.preventDefault(); // surfaced by onabort
+    tx.onabort = () => reject(thrown || storageError(requestError || tx.error));
+    // A failed request (e.g. "Failed to read large IndexedDB value") must abort the transaction: calling
+    // preventDefault() here would cancel the abort, and the caller would resolve as if nothing was stored.
+    tx.onerror = (e) => { requestError ??= e.target?.error ?? null; };
     // Errors thrown by callers' code (e.g. an update() mutator) abort the transaction and are rethrown as is.
     const guard = (fn) => (...args) => {
       try {
@@ -122,8 +125,8 @@ export const db = {
   indexKeys(store, index, query) {
     return run(store, 'readonly', readInto((os) => os.index(index).getAllKeys(query)));
   },
-  count(store, index) {
-    return run(store, 'readonly', readInto((os) => (index ? os.index(index) : os).count()));
+  count(store, index, query) {
+    return run(store, 'readonly', readInto((os) => (index ? os.index(index) : os).count(query)));
   },
 
   /**
@@ -162,5 +165,18 @@ export const db = {
   /** Throws the Korean storage error if IndexedDB cannot be opened. */
   async ready() {
     await open();
+  },
+
+  /** Close the connection and delete the whole database (this device's library, cached PDFs, sync state). */
+  async destroy() {
+    try { (await opening)?.close(); } catch { /* not open */ }
+    opening = null;
+    await new Promise((resolve, reject) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(storageError(req.error));
+      // Other tabs hold the database open: their onversionchange closes it, then the delete completes.
+      req.onblocked = () => console.warn('[store] database delete is waiting for other tabs to close it');
+    });
   },
 };

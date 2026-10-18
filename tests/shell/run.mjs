@@ -13,7 +13,8 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/shell';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const H = `${BASE}/tests/shell/harness.html`;
-const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.github.com https://api.semanticscholar.org https://cdn.jsdelivr.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
+// Narrowed in the review fixes: exact jsDelivr paths (Anthropic SDK 0.131.0 + its 3 pinned deps, Pretendard), no jsDelivr in connect-src.
+const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/ https://cdn.jsdelivr.net/npm/standardwebhooks@1.1.1/ https://cdn.jsdelivr.net/npm/@stablelib/base64@1.0.1/ https://cdn.jsdelivr.net/npm/fast-sha256@1.3.0/; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/; font-src 'self' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/ data:; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.github.com https://api.semanticscholar.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
 const BLOCKED = /api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.github\.com|api\.semanticscholar\.org/;
 
 mkdirSync(OUT, { recursive: true });
@@ -84,7 +85,9 @@ try {
         '<img src="https://evil.example/t.png">',
         '[클릭](javascript:window.__xss=2)',
         '<a href="javascript:window.__xss=3">raw</a> <a href="JaVaScRiPt&#58;window.__xss=6">enc</a>',
-        '<a href="https://example.com/x">ok</a>',
+        '[ok](https://example.com/x)',
+        // Regression (markdown-class-attr-ui-redress): a prompt-injected answer must not reuse the app's classes.
+        '<div class="modal-backdrop"><div class="modal"><h2 class="modal-title">API 키 인증 만료</h2><a class="btn btn-primary" href="https://evil.example/">키 다시 입력</a></div></div>',
         '<script>window.__xss=4</script>',
         '<iframe src="https://evil.example"></iframe>',
         '<svg><g onload="window.__xss=5"></g></svg>',
@@ -106,11 +109,14 @@ try {
         imgs: host.querySelectorAll('img').length,
         scripts: host.querySelectorAll('script, iframe, svg, form, input').length,
         styleAttrs: host.querySelectorAll('[style]').length,
-        handlers: /\son\w+=/i.test(html),
-        jsHref: /javascript:/i.test(html),
+        // Raw HTML is now shown as escaped text, so look at real elements/attributes, not the markup text.
+        handlers: [...host.querySelectorAll('*')].some((n) => [...n.attributes].some((a) => /^on/i.test(a.name))),
+        jsHref: [...host.querySelectorAll('[href], [src]')].some((n) => /^\s*javascript:/i.test(n.getAttribute('href') || n.getAttribute('src') || '')),
         sidLinks: [...host.querySelectorAll('a.sid-link')].map((a) => a.dataset.sid),
         okLink: (() => { const a = host.querySelector('a[href^="https://example.com"]'); return a ? `${a.target}|${a.rel}` : null; })(),
         hashHref: [...host.querySelectorAll('a')].some((a) => (a.getAttribute('href') || '').startsWith('#')),
+        foreignClasses: [...host.querySelectorAll('[class]')].map((n) => n.className).filter((c) => !/^(sid-link|md-table-wrap)$/.test(c)),
+        evilLink: Boolean(host.querySelector('a[href^="https://evil.example"]')),
         codeText: host.querySelector('code')?.textContent,
       };
       host.remove();
@@ -123,6 +129,7 @@ try {
     assert(!r.handlers, 'event handler attribute survived');
     assert(!r.jsHref, 'javascript: URL survived');
     assert(!r.hashHref, 'in-app # link survived (would hijack the router)');
+    assert(r.foreignClasses.length === 0 && !r.evilLink, `model output kept classes/links from raw HTML: ${JSON.stringify(r.foreignClasses)} evilLink=${r.evilLink}`);
     assert(r.okLink === '_blank|noopener noreferrer', `external link not hardened: ${r.okLink}`);
     assert(JSON.stringify(r.sidLinks) === JSON.stringify(['p3-12', 'p1-2', 'p2-5']), `sid links: ${r.sidLinks}`);
     assert(r.codeText === '[p9-9]', 'sid inside code must stay text');
@@ -143,9 +150,9 @@ try {
     assert(chip.includes('꺼짐'), `sync chip: ${chip}`);
     await page.locator('.step >> text=설정 열기').first().click();
     await page.waitForSelector('.settings');
-    assert(page.url().endsWith('#/settings'), 'settings link did not navigate');
+    assert(/#\/settings\/ai$/.test(page.url()), `settings link did not open the AI section: ${page.url()}`);
     await page.context().close();
-    return `onboarding shown with 3 steps + dropzone; chip="${chip.trim()}"; '설정 열기' navigates to #/settings`;
+    return `onboarding shown with 3 steps + dropzone; chip="${chip.trim()}"; '설정 열기' navigates to #/settings/ai`;
   });
 
   {
@@ -559,6 +566,12 @@ try {
       await page.locator('.btn', { hasText: '연결 테스트' }).click();
       await page.waitForSelector('#set-sync .btn-row + .test-result.is-ok');
       const ok = await page.locator('#set-sync .btn-row + .test-result').innerText();
+      // Regression (gh-test-does-not-save-token): a successful test saves the form (the token is shown only once).
+      const afterTest = await page.evaluate(() => JSON.parse(localStorage.getItem('pr.settings.v1')).github);
+      const logAfterTest = await stubLog(page);
+      assert(afterTest.token === 'github_pat_abc' && afterTest.repo === 'paper-library' && logAfterTest.includes('reconfigureSync'),
+        `연결 테스트 did not save: ${JSON.stringify(afterTest)} log=${logAfterTest}`);
+      assert(/저장했고 동기화를 시작합니다/.test(ok), `test message: ${ok}`);
       await page.fill('#set-sync input[aria-label="저장소 이름"]', 'public-repo');
       await page.locator('.btn', { hasText: '연결 테스트' }).click();
       await page.waitForSelector('#set-sync .btn-row + .test-result.is-error');

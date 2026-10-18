@@ -1,7 +1,7 @@
 // Shared UI primitives: toast, modal, confirm/prompt dialogs, popover, context menu, markdown, spinner.
 // Overlays (modal / popover / menu) share one layer stack so Esc and outside clicks close only the topmost one.
 import { STORAGE_KEYS, VENDOR } from '../core/config.js';
-import { clamp, el, safeStorage, uid } from '../core/util.js';
+import { clamp, el, escapeHtml, safeStorage, uid } from '../core/util.js';
 import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
@@ -490,7 +490,11 @@ function loadMarkdownLibs() {
   if (!markdownLibs) {
     markdownLibs = Promise.all([import(VENDOR.marked), import(VENDOR.dompurify)])
       .then(([markedMod, purifyMod]) => ({
-        marked: new markedMod.Marked({ gfm: true, breaks: true, async: false, extensions: [CJK_STRONG_EXTENSION] }),
+        marked: new markedMod.Marked({
+          gfm: true, breaks: true, async: false, extensions: [CJK_STRONG_EXTENSION],
+          // Raw HTML in model output is shown as text, never parsed (the prompts ask for Markdown only).
+          renderer: { html({ text }) { return escapeHtml(text); } },
+        }),
         // A private DOMPurify instance, so hooks/config elsewhere can never weaken ours.
         purify: purifyMod.default(window),
       }))
@@ -525,10 +529,15 @@ const CJK_STRONG_EXTENSION = {
   },
 };
 
+// An explicit allow-list: exactly what Markdown produces, and no class/id/style/data-*/aria-*/role — model output
+// (which a prompt-injected PDF can steer) must not be able to borrow the app's own classes, e.g. draw a
+// full-screen fake "modal-backdrop" dialog. Classes the app needs are added after sanitizing.
 const PURIFY_CONFIG = {
-  USE_PROFILES: { html: true },
-  FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select', 'option', 'iframe', 'object', 'embed', 'base', 'link', 'meta'],
-  FORBID_ATTR: ['style', 'id', 'name', 'srcset', 'action', 'formaction'],
+  ALLOWED_TAGS: ['a', 'p', 'br', 'hr', 'strong', 'b', 'em', 'i', 'del', 's', 'code', 'pre', 'blockquote', 'ul', 'ol', 'li',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'sup', 'sub', 'span'],
+  ALLOWED_ATTR: ['href', 'title', 'alt', 'src', 'colspan', 'rowspan', 'align', 'start', 'lang', 'dir'],
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
   ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|data:image\/(?:png|jpe?g|gif|webp);)/i,
   RETURN_DOM_FRAGMENT: true,
 };

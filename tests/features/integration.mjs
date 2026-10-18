@@ -127,6 +127,7 @@ await test('integration: quick translate + chat streaming through real tasks (mo
 
 await test('integration: summary + key-sentence underlines through real tasks', async () => {
   const { page, ctx, errors } = await open('&tab=summary');
+  await page.click('[data-action="generate"]'); // summaries are made on request only (no paid call on first view)
   await page.waitForFunction(() => document.querySelector('.pf-summary__body')?.textContent.trim().length > 20, null, { timeout: 10000 });
   const heads = await page.$$eval('.pf-summary__body h2, .pf-summary__body h3', (h) => h.map((x) => x.textContent));
   const chips = await page.$$eval('.pf-summary__body .pf-sid', (a) => a.length);

@@ -16,7 +16,7 @@ export class FeatureSession extends EventTarget {
   constructor(ctx) {
     super();
     this.ctx = ctx;
-    this.annotations = new AnnotationStore({ library: ctx.library, paperId: ctx.paper.id });
+    this.annotations = new AnnotationStore({ library: ctx.library, paperId: ctx.paper.id, doc: ctx.doc });
     void this.annotations.ready; // start loading right away
     /** Semantic Scholar lookups for reference cards, by reference index → Promise<paper|null>. */
     this.refLookups = new Map();

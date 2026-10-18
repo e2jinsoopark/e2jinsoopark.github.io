@@ -19,6 +19,8 @@ async function open(file) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const t0 = performance.now();
     const pdf = await loadPdf(bytes);
+    simulateRotation(pdf);
+    countCleanups(pdf);
     const t1 = performance.now();
     const doc = await extractDocument(pdf);
     const t2 = performance.now();
@@ -48,6 +50,41 @@ async function open(file) {
     window.__state = 'error';
     window.__error = err.message;
   }
+}
+
+/**
+ * `?rotate=1:90,2:180` makes those pages behave as if the PDF had /Rotate on them (pdf.js takes the default
+ * viewport rotation from page.rotate), so rotated-page handling can be tested with the normal fixtures.
+ */
+function simulateRotation(pdf) {
+  const spec = new URLSearchParams(location.search).get('rotate');
+  if (!spec) return;
+  const rot = new Map(spec.split(',').map((p) => p.split(':').map(Number)));
+  const orig = pdf.getPage.bind(pdf);
+  pdf.getPage = async (n) => {
+    const page = await orig(n);
+    if (rot.has(n) && !page.__rotated) {
+      const deg = (page.rotate + rot.get(n)) % 360;
+      Object.defineProperty(page, 'rotate', { get: () => deg, configurable: true });
+      page.__rotated = true;
+    }
+    return page;
+  };
+}
+
+/** window.__cleanups: page numbers whose pdf.js resources the viewer released (PDFPageProxy.cleanup()). */
+function countCleanups(pdf) {
+  window.__cleanups = [];
+  const orig = pdf.getPage.bind(pdf);
+  pdf.getPage = async (n) => {
+    const page = await orig(n);
+    if (!page.__counted) {
+      const cleanup = page.cleanup.bind(page);
+      page.cleanup = (...args) => { window.__cleanups.push(n); return cleanup(...args); };
+      page.__counted = true;
+    }
+    return page;
+  };
 }
 
 $('#file').addEventListener('change', (e) => {

@@ -4,7 +4,7 @@ import { el, uid } from '../core/util.js';
 import { toast } from '../ui/components.js';
 import { explain } from '../ai/tasks.js';
 import {
-  AI_NOT_READY_MESSAGE, anySignal, button, clip, copyText, drainStream, errorMessage, isAbortError,
+  anySignal, button, clip, copyText, drainStream, errorMessage, isAbortError, notifyAiNotReady,
   markdownStream, sentenceAt, wireSidLinks,
 } from './shared.js';
 import { floatingCard } from './ui-bits.js';
@@ -26,7 +26,7 @@ export function explainSelection(ctx, session, { text, start }) {
  */
 export function openExplanation(ctx, session, req) {
   if (!ctx.settings.isAiReady()) {
-    toast(AI_NOT_READY_MESSAGE, { kind: 'error' });
+    notifyAiNotReady();
     return null;
   }
   session.explainCard?.close();
@@ -34,7 +34,7 @@ export function openExplanation(ctx, session, req) {
   const cardLife = new AbortController();
   const card = floatingCard({
     title: 'AI 설명',
-    badge: req.kind === 'image' ? `그림·표${req.page ? ` · p.${req.page}` : ''}` : '선택한 문장',
+    badge: req.kind === 'image' ? `그림·표${req.page ? ` · ${req.page}쪽` : ''}` : '선택한 문장',
     className: 'pf-explain',
     onClose: () => {
       run?.abort();
@@ -173,7 +173,7 @@ export function installRegionExplain(ctx, session, { signal }) {
   });
 
   function setCapture(on) {
-    if (on && !ctx.settings.isAiReady()) { toast(AI_NOT_READY_MESSAGE, { kind: 'error' }); on = false; }
+    if (on && !ctx.settings.isAiReady()) { notifyAiNotReady(); on = false; }
     if (on && typeof viewer?.setRegionCapture !== 'function') on = false;
     capturing = on;
     viewer?.setRegionCapture?.(on);

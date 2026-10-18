@@ -1,7 +1,7 @@
 // Helpers shared by the reader features (panels, menus, cards). Pure DOM + data utilities;
 // anything that needs app state receives the FeatureContext explicitly.
 import { el } from '../core/util.js';
-import { renderMarkdown } from '../ui/components.js';
+import { renderMarkdown, toast } from '../ui/components.js';
 
 export const HIGHLIGHT_COLORS = Object.freeze([
   { id: 'yellow', label: '노랑' },
@@ -152,7 +152,7 @@ export function decorateMarkdown(root, doc) {
       continue;
     }
     a.classList.add('pf-sid');
-    a.textContent = `p.${s.page}`;
+    a.textContent = `${s.page}쪽`;
     a.title = clip(s.text, 180);
     a.setAttribute('role', 'button');
     a.setAttribute('tabindex', '0');
@@ -303,6 +303,20 @@ export async function copyText(text) {
   try { ok = document.execCommand('copy'); } catch { ok = false; }
   ta.remove();
   return ok;
+}
+
+let aiNotReadyToast = null;
+/**
+ * A missing key is a setup step, not an error: one warning toast (never stacked) with a way to 설정.
+ * Used by every AI action that cannot start yet.
+ */
+export function notifyAiNotReady(message = AI_NOT_READY_MESSAGE) {
+  if (aiNotReadyToast?.el?.isConnected) return aiNotReadyToast;
+  aiNotReadyToast = toast(message, {
+    kind: 'warning', timeout: 8000,
+    action: { label: '설정 열기', onClick: () => { location.hash = '#/settings'; } },
+  });
+  return aiNotReadyToast;
 }
 
 /** Box shown in place of an AI feature when no provider key is configured. */

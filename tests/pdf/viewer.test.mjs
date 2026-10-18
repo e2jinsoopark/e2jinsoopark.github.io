@@ -334,6 +334,97 @@ for (const name of fixtures) {
   await page.close();
 }
 
+// ---------------------------------------------------------------- regressions (review fixes)
+if (fixtures.includes('lu2025')) {
+  console.log('\n=== regressions (lu2025)');
+  const res = { checks: [] };
+  results.regressions = res;
+
+  // rotated-pages-textlayer-unrotated: pages with /Rotate 90/180 (simulated via the harness) get a text layer
+  // that covers the page box, and sentence geometry that matches the rotated text.
+  {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
+    await page.goto(`${BASE}&rotate=1:90,2:180`);
+    await page.setInputFiles('#file', `${FIXTURES}/lu2025.pdf`);
+    await page.waitForFunction(() => window.__state === 'ready' || window.__state === 'error', null, { timeout: 60000 });
+    await page.evaluate(() => window.__waitRendered([1, 2, 3]));
+    const geo = await page.evaluate(() => window.__viewer._pages.slice(0, 3).map((pv) => {
+      const pb = pv.el.getBoundingClientRect();
+      const tb = pv.textLayerEl.getBoundingClientRect();
+      const boxes = [...(pv.sentRects?.values() || [])].flat();
+      return {
+        n: pv.n, rotation: pv.textLayerEl.getAttribute('data-main-rotation'),
+        dw: Math.round(Math.abs(pb.width - tb.width)), dh: Math.round(Math.abs(pb.height - tb.height)),
+        dx: Math.round(Math.abs(pb.left - tb.left)), dy: Math.round(Math.abs(pb.top - tb.top)),
+        tall: boxes.filter((b) => b.h > b.w).length, wide: boxes.filter((b) => b.w > b.h).length,
+      };
+    }));
+    const align = await page.evaluate(() => window.__alignmentCheck({ count: 12, pages: [1] }));
+    await page.evaluate(() => { window.__viewer.scrollToPage(1); window.__outlineSentences([1]); });
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: `${OUT}/regression-rotated-p1.png` });
+    const covers = geo.every((g) => g.dw <= 3 && g.dh <= 3 && g.dx <= 3 && g.dy <= 3);
+    check(res, 'rotated pages: text layer covers the page box', covers && geo[0].rotation === '90' && geo[1].rotation === '180', geo);
+    check(res, 'rotated page 1 (90°): line boxes run vertically like the text', geo[0].tall > geo[0].wide * 3, geo[0]);
+    check(res, 'rotated page 1: sentence boxes hit the text-layer words/carets', align.wordMatchRate >= 0.9 && align.caretPointRate >= 0.9,
+      { wordMatchRate: align.wordMatchRate, caretPointRate: align.caretPointRate });
+    await page.close();
+  }
+
+  // no-page-cleanup-memory-growth / canvas-cap-by-count-not-pixels: reading through the paper at high zoom
+  // releases far pages' pdf.js resources and keeps the canvas backing store under the pixel budget.
+  {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    await page.goto(BASE);
+    await page.setInputFiles('#file', `${FIXTURES}/lu2025.pdf`);
+    await page.waitForFunction(() => window.__state === 'ready' || window.__state === 'error', null, { timeout: 60000 });
+    const mem = await page.evaluate(async () => {
+      const v = window.__viewer;
+      v.setZoom(3);
+      let maxPixels = 0;
+      for (const pv of v._pages) {
+        v.scrollToPage(pv.n);
+        await new Promise((r) => setTimeout(r, 350));
+        maxPixels = Math.max(maxPixels, v._pages.reduce((n, p) => n + (p.canvas ? p.canvas.width * p.canvas.height : 0), 0));
+      }
+      await new Promise((r) => setTimeout(r, 800));
+      return { cleanups: [...new Set(window.__cleanups)].length, liveCanvases: v._pages.filter((p) => p.canvas).length, maxMPx: +(maxPixels / 1e6).toFixed(1) };
+    });
+    check(res, 'far pages release pdf.js resources (page.cleanup) when evicted', mem.cleanups >= 3, mem);
+    check(res, 'live canvas pixels stay under the budget (≤ 48 MPx + one page)', mem.maxMPx <= 60, mem);
+    await page.close();
+  }
+
+  // render-failure-hot-loop: a page whose render keeps failing is retried with backoff, not in a tight loop.
+  {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    await page.goto(BASE);
+    await page.setInputFiles('#file', `${FIXTURES}/lu2025.pdf`);
+    await page.waitForFunction(() => window.__state === 'ready' || window.__state === 'error', null, { timeout: 60000 });
+    const loop = await page.evaluate(async () => {
+      const v = window.__viewer;
+      let attempts = 0;
+      const orig = v.pdf.getPage.bind(v.pdf);
+      v.pdf.getPage = async (n) => {
+        const p = await orig(n);
+        if (n === 5 && !p.__broken) {
+          p.__broken = true;
+          p.render = () => { attempts++; return { promise: Promise.reject(new Error('simulated render failure')), cancel() {} }; };
+        }
+        return p;
+      };
+      let ticks = 0;
+      const t = setInterval(() => ticks++, 10);
+      v.scrollToPage(5);
+      await new Promise((r) => setTimeout(r, 1500));
+      clearInterval(t);
+      return { attempts, ticks, placeholder: Boolean(v._pages[4].el.querySelector('.pdfv-page-error')) };
+    });
+    check(res, 'failing page render is not retried in a hot loop', loop.attempts <= 2 && loop.ticks >= 60 && loop.placeholder, loop);
+    await page.close();
+  }
+}
+
 fs.writeFileSync(`${OUT}/viewer-results.json`, JSON.stringify(results, null, 2));
 console.log(`\n${failed ? `${failed} check(s) FAILED` : 'all checks passed'} → ${OUT}/viewer-results.json`);
 await browser.close();

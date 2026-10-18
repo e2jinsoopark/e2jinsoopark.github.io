@@ -38,10 +38,11 @@ class HttpError extends Error {
 
 /** One repo's git objects and refs. */
 class Repo {
-  constructor(owner, name, { private: isPrivate = true, push = true } = {}) {
+  constructor(owner, name, { private: isPrivate = true, push = true, visibility = null } = {}) {
     this.owner = owner;
     this.name = name;
     this.private = isPrivate;
+    this.visibility = visibility; // e.g. 'internal' (enterprise): private === true but visible to the org
     this.push = push;
     this.objects = new Map(); // sha → { type, data?: Buffer, entries?: [...], tree?, parents?, message? }
     this.refs = new Map(); // 'heads/main' → commit sha
@@ -164,7 +165,8 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
         await p.release;
       }
     }
-    const fault = faults.find((f) => f.count > 0 && (!f.method || f.method === req.method) && f.re.test(path));
+    const fault = faults.find((f) => f.count > 0 && (!f.method || f.method === req.method) && f.re.test(path)
+      && body.length >= (f.minBodyBytes || 0));
     if (fault) {
       fault.count--;
       entry.status = fault.status;
@@ -246,7 +248,7 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
         status: 200,
         json: {
           name: repo.name, full_name: `${repo.owner}/${repo.name}`, private: repo.private,
-          visibility: repo.private ? 'private' : 'public', default_branch: 'main', size: repo.empty ? 0 : 1,
+          visibility: repo.visibility ?? (repo.private ? 'private' : 'public'), default_branch: 'main', size: repo.empty ? 0 : 1,
           permissions: { admin: repo.push && tok.write, maintain: repo.push && tok.write, push: repo.push, triage: true, pull: true },
         },
       };
@@ -438,8 +440,8 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
       return f ? api.repo(owner, name).get(f.sha, 'blob').data : null;
     },
     /** Make the next `count` matching requests fail. */
-    failNext({ method = null, path = /./, status = 500, headers = {}, body = null, count = 1 } = {}) {
-      faults.push({ method, re: path instanceof RegExp ? path : new RegExp(path), status, headers, body, count });
+    failNext({ method = null, path = /./, status = 500, headers = {}, body = null, count = 1, minBodyBytes = 0 } = {}) {
+      faults.push({ method, re: path instanceof RegExp ? path : new RegExp(path), status, headers, body, count, minBodyBytes });
     },
     /** Hold the next matching request until release() is called. hit resolves when it arrives. */
     pauseNext({ method, path }) {

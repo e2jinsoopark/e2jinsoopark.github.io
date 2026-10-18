@@ -177,11 +177,24 @@ async function loadPages(pdf, count, onPage) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, count) }, worker));
+  // A page pdf.js could not load gets the size of its nearest loaded neighbour (an empty page, no text).
+  pages.forEach((p, i) => {
+    if (!p.failed) return;
+    const near = pages.slice(0, i).reverse().find((q) => !q.failed) || pages.slice(i + 1).find((q) => !q.failed);
+    if (near) { p.width = near.width; p.height = near.height; }
+  });
   return pages;
 }
 
 async function loadPage(pdf, pageNumber) {
-  const page = await pdf.getPage(pageNumber);
+  let page;
+  try {
+    page = await pdf.getPage(pageNumber);
+  } catch (err) {
+    // One damaged page must not make the whole paper unopenable: it becomes an empty page.
+    console.warn('[pdf] getPage failed on page', pageNumber, err);
+    return { pageNumber, width: 612, height: 792, items: [], lines: [], blocks: [], failed: true };
+  }
   const vp = page.getViewport({ scale: 1 });
   let tc;
   try {

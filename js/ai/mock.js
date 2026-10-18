@@ -17,8 +17,12 @@ export const mockControl = {
   dropIdsOnce: new Set(),
   /** Translation ids left out of every response (simulates a permanently failing segment). */
   dropIdsAlways: new Set(),
-  /** Queue of failures for upcoming calls: { code, message? } → thrown as aiError before answering. */
+  /** Queue of failures for upcoming calls: { code, message?, partialText? } → thrown as aiError before answering. */
   failNext: [],
+  /** Optional (item) => ko | null for translation answers (null = leave the id out). Tests of the fidelity checks. */
+  translateWith: null,
+  /** Optional (request) => failure | null, checked on every call (content-dependent failures, e.g. one refused id). */
+  failWhen: null,
   /** Every request seen, in order: { kind, task, model, effort, maxTokens, system, messages, json, ids, items,
    *  concurrent, startedAt, endedAt } */
   requests: [],
@@ -29,6 +33,8 @@ export const mockControl = {
     this.dropIdsOnce = new Set();
     this.dropIdsAlways = new Set();
     this.failNext = [];
+    this.translateWith = null;
+    this.failWhen = null;
     this.requests = [];
     this.inFlight = 0;
     this.maxInFlight = 0;
@@ -48,7 +54,7 @@ export const mockProvider = {
     const req = begin('complete', opts);
     try {
       await delay(mockControl.latencyMs, opts.signal);
-      takeInjectedFailure();
+      takeInjectedFailure(req);
       const { text, json } = answer(opts, req);
       return { text, json, usage: fakeUsage(opts, text), stopReason: 'end_turn' };
     } finally {
@@ -60,7 +66,7 @@ export const mockProvider = {
     const req = begin('stream', opts);
     try {
       await delay(mockControl.latencyMs, opts.signal);
-      takeInjectedFailure();
+      takeInjectedFailure(req);
       const full = cannedAnswer(opts);
       for (const word of full.split(/(?<=\s)/)) {
         await delay(mockControl.streamDelayMs, opts.signal);
@@ -99,7 +105,7 @@ function answer(opts, req) {
   return { text: cannedAnswer(opts) };
 }
 
-/** '〔번역〕 ' + the first 60 chars of the source, minus the ids the test asked to drop. */
+/** '〔번역〕 ' + the source text, minus the ids the test asked to drop. */
 function translateItems(items) {
   const out = [];
   for (const it of items) {
@@ -108,13 +114,14 @@ function translateItems(items) {
       droppedOnce.add(it.sid);
       continue;
     }
-    out.push({ id: it.sid, ko: mockTranslate(it.text) });
+    const ko = mockControl.translateWith ? mockControl.translateWith(it) : mockTranslate(it.text);
+    if (ko != null) out.push({ id: it.sid, ko });
   }
   return out;
 }
 
 function mockTranslate(text) {
-  return `〔번역〕 ${String(text || '').slice(0, 60)}`;
+  return `〔번역〕 ${String(text || '')}`;
 }
 
 function cannedSummary(ids) {
@@ -209,8 +216,8 @@ function end(req) {
   req.endedAt = performance.now();
 }
 
-function takeInjectedFailure() {
-  const f = mockControl.failNext.shift();
+function takeInjectedFailure(req) {
+  const f = mockControl.failNext.shift() || mockControl.failWhen?.(req) || null;
   if (!f) return;
   const messages = {
     max_tokens: '응답이 최대 길이에 도달해 잘렸습니다(모의).',
@@ -219,7 +226,9 @@ function takeInjectedFailure() {
     auth: 'API 키가 올바르지 않습니다(모의).',
     network: '네트워크에 연결할 수 없습니다(모의).',
   };
-  throw aiError(f.message || messages[f.code] || '모의 오류가 발생했습니다.', { code: f.code || 'unknown' });
+  throw aiError(f.message || messages[f.code] || '모의 오류가 발생했습니다.', {
+    code: f.code || 'unknown', ...(f.partialText != null ? { partialText: f.partialText } : {}),
+  });
 }
 
 /** Sentence ids like p3-12 that appear in the system prompt or messages, in order of first appearance. */

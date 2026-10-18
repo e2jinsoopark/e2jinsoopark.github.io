@@ -16,8 +16,16 @@ const FIT_WIDTH_MAX = 1.6;
 const PAGE_PADDING = 16; // px around the page column (matches .pdfv-pages padding)
 const RENDER_CONCURRENCY = 2;
 const MAX_LIVE_CANVASES = 10; // pages keeping a rendered canvas
+// …and at most this many canvas pixels in total (≈ 4 bytes each): at HiDPI × high zoom ten canvases would
+// otherwise hold ~640 MB. Pages near the viewport are always kept.
+const MAX_LIVE_CANVAS_PIXELS = 48_000_000;
 const MAX_LIVE_TEXT_LAYERS = 24; // pages keeping text-layer DOM (geometry is cached separately)
 const MAX_CANVAS_PIXELS = 16_777_216;
+// A page whose render failed is retried after this long, at most RENDER_MAX_RETRIES times per zoom level.
+const RENDER_RETRY_MS = 5000;
+const RENDER_MAX_RETRIES = 2;
+// External link annotations covering more than this share of the page are ignored (a click-jacking trap).
+const MAX_LINK_PAGE_SHARE = 0.2;
 const CAPTURE_MAX_PX = 4096;
 const MARK_LAYERS = ['annotations', 'auto', 'search'];
 const MARK_COLORS = new Set(['yellow', 'green', 'blue', 'pink', 'red', 'purple', 'orange', 'gray']);
@@ -104,6 +112,8 @@ export class PdfViewer extends EventTarget {
     this._ro?.disconnect();
     this._rerender?.cancel();
     this._emitVisibleSentencesThrottled?.cancel();
+    clearTimeout(this._retryTimer);
+    this._dprQuery?.removeEventListener?.('change', this._onDprChange);
     for (const pv of this._pages) {
       pv.renderTask?.cancel();
       pv.textLayer?.cancel();
@@ -120,8 +130,12 @@ export class PdfViewer extends EventTarget {
 
   get zoom() { return this._zoom; }
 
-  /** @param {number|'fit-width'} scale */
-  setZoom(scale) {
+  /**
+   * @param {number|'fit-width'} scale
+   * @param {{ at?: { clientX: number, clientY: number } }} [opts] keep the content under this point in place
+   *   (pinch / Ctrl+wheel); by default the top of the viewport is kept.
+   */
+  setZoom(scale, { at = null } = {}) {
     if (scale === 'fit-width') {
       this._zoomMode = 'fit-width';
       scale = this._fitWidthScale();
@@ -130,10 +144,11 @@ export class PdfViewer extends EventTarget {
     }
     const z = clamp(Number(scale) || 1, ZOOM_MIN, ZOOM_MAX);
     if (Math.abs(z - this._zoom) < 1e-3) return;
-    const anchor = this._scrollAnchor();
+    const anchor = at ? this._pointAnchor(at) : this._scrollAnchor();
     this._zoom = z;
     this._applyZoomVar();
-    this._restoreAnchor(anchor);
+    if (at) this._restorePointAnchor(anchor);
+    else this._restoreAnchor(anchor);
     this._rerender();
     emit(this, 'zoomchange', { zoom: z, mode: this._zoomMode });
   }
@@ -260,11 +275,37 @@ export class PdfViewer extends EventTarget {
     if (!this._capture) this._cancelCaptureDrag();
   }
 
-  /** @param {Map<string,string>|null} map sid → Korean translation; null turns the overlay off */
+  /**
+   * @param {Map<string,string>|null} map sid → Korean translation; null turns the overlay off.
+   * Called again (same or new map) as translations arrive: only pages whose sentences changed are redrawn, and
+   * only near the viewport — the others are redrawn when they come near.
+   */
   setTranslationOverlay(map) {
-    this._overlay = map && map.size ? map : null;
-    this.container.classList.toggle('pdfv-overlay-on', Boolean(this._overlay));
-    for (const pv of this._pages) if (pv.sentRects) this._drawOverlay(pv);
+    const next = map && map.size ? map : null;
+    const wasOn = Boolean(this._overlay);
+    this._overlay = next;
+    this.container.classList.toggle('pdfv-overlay-on', Boolean(next));
+    for (const pv of this._pages) {
+      if (!pv.sentRects) continue;
+      if (!next) {
+        if (pv.overlayDrawn || wasOn) { pv.transLayer.replaceChildren(); pv.overlayDrawn = null; }
+        pv.overlayDirty = false;
+        continue;
+      }
+      if (!this._overlayChanged(pv)) continue;
+      if (pv.near) this._drawOverlay(pv);
+      else pv.overlayDirty = true;
+    }
+  }
+
+  /** Does the page show a different text for any of its sentences than the overlay map has now? */
+  _overlayChanged(pv) {
+    const drawn = pv.overlayDrawn;
+    if (!drawn) return true;
+    for (const sid of pv.sentRects.keys()) {
+      if ((this._overlay.get(sid) ?? null) !== (drawn.get(sid) ?? null)) return true;
+    }
+    return false;
   }
 
   /**
@@ -340,10 +381,15 @@ export class PdfViewer extends EventTarget {
     this._pagesEl.style.setProperty('--scale-factor', String(this._zoom));
   }
 
+  /**
+   * Fit the typical page, not the widest one: a single landscape table or A0 appendix page must not shrink the
+   * whole paper. Wider pages overflow horizontally (the page column scrolls).
+   */
   _fitWidthScale() {
-    const maxWidth = Math.max(...this.doc.pages.map((p) => p.width), 1);
+    const widths = this.doc.pages.map((p) => p.width).filter((w) => w > 0).sort((a, b) => a - b);
+    const typical = widths.length ? widths[(widths.length - 1) >> 1] : 1;
     const avail = (this.container.clientWidth || 800) - 2 * PAGE_PADDING;
-    return clamp(avail / maxWidth, ZOOM_MIN, FIT_WIDTH_MAX);
+    return clamp(avail / Math.max(typical, 1), ZOOM_MIN, FIT_WIDTH_MAX);
   }
 
   /** CSS px per PDF unit for a page box (exact, from layout). */
@@ -366,6 +412,24 @@ export class PdfViewer extends EventTarget {
     this.container.scrollLeft = xFrac * this._pagesEl.scrollWidth - this.container.clientWidth / 2;
   }
 
+  /** The page point (fractions of the page box) under a client point, plus that point's viewport offset. */
+  _pointAnchor({ clientX, clientY }) {
+    const box = this.container.getBoundingClientRect();
+    const vx = clientX - box.left;
+    const vy = clientY - box.top;
+    const pv = this._pageAt(this.container.scrollTop + vy) || this._pages[0];
+    return {
+      pv, vx, vy,
+      fy: (this.container.scrollTop + vy - pv.el.offsetTop) / Math.max(1, pv.el.offsetHeight),
+      fx: (this.container.scrollLeft + vx - pv.el.offsetLeft) / Math.max(1, pv.el.offsetWidth),
+    };
+  }
+
+  _restorePointAnchor({ pv, vx, vy, fx, fy }) {
+    this.container.scrollTop = pv.el.offsetTop + fy * pv.el.offsetHeight - vy;
+    this.container.scrollLeft = pv.el.offsetLeft + fx * pv.el.offsetWidth - vx;
+  }
+
   _pageAt(y) {
     const pages = this._pages;
     let lo = 0;
@@ -381,7 +445,11 @@ export class PdfViewer extends EventTarget {
   _onIntersect(entries) {
     for (const e of entries) {
       const pv = this._pages[Number(e.target.dataset.page) - 1];
-      if (pv) pv.near = e.isIntersecting;
+      if (!pv) continue;
+      pv.near = e.isIntersecting;
+      // Flung past: stop rendering a page nobody will see (its result would be thrown away anyway).
+      if (!pv.near && pv.renderTask) pv.renderTask.cancel();
+      if (pv.near && pv.overlayDirty && pv.sentRects) this._drawOverlay(pv);
     }
     this._pump();
   }
@@ -389,24 +457,54 @@ export class PdfViewer extends EventTarget {
   /** Start renders for near pages (closest to the current page first), then evict far ones. */
   _pump() {
     if (this._destroyed) return;
+    const dpr = window.devicePixelRatio || 1;
+    const now = Date.now();
     const wanted = this._pages
-      .filter((pv) => pv.near && !pv.rendering && pv.renderedScale !== this._zoom)
+      .filter((pv) => pv.near && !pv.rendering && (pv.renderedScale !== this._zoom || pv.renderedDpr !== dpr)
+        && !this._renderBlocked(pv, now))
       .sort((a, b) => Math.abs(a.n - this._currentPage) - Math.abs(b.n - this._currentPage));
     while (this._activeRenders < RENDER_CONCURRENCY && wanted.length) {
       const pv = wanted.shift();
       this._activeRenders++;
       this._renderPage(pv)
+        .then(() => { pv.failed = null; })
         .catch((err) => {
-          if (err?.name !== 'RenderingCancelledException' && err?.name !== 'AbortException') {
-            console.warn('[pdf] page render failed', pv.n, err);
-          }
+          if (err?.name === 'RenderingCancelledException' || err?.name === 'AbortException') return;
+          console.warn('[pdf] page render failed', pv.n, err);
+          this._markRenderFailed(pv);
         })
         .finally(() => {
           this._activeRenders--;
-          this._pump();
+          // Never re-pick synchronously: a page that fails at once would otherwise spin in a hot loop.
+          setTimeout(() => this._pump(), 0);
         });
     }
     this._evict();
+  }
+
+  /** A failed page is skipped until its backoff has passed (and for good after RENDER_MAX_RETRIES at this zoom). */
+  _renderBlocked(pv, now) {
+    const f = pv.failed;
+    if (!f || f.zoom !== this._zoom) return false;
+    return f.count > RENDER_MAX_RETRIES || now - f.at < RENDER_RETRY_MS;
+  }
+
+  _markRenderFailed(pv) {
+    const prev = pv.failed && pv.failed.zoom === this._zoom ? pv.failed : null;
+    pv.failed = { zoom: this._zoom, at: Date.now(), count: (prev?.count || 0) + 1 };
+    if (!pv.canvas && !pv.el.querySelector('.pdfv-page-error')) {
+      pv.el.append(el('div', { class: 'pdfv-page-error', role: 'note' }, '이 쪽을 표시하지 못했습니다.'));
+    }
+    if (pv.failed.count <= RENDER_MAX_RETRIES) {
+      clearTimeout(this._retryTimer);
+      this._retryTimer = setTimeout(() => this._pump(), RENDER_RETRY_MS + 50);
+    }
+  }
+
+  /** Free pdf.js's decoded images and operator lists of a page that left the viewport (deferred while rendering). */
+  _cleanupPage(pv) {
+    if (this._destroyed || pv.rendering) return;
+    this.pdf.getPage(pv.n).then((page) => page.cleanup()).catch(() => {});
   }
 
   async _renderPage(pv) {
@@ -420,7 +518,8 @@ export class PdfViewer extends EventTarget {
       const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       canvas.className = 'pdfv-canvas';
-      let outScale = window.devicePixelRatio || 1;
+      const dpr = window.devicePixelRatio || 1;
+      let outScale = dpr;
       const pixels = viewport.width * viewport.height * outScale * outScale;
       if (pixels > MAX_CANVAS_PIXELS) outScale = Math.sqrt(MAX_CANVAS_PIXELS / (viewport.width * viewport.height));
       canvas.width = Math.floor(viewport.width * outScale);
@@ -431,14 +530,27 @@ export class PdfViewer extends EventTarget {
         viewport,
         transform: outScale !== 1 ? [outScale, 0, 0, outScale, 0, 0] : null,
       });
-      await pv.renderTask.promise;
-      pv.renderTask = null;
+      try {
+        await pv.renderTask.promise;
+      } finally {
+        pv.renderTask = null;
+      }
       if (this._destroyed) return;
+      if (!pv.near) {
+        // Left the viewport while rendering: drop the result (and pdf.js's decoded resources) right away.
+        canvas.width = 0;
+        canvas.height = 0;
+        pv.rendering = false;
+        this._cleanupPage(pv);
+        return;
+      }
       // Swap in the new canvas only when complete: zooming never shows a blank page.
       if (pv.canvas) this._releaseCanvas(pv);
+      pv.el.querySelector('.pdfv-page-error')?.remove();
       pv.canvas = canvas;
       pv.el.prepend(canvas);
       pv.renderedScale = scale;
+      pv.renderedDpr = dpr;
 
       if (!pv.textLayer) await this._buildTextLayer(pv, page, viewport);
       else if (pv.textLayerScale !== scale) {
@@ -490,21 +602,29 @@ export class PdfViewer extends EventTarget {
     pv.canvas = null;
   }
 
-  /** Bound memory: drop canvases / text layers of pages far from the viewport. */
+  /**
+   * Bound memory: drop canvases / text layers of pages far from the viewport — beyond a count and beyond a total
+   * pixel budget — and let pdf.js free those pages' decoded images and operator lists (page.cleanup()), which
+   * zeroing the canvas alone does not.
+   */
   _evict() {
-    const live = this._pages.filter((pv) => pv.canvas && !pv.near && !pv.rendering);
-    const liveCount = this._pages.filter((pv) => pv.canvas).length;
-    if (liveCount > MAX_LIVE_CANVASES) {
-      live.sort((a, b) => Math.abs(b.n - this._currentPage) - Math.abs(a.n - this._currentPage));
-      for (const pv of live.slice(0, liveCount - MAX_LIVE_CANVASES)) {
-        this._releaseCanvas(pv);
-        pv.renderedScale = 0;
-      }
+    const farthestFirst = (a, b) => Math.abs(b.n - this._currentPage) - Math.abs(a.n - this._currentPage);
+    const pixels = (pv) => (pv.canvas ? pv.canvas.width * pv.canvas.height : 0);
+    const live = this._pages.filter((pv) => pv.canvas && !pv.near && !pv.rendering).sort(farthestFirst);
+    let liveCount = this._pages.filter((pv) => pv.canvas).length;
+    let livePixels = this._pages.reduce((n, pv) => n + pixels(pv), 0);
+    for (const pv of live) {
+      if (liveCount <= MAX_LIVE_CANVASES && livePixels <= MAX_LIVE_CANVAS_PIXELS) break;
+      livePixels -= pixels(pv);
+      liveCount--;
+      this._releaseCanvas(pv);
+      pv.renderedScale = 0;
+      this._cleanupPage(pv);
     }
     const withText = this._pages.filter((pv) => pv.textLayer && !pv.near && !pv.rendering);
     const textCount = this._pages.filter((pv) => pv.textLayer).length;
     if (textCount > MAX_LIVE_TEXT_LAYERS) {
-      withText.sort((a, b) => Math.abs(b.n - this._currentPage) - Math.abs(a.n - this._currentPage));
+      withText.sort(farthestFirst);
       for (const pv of withText.slice(0, textCount - MAX_LIVE_TEXT_LAYERS)) {
         pv.textLayer.cancel();
         pv.textLayer = null;
@@ -512,6 +632,7 @@ export class PdfViewer extends EventTarget {
         pv.spanIndex = null;
         this._releaseCanvas(pv);
         pv.renderedScale = 0;
+        this._cleanupPage(pv);
       }
     }
   }
@@ -558,12 +679,14 @@ export class PdfViewer extends EventTarget {
     const range = document.createRange();
     const byAxis = { h: [], v: [], other: [] };
     const spanBoxes = new Map();
+    // A page with /Rotate rotates the whole text layer: the visual direction is span rotation + page rotation.
+    const mainRotation = Number(pv.textLayerEl.getAttribute('data-main-rotation')) || 0;
     for (const { item, a, b } of runs) {
       const span = divs[item];
       const node = span?.firstChild;
       if (!node || node.nodeType !== Node.TEXT_NODE || !span.isConnected) continue;
       let sb = spanBoxes.get(item);
-      if (!sb) spanBoxes.set(item, (sb = { rect: span.getBoundingClientRect(), axis: spanAxis(span) }));
+      if (!sb) spanBoxes.set(item, (sb = { rect: span.getBoundingClientRect(), axis: spanAxis(span, mainRotation) }));
       const len = node.length;
       range.setStart(node, Math.min(a, len));
       range.setEnd(node, Math.min(b, len));
@@ -772,8 +895,16 @@ export class PdfViewer extends EventTarget {
   /** Paint Korean text over each paragraph box (layout-preserving translation view). */
   _drawOverlay(pv) {
     pv.transLayer.replaceChildren();
+    pv.overlayDirty = false;
+    pv.overlayDrawn = null;
     if (!this._overlay || !pv.sentRects) return;
-    for (const group of this._paragraphBoxes(pv)) {
+    // What this drawing shows per sentence, so later updates can tell whether the page changed.
+    const drawn = new Map();
+    for (const sid of pv.sentRects.keys()) drawn.set(sid, this._overlay.get(sid) ?? null);
+    pv.overlayDrawn = drawn;
+    pv.overlayGroups ??= this._paragraphBoxes(pv); // geometry only: computed once per page
+    const fits = [];
+    for (const group of pv.overlayGroups) {
       const parts = group.sentences.map((s) => ({ s, t: this._overlay.get(s.sid) }));
       // Regions holding only the tail of a sentence written on the previous page get a marker.
       const tailOnly = !parts.length && group.covered.some((s) => this._overlay.has(s.sid));
@@ -796,8 +927,9 @@ export class PdfViewer extends EventTarget {
         box.append(el('span', { class: 'pdfv-tsent pdfv-tsent--tail', dataset: { sid } }, '(앞 쪽에서 이어짐)'));
       }
       pv.transLayer.append(box);
-      fitText(box, group.lineHeight);
+      fits.push({ box, lineHeight: group.lineHeight });
     }
+    fitTexts(fits);
     this._syncOverlayHover();
   }
 
@@ -807,9 +939,15 @@ export class PdfViewer extends EventTarget {
    */
   _paragraphBoxes(pv) {
     const groups = [];
-    const pids = new Set([...pv.sentRects.keys()].map((sid) => this.doc.sentenceById.get(sid).pid));
-    for (const para of this.doc.paragraphs) {
-      if (!pids.has(para.pid) || !OVERLAY_KINDS.has(para.kind)) continue;
+    if (!this._paraIndex) {
+      this._paraIndex = new Map(this.doc.paragraphs.map((p, i) => [p.pid, i]));
+    }
+    const order = [...new Set([...pv.sentRects.keys()].map((sid) => this.doc.sentenceById.get(sid).pid))]
+      .filter((pid) => this._paraIndex.has(pid))
+      .sort((a, b) => this._paraIndex.get(a) - this._paraIndex.get(b));
+    for (const pid of order) {
+      const para = this.doc.paragraphs[this._paraIndex.get(pid)];
+      if (!OVERLAY_KINDS.has(para.kind)) continue;
       const lines = [];
       for (const sid of para.sids) for (const r of pv.sentRects.get(sid) || []) lines.push({ sid, ...r });
       if (!lines.length) continue;
@@ -874,14 +1012,22 @@ export class PdfViewer extends EventTarget {
     const onScroll = rafThrottle(() => {
       this._updateCurrentPage();
       this._emitVisibleSentencesThrottled();
+      // Content moved under a still pointer (wheel scroll): no pointermove fires, so hit-test again here.
+      const p = this._lastPointer;
+      if (p && !this._dragCapture) {
+        const target = document.elementFromPoint(p.clientX, p.clientY);
+        if (target && root.contains(target)) this._onPointerMove({ clientX: p.clientX, clientY: p.clientY, target });
+        else this._setHoverFromPointer(null, null);
+      }
     });
     root.addEventListener('scroll', onScroll, { ...opts, passive: true });
     const onMove = rafThrottle((e) => this._onPointerMove(e));
     root.addEventListener('pointermove', (e) => {
+      this._lastPointer = { clientX: e.clientX, clientY: e.clientY };
       if (this._dragCapture) this._updateCaptureDrag(e);
       else onMove(e);
     }, opts);
-    root.addEventListener('pointerleave', () => this._setHoverFromPointer(null, null), opts);
+    root.addEventListener('pointerleave', () => { this._lastPointer = null; this._setHoverFromPointer(null, null); }, opts);
     root.addEventListener('pointerdown', (e) => this._onPointerDown(e), opts);
     root.addEventListener('pointerup', (e) => this._onPointerUp(e), opts);
     root.addEventListener('click', (e) => this._onClick(e), opts);
@@ -894,12 +1040,32 @@ export class PdfViewer extends EventTarget {
     const onDocSelection = debounce(() => this._emitSelection(), 250);
     document.addEventListener('selectionchange', onDocSelection, opts);
     this._bindSelectionHelper(opts);
+    let lastWidth = root.clientWidth;
     this._ro = new ResizeObserver(debounce(() => {
-      if (this._zoomMode === 'fit-width' && !this._destroyed) this.setZoom('fit-width');
+      if (this._zoomMode !== 'fit-width' || this._destroyed) return;
+      // Ignore jitter of a few px (a scrollbar appearing in a browser without scrollbar-gutter support):
+      // re-fitting on it can make the scrollbar come and go forever.
+      const w = root.clientWidth;
+      if (Math.abs(w - lastWidth) < 20) return;
+      lastWidth = w;
+      this.setZoom('fit-width');
     }, 120));
     this._ro.observe(root);
     this._rerender = debounce(() => this._pump(), 150);
     this._emitVisibleSentencesThrottled = debounce(() => this._emitVisibleSentences(), 120);
+    // Moving the window to another monitor or browser zoom changes devicePixelRatio: re-render sharply.
+    this._onDprChange = () => {
+      this._dprQuery?.removeEventListener('change', this._onDprChange);
+      this._watchDpr();
+      this._rerender();
+    };
+    this._watchDpr();
+  }
+
+  _watchDpr() {
+    if (this._destroyed || typeof window.matchMedia !== 'function') return;
+    this._dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    this._dprQuery.addEventListener('change', this._onDprChange);
   }
 
   /**
@@ -1060,13 +1226,16 @@ export class PdfViewer extends EventTarget {
     const hit = this._pointToPage(e.clientX, e.clientY, e.target);
     if (!hit) return;
     const link = this._hitLink(hit.pv, hit.x, hit.y);
-    if (link) {
+    if (link?.kind === 'internal') {
       e.preventDefault();
-      if (link.kind === 'internal') {
-        this.scrollToPdfPoint(link.target.page, link.target.x, link.target.y).catch((err) => console.warn('[pdf] link jump failed', err));
-      } else {
-        window.open(link.url, '_blank', 'noopener,noreferrer');
-      }
+      this.scrollToPdfPoint(link.target.page, link.target.x, link.target.y).catch((err) => console.warn('[pdf] link jump failed', err));
+      return;
+    }
+    // External links never open on a plain click (a PDF could cover the text with one to a phishing page):
+    // Ctrl/⌘-click opens it, otherwise the hover card's ‘새 탭에서 열기’ does, and the click selects the sentence.
+    if (link?.kind === 'external' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      window.open(link.url, '_blank', 'noopener,noreferrer');
       return;
     }
     const markEl = this._markAt(e.clientX, e.clientY);
@@ -1091,14 +1260,25 @@ export class PdfViewer extends EventTarget {
     return null;
   }
 
+  /**
+   * Ctrl/⌘ + wheel and trackpad pinch (which arrives as ctrl+wheel with small deltas): zoom in proportion to the
+   * accumulated delta, once per frame, keeping the content under the pointer in place.
+   */
   _onWheel(e) {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    const now = performance.now();
-    if (now - (this._lastWheelZoom || 0) < 60) return;
-    this._lastWheelZoom = now;
-    if (e.deltaY < 0) this.zoomIn();
-    else if (e.deltaY > 0) this.zoomOut();
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    this._wheelAccum = (this._wheelAccum || 0) + dy;
+    this._wheelAt = { clientX: e.clientX, clientY: e.clientY };
+    if (this._wheelFrame) return;
+    this._wheelFrame = requestAnimationFrame(() => {
+      this._wheelFrame = null;
+      if (this._destroyed) return;
+      const d = clamp(this._wheelAccum, -400, 400);
+      this._wheelAccum = 0;
+      // One mouse-wheel notch (≈100) ≈ the 15 % button step; a gentle pinch moves a few percent.
+      this.setZoom(this._zoom * Math.exp(-d * 0.0014), { at: this._wheelAt });
+    });
   }
 
   _onCopy(e) {
@@ -1226,8 +1406,11 @@ export class PdfViewer extends EventTarget {
       const rect = { x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) };
       if (rect.w < 1 || rect.h < 1) continue;
       const url = a.url || a.unsafeUrl || '';
-      if (url && /^(https?:|mailto:)/i.test(url)) links.push({ kind: 'external', rect, url });
-      else if (a.dest) links.push({ kind: 'internal', rect, dest: a.dest, target: null });
+      if (url && /^(https?:|mailto:)/i.test(url)) {
+        // A real link covers a word or a line, not a big part of the page.
+        if (rect.w * rect.h > MAX_LINK_PAGE_SHARE * vp.width * vp.height) continue;
+        links.push({ kind: 'external', rect, url });
+      } else if (a.dest) links.push({ kind: 'internal', rect, dest: a.dest, target: null });
     }
     await Promise.all(links.filter((l) => l.kind === 'internal').map(async (l) => {
       l.target = await this._resolveDest(l.dest).catch(() => null);
@@ -1358,9 +1541,12 @@ export class PdfViewer extends EventTarget {
   }
 }
 
-/** Text direction of a pdf.js text-layer span: 'h' (upright/upside down), 'v' (±90°) or 'other'. */
-function spanAxis(span) {
-  const rotate = parseFloat(span.style.getPropertyValue('--rotate')) || 0;
+/**
+ * On-screen text direction of a pdf.js text-layer span: 'h' (upright/upside down), 'v' (±90°) or 'other'.
+ * `mainRotation` is the page's /Rotate, applied to the whole layer.
+ */
+function spanAxis(span, mainRotation = 0) {
+  const rotate = (parseFloat(span.style.getPropertyValue('--rotate')) || 0) + mainRotation;
   const a = ((rotate % 180) + 180) % 180;
   if (a < 1 || a > 179) return 'h';
   if (Math.abs(a - 90) < 1) return 'v';
@@ -1398,21 +1584,23 @@ function mergeLineBoxes(boxes) {
 }
 
 /**
- * Shrink a translation box's font until the text fits (binary search). The size is expressed in
- * PDF units through --total-scale-factor, so the fit survives zooming without re-measuring.
+ * Shrink each translation box's font until its text fits (binary search). Sizes are expressed in PDF units
+ * through --total-scale-factor, so the fit survives zooming without re-measuring.
  */
-function fitText(box, lineHeightPdf) {
-  const apply = (size) => { box.style.fontSize = `calc(var(--total-scale-factor) * ${size.toFixed(2)}px)`; };
-  const fits = () => box.scrollHeight <= box.clientHeight + 1;
-  let hi = Math.max(4, lineHeightPdf * 0.82);
-  apply(hi);
-  if (box.clientHeight === 0 || fits()) return;
-  let lo = 2.5;
-  for (let k = 0; k < 7; k++) {
-    const mid = (lo + hi) / 2;
-    apply(mid);
-    if (fits()) lo = mid;
-    else hi = mid;
+function fitTexts(items) {
+  const apply = (it, size) => { it.box.style.fontSize = `calc(var(--total-scale-factor) * ${size.toFixed(2)}px)`; };
+  const fits = (it) => it.box.scrollHeight <= it.box.clientHeight + 1;
+  // All boxes of a page are searched together: every step writes all sizes, then reads all heights, so a page
+  // costs ~8 layouts instead of ~8 per box.
+  for (const it of items) {
+    it.hi = Math.max(4, it.lineHeight * 0.82);
+    it.lo = 2.5;
+    apply(it, it.hi);
   }
-  apply(lo);
+  let pending = items.filter((it) => it.box.clientHeight > 0 && !fits(it));
+  for (let k = 0; k < 7 && pending.length; k++) {
+    for (const it of pending) { it.mid = (it.lo + it.hi) / 2; apply(it, it.mid); }
+    for (const it of pending) { if (fits(it)) it.lo = it.mid; else it.hi = it.mid; }
+  }
+  for (const it of pending) apply(it, it.lo);
 }
