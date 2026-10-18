@@ -437,7 +437,7 @@ class LibraryView {
         step(1, ai, 'AI 번역 연결',
           mock ? '테스트 모드(모의 AI)로 실행 중입니다. 실제 번역에는 설정에서 초대 코드나 API 키가 필요합니다.'
             : ai ? (relay ? '초대 코드로 연결되어 있습니다. API 키 없이 번역·요약·채팅을 쓸 수 있습니다.' : 'AI API 키가 설정되어 있습니다.')
-              : '초대받았다면 받은 링크를 열거나 설정에 초대 코드를 넣으세요. 직접 쓰는 Claude 또는 Gemini API 키도 됩니다(이 브라우저에만 저장).',
+              : '초대받았다면 받은 링크를 열거나 설정에 초대 코드를 넣으세요(키 없이 쓰기). 내 Claude·GPT·Gemini API 키도 쓸 수 있습니다(이 브라우저에만 저장).',
           button(ai && !mock ? '변경' : '설정 열기', { kind: ai && !mock ? 'ghost' : 'subtle', icon: 'key', size: 'sm', onClick: () => this.#navigate('#/settings/ai') })),
         step(2, sync, '(선택) GitHub 동기화',
           sync ? 'GitHub 비공개 저장소와 동기화하도록 설정되어 있습니다.' : '비공개 저장소 하나를 연결하면 여러 기기에서 같은 라이브러리·번역·메모를 사용할 수 있습니다.',

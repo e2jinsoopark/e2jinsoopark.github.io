@@ -1,14 +1,14 @@
 // Run every AI-module suite: node tests/ai/run-all.mjs
-// Each suite starts (or reuses) the static server on port 8103 and writes <suite>.results.json + <suite>.log
-// to C:/Users/dindoo/Projects/pr-tools/out/ai/. No paid API is called: Claude/Gemini are Playwright-routed,
-// everything else uses the offline mock provider (?mock=1).
+// Each suite starts (or reuses) the static server on port 8103 (openai: its own on 8171) and writes
+// <suite>.results.json + <suite>.log to C:/Users/dindoo/Projects/pr-tools/out/ai/. No paid API is called:
+// Claude/GPT/Gemini are Playwright-routed, everything else uses the offline mock provider (?mock=1).
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const suites = ['unit', 'claude', 'gemini', 'translator', 'realpdf'];
+const suites = ['unit', 'claude', 'openai', 'gemini', 'translator', 'realpdf'];
 const summary = [];
 for (const s of suites) {
   const res = spawnSync(process.execPath, [path.join(here, `${s}.test.mjs`)], { stdio: 'inherit' });

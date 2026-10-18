@@ -14,8 +14,8 @@ const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/shell';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const H = `${BASE}/tests/shell/harness.html`;
 // Narrowed in the review fixes: exact jsDelivr paths (Anthropic SDK 0.131.0 + its 3 pinned deps, Pretendard), no jsDelivr in connect-src.
-const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/ https://cdn.jsdelivr.net/npm/standardwebhooks@1.1.1/ https://cdn.jsdelivr.net/npm/@stablelib/base64@1.0.1/ https://cdn.jsdelivr.net/npm/fast-sha256@1.3.0/; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/; font-src 'self' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/ data:; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://generativelanguage.googleapis.com https://api.github.com https://api.semanticscholar.org https://paper-relay.e2jinsoopark.workers.dev; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
-const BLOCKED = /api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.github\.com|api\.semanticscholar\.org/;
+const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/ https://cdn.jsdelivr.net/npm/standardwebhooks@1.1.1/ https://cdn.jsdelivr.net/npm/@stablelib/base64@1.0.1/ https://cdn.jsdelivr.net/npm/fast-sha256@1.3.0/; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/; font-src 'self' https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/ data:; img-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.github.com https://api.semanticscholar.org https://paper-relay.e2jinsoopark.workers.dev; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'";
+const BLOCKED = /api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|api\.github\.com|api\.semanticscholar\.org/;
 
 mkdirSync(OUT, { recursive: true });
 const results = [];
@@ -553,9 +553,12 @@ try {
       await page.waitForSelector('#set-ai .test-result.is-ok >> text=모델 3개');
       const opts = await page.locator('#set-ai select').first().locator('option').allInnerTexts();
       const s = await page.evaluate(() => JSON.parse(localStorage.getItem('pr.settings.v1')));
-      assert(s.provider === 'gemini' && s.gemini.apiKey === 'AIza-test' && s.gemini.translateModel === 'gemini-3.5-flash', JSON.stringify(s.gemini));
+      // Automatic model choice: nothing chosen by the user (''), the pick from the live list in autoModels.
+      assert(s.provider === 'gemini' && s.gemini.apiKey === 'AIza-test' && s.gemini.translateModel === ''
+        && s.gemini.autoModels?.translate === 'gemini-3.5-flash' && s.gemini.autoModels?.assist === 'gemini-3.5-flash', JSON.stringify(s.gemini));
+      assert(/^자동 선택 — Gemini 3\.5 Flash$/.test(opts[0]) && opts.length === 4, `options: ${opts.join(' | ')}`);
       await page.locator('.radio-card', { hasText: 'Claude' }).click();
-      return `ok → "${ok.trim()}"; bad → "${bad.trim()}"; Gemini models [${opts.join(', ')}], defaults translate=${s.gemini.translateModel}, assist=${s.gemini.assistModel}`;
+      return `ok → "${ok.trim()}"; bad → "${bad.trim()}"; Gemini models [${opts.join(', ')}], auto translate=${s.gemini.autoModels.translate}, assist=${s.gemini.autoModels.assist}`;
     });
 
     await test('settings: GitHub 연결 테스트 (private/public/readonly) + save → reconfigureSync', async () => {

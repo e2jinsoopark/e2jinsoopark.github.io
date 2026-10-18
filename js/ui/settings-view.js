@@ -1,7 +1,8 @@
 // Settings view (#/settings): AI provider & keys (incl. the invite-code relay), GitHub sync, translation options,
 // display, usage, secrets, invite-code admin. Also the invite join screen (#/join/<CODE>, mountJoinView).
 // The relay helpers (js/ai/relay.js) arrive as deps.relay with the dynamically loaded AI modules.
-import { APP_VERSION, CLAUDE_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
+import { APP_VERSION, CLAUDE_MODELS, DEFAULT_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
+import { bus } from '../core/bus.js';
 import { settings } from '../core/settings.js';
 import { debounce, el, formatUsd, safeStorage } from '../core/util.js';
 import { button, confirmDialog, iconButton, messageScreen, modal, progressBar, spinner, toast } from './components.js';
@@ -15,6 +16,42 @@ const SECTIONS = [
   { id: 'usage', label: '사용량', icon: 'coins' },
   { id: 'data', label: '보안·데이터', icon: 'shield' },
 ];
+
+const RELAY_CARD_TITLE = '키 없이 쓰기 (초대 코드)';
+// After a key is saved (blur/Enter), its model list is read unless 테스트 is pressed within this delay.
+const KEY_LIST_DELAY_MS = 400;
+/** Own-key providers, in card order. */
+const KEY_PROVIDER_IDS = ['claude', 'openai', 'gemini'];
+const bold = (text) => el('b', {}, text);
+const mono = (text) => el('code', {}, text);
+const KEY_PROVIDERS = {
+  claude: {
+    card: 'Claude', title: 'Claude API 키', placeholder: 'sk-ant-…', priced: true,
+    desc: '논문 번역 품질이 안정적입니다. 예상 비용이 이 앱의 사용량에 집계됩니다.',
+    autoHint: '‘자동 선택’은 키로 쓸 수 있는 모델 중 번역에 최신 Haiku, 요약·채팅에 최신 Sonnet을 고릅니다(키를 저장하면 목록을 불러옵니다).',
+    keyUrl: 'https://platform.claude.com/settings/keys', keyLink: 'Claude Console → API Keys',
+    howto: (link) => ['키 만들기: ', link, '에 로그인해 ', bold('Create Key'), '로 키를 만들고, ', mono('sk-ant-'), '로 시작하는 키를 위 칸에 붙여 넣은 뒤 ',
+      bold('테스트'), '를 누르세요. 사용료는 Claude Console 조직의 크레딧으로 청구되며 ', bold('Limits'), '에서 월 한도를 정해 둘 수 있습니다. ',
+      bold('Claude Max'), ' 요금제라면 claude.ai에서 요금제에 포함된 API 크레딧을 Console 조직에 연결하고, 그 조직에서 키를 만드세요(Pro 요금제는 해당되지 않습니다).'],
+  },
+  openai: {
+    card: 'GPT (OpenAI)', title: 'OpenAI API 키', placeholder: 'sk-…', priced: false,
+    desc: '내 OpenAI API 키로 GPT를 씁니다. 모델은 키로 불러와 자동으로 고릅니다.',
+    autoHint: '‘자동 선택’은 키를 저장하면 그 키로 쓸 수 있는 GPT 모델 중 번역에 빠르고 저렴한 모델, 요약·채팅에 표준 모델을 고릅니다.',
+    keyUrl: 'https://platform.openai.com/api-keys', keyLink: 'OpenAI Platform → API keys',
+    howto: (link) => ['키 만들기: ', link, '에 로그인해 ', bold('Create new secret key'), '로 키를 만들고, ', mono('sk-'), '로 시작하는 키를 위 칸에 붙여 넣은 뒤 ',
+      bold('테스트'), '를 누르세요. API 사용료는 ChatGPT 구독(Plus·Pro)과 별개로, OpenAI Platform의 ', bold('Billing'), '에 충전한 크레딧에서 나갑니다.'],
+  },
+  gemini: {
+    card: 'Gemini', title: 'Gemini API 키', placeholder: 'AIza…', priced: false,
+    desc: 'Google AI Studio에서 만든 키를 씁니다. 무료 등급이 있습니다.',
+    autoHint: '‘자동 선택’은 키를 저장하면 그 키로 쓸 수 있는 최신 Flash 모델을 고릅니다(무료 등급에서도 쓸 수 있는 모델).',
+    keyUrl: 'https://aistudio.google.com/apikey', keyLink: 'Google AI Studio → API keys',
+    privacy: '무료 등급에서는 입력 내용(번역할 문장, 질문)이 Google 제품 개선에 쓰일 수 있습니다. 미출판 원고·민감 자료에는 Claude·GPT 또는 Gemini 유료 등급을 쓰세요.',
+    howto: (link) => ['키 만들기: ', link, '에 Google 계정으로 로그인해 ', bold('Create API key'), '로 키를 만들고, 위 칸에 붙여 넣은 뒤 ',
+      bold('테스트'), '를 누르세요. 모델은 키로 불러온 목록에서 자동으로 고릅니다.'],
+  },
+};
 
 /**
  * @param {HTMLElement} container
@@ -34,9 +71,10 @@ class SettingsView {
   #root;
   #els = {};
   #cleanup = [];
-  #geminiModels = null;
+  #models = {}; // provider id → the key's live model list (newest first), while the view is open
   #mePromise = null; // GET /relay/me shared by the AI and usage sections while the view is open
   #renderUsage = () => {};
+  #shownProvider = null; // the provider the AI section shows (another tab may switch it)
 
   constructor(container, deps, navigate, backHref) {
     this.#deps = deps;
@@ -52,6 +90,13 @@ class SettingsView {
       lib.addEventListener('syncstatus', onStatus);
       this.#cleanup.push(() => lib.removeEventListener('syncstatus', onStatus));
     }
+    // Another tab picked another provider: show it here too (a stale checked card could not be clicked back).
+    this.#cleanup.push(bus.on('settings:change', ({ external } = {}) => {
+      if (!external || settings.get().provider === this.#shownProvider) return;
+      this.#renderProviderCards();
+      this.#renderProviderDetail();
+      this.#renderUsage();
+    }));
   }
 
   destroy() {
@@ -111,74 +156,223 @@ class SettingsView {
   // ------------------------------------------------------------------- AI
 
   #aiSection() {
-    const s = settings.get();
     const body = el('div', {});
-    if (s.provider === 'mock') {
+    if (settings.get().provider === 'mock') {
       body.append(note('info', '테스트 모드(주소에 ?mock=1)로 실행 중입니다. 실제 AI 대신 모의 응답이 사용되며 비용이 들지 않습니다.'));
     }
-    const cards = el('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'AI 제공자' },
-      this.#providerCard('relay', '키 없이 쓰기 (초대 코드)', '초대받았다면 API 키 없이 초대 코드만으로 번역·요약·채팅을 쓸 수 있습니다. 하루 사용 한도가 있습니다.'),
-      this.#providerCard('claude', 'Claude (Anthropic)', '논문 번역 품질이 안정적입니다. 번역은 빠르고 저렴한 Haiku를 기본으로 사용합니다.'),
-      this.#providerCard('gemini', 'Gemini (Google)', 'Google AI Studio에서 발급한 키를 사용합니다. 모델 목록은 키로 불러옵니다.'));
+    this.#els.providerCards = el('div', { class: 'provider-picker-host' });
     this.#els.providerDetail = el('div', {});
-    body.append(cards, this.#els.providerDetail);
+    body.append(this.#els.providerCards, this.#els.providerDetail);
+    this.#renderProviderCards();
     this.#renderProviderDetail();
-    return section('ai', 'AI 번역', 'bot', '번역·요약·채팅에 사용할 AI를 고릅니다. 초대 코드가 있으면 키 없이 쓸 수 있고, 직접 쓰는 API 키는 이 브라우저에만 저장되어 해당 AI 서비스로만 전송됩니다.', body);
+    return section('ai', 'AI 번역', 'bot', '번역·요약·채팅에 쓸 AI를 고릅니다. 초대 코드가 있으면 키 없이 쓸 수 있고, 내 Claude·GPT·Gemini API 키로 직접 연결할 수도 있습니다. API 키는 이 브라우저에만 저장되어 해당 AI 서비스로만 전송됩니다.', body);
   }
 
-  #providerCard(id, title, desc) {
+  /** Someone who registered an invite code (join link or typed code): their own API keys are the alternative. */
+  #isInvitee() {
+    return Boolean(String(settings.get().relay?.code || '').trim());
+  }
+
+  /**
+   * Provider cards: 키 없이 쓰기 (초대 코드) · Claude · GPT (OpenAI) · Gemini. For an invitee the invite card comes
+   * first with their name and today's usage, and the own-key providers sit under '내 API 키 쓰기'; switching keeps the
+   * invite code saved, so the invite card switches back with one click.
+   */
+  #renderProviderCards() {
+    const host = this.#els.providerCards;
+    if (!host) return;
+    const s = settings.get();
+    const own = KEY_PROVIDER_IDS.map((id) => this.#providerCard(id, KEY_PROVIDERS[id].card, KEY_PROVIDERS[id].desc,
+      String(s[id]?.apiKey || '').trim() ? '키 저장됨' : ''));
+    this.#els.relayCardStatus = null;
+    if (!this.#isInvitee()) {
+      host.replaceChildren(el('div', { class: 'radio-cards provider-cards is-all', role: 'radiogroup', 'aria-label': 'AI 제공자' },
+        this.#providerCard('relay', RELAY_CARD_TITLE, '초대받았다면 API 키 없이 초대 코드만으로 번역·요약·채팅을 쓸 수 있습니다. 하루 사용 한도가 있습니다.'),
+        ...own));
+      return;
+    }
+    const usingRelay = s.provider === 'relay';
+    this.#els.relayCardStatus = el('span', { class: 'radio-desc' }, this.#relayCardText(null));
+    host.replaceChildren(el('div', { class: 'provider-picker is-invitee', role: 'radiogroup', 'aria-label': 'AI 제공자' },
+      el('div', { class: 'radio-cards' }, this.#providerCard('relay', RELAY_CARD_TITLE, this.#els.relayCardStatus, '초대 코드 저장됨')),
+      el('div', { class: 'own-keys' },
+        el('div', { class: 'own-keys-head' },
+          el('span', { class: 'own-keys-title' }, icon('key', { size: 15 }), '내 API 키 쓰기'),
+          el('span', { class: 'field-hint' }, usingRelay
+            ? '내 Claude·GPT·Gemini API 키가 있으면 직접 연결할 수도 있습니다. 바꿔도 초대 코드는 지워지지 않아, 위 카드를 누르면 언제든 한 번에 돌아옵니다.'
+            : '지금은 내 API 키로 연결되어 있습니다. 초대 코드는 그대로 저장되어 있어, 위 카드를 누르면 바로 초대 코드로 돌아갑니다.')),
+        el('div', { class: 'radio-cards provider-cards' }, ...own))));
+    // Not in a ?mock=1 session: tests and demos never reach a real server by themselves.
+    if (this.#deps.relay && settings.relayUrl() && !settings.isMockSession) this.#loadMe().then((me) => this.#updateRelayCard(me), () => {});
+  }
+
+  /** '홍길동님 · 오늘 $0.03 / $0.50', plus how to come back while another provider is selected. */
+  #relayCardText(me) {
+    const name = me ? me.name : settings.get().relay?.name;
+    const parts = [name ? `${name}님` : '초대 코드 등록됨'];
+    if (me) parts.push(`오늘 ${formatUsd(me.todayUsd)} / ${formatUsd(me.dailyLimitUsd)}`);
+    if (settings.get().provider !== 'relay') parts.push('누르면 초대 코드로 돌아갑니다');
+    return parts.join(' · ');
+  }
+
+  #updateRelayCard(me) {
+    const node = this.#els.relayCardStatus;
+    if (node?.isConnected) node.textContent = this.#relayCardText(me);
+  }
+
+  #providerCard(id, title, desc, badge = '') {
     const current = settings.get().provider;
     // In test mode (?mock=1) the provider is forced for this session, so the choice is locked.
     const input = el('input', { type: 'radio', name: 'provider', value: id, checked: current === id, disabled: current === 'mock' });
     input.addEventListener('change', () => {
       if (!input.checked) return;
+      const hadFocus = document.activeElement === input;
       settings.set({ provider: id });
+      this.#renderProviderCards();
       this.#renderProviderDetail();
       this.#renderUsage();
+      if (hadFocus) this.#els.providerCards.querySelector(`input[name="provider"][value="${id}"]`)?.focus();
     });
-    return el('label', { class: 'radio-card' }, input, el('span', { class: 'radio-title' }, title), el('span', { class: 'radio-desc' }, desc));
+    return el('label', { class: 'radio-card', dataset: { provider: id } }, input,
+      el('span', { class: 'radio-title' }, title),
+      typeof desc === 'string' ? el('span', { class: 'radio-desc' }, desc) : desc,
+      badge ? el('span', { class: 'badge is-ok radio-badge' }, badge) : null);
   }
 
   #renderProviderDetail() {
     const p = settings.get().provider;
+    this.#shownProvider = p;
     const host = this.#els.providerDetail;
-    if (p === 'gemini') host.replaceChildren(this.#geminiDetail());
-    else if (p === 'claude') host.replaceChildren(this.#claudeDetail());
-    else if (p === 'relay') host.replaceChildren(this.#relayDetail());
-    else host.replaceChildren(el('p', { class: 'field-hint', style: { marginTop: '14px' } }, '테스트 모드에서는 제공자를 바꿀 수 없습니다. 주소에서 ?mock=1을 빼면 저장된 제공자가 사용됩니다.'), this.#claudeDetail());
+    if (p === 'relay') host.replaceChildren(this.#relayDetail());
+    else if (KEY_PROVIDERS[p]) host.replaceChildren(this.#keyDetail(p));
+    else host.replaceChildren(el('p', { class: 'field-hint', style: { marginTop: '14px' } }, '테스트 모드에서는 제공자를 바꿀 수 없습니다. 주소에서 ?mock=1을 빼면 저장된 제공자가 사용됩니다.'), this.#keyDetail('claude'));
   }
 
-  #claudeDetail() {
-    const c = settings.get().claude;
-    const priceHint = el('p', { class: 'price-hint' });
-    const updateHint = () => { priceHint.textContent = priceText(settings.get().claude.translateModel, settings.get().claude.assistModel); };
-    const modelSelect = (key, label) => {
-      const select = el('select', { class: 'select', 'aria-label': label },
-        CLAUDE_MODELS.map((m) => el('option', { value: m.id, selected: c[key] === m.id }, m.label)));
-      if (c[key] && !CLAUDE_MODELS.some((m) => m.id === c[key])) select.prepend(el('option', { value: c[key], selected: true }, c[key]));
-      select.addEventListener('change', () => { settings.set({ claude: { [key]: select.value } }); updateHint(); savedToast(); });
-      return el('label', { class: 'field' }, el('span', { class: 'field-label' }, label), select);
+  /**
+   * Claude / GPT / Gemini: API key (password) + 테스트, model selectors from the key's live list (newest first; the
+   * automatic pick is the '자동 선택' entry), cost note and how to get a key. Saving or testing a key reads the
+   * model list and picks the models (js/ai/models.js).
+   */
+  #keyDetail(id) {
+    const meta = KEY_PROVIDERS[id];
+    const conf = () => settings.get()[id] || {};
+    const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const translateSel = el('select', { class: 'select', 'aria-label': '번역 모델' });
+    const assistSel = el('select', { class: 'select', 'aria-label': '요약·채팅·설명 모델' });
+    const modelHint = el('p', { class: 'field-hint model-hint' });
+    const costNote = meta.priced ? el('p', { class: 'price-hint' })
+      : note('coins', `비용 미집계 — 각 회사 결제 화면에서 확인하세요. 이 앱은 ${meta.card} 요금을 계산하지 않고 토큰 수만 집계합니다.`);
+    let timer = null;
+    let seq = 0; // newest model-list request or key test; older answers are dropped
+
+    const listed = () => this.#models[id] || (id === 'claude' ? CLAUDE_MODELS : null);
+    const labelOf = (modelId) => (listed() || []).find((m) => m.id === modelId)?.label
+      || CLAUDE_MODELS.find((m) => m.id === modelId)?.label || modelId;
+    const renderModels = () => {
+      const c = conf();
+      const provider = this.#provider(id);
+      // Legacy ids (new keys typically cannot use them) are not offered.
+      const models = (listed() || []).filter((m) => !provider?.isLegacyModel?.(m.id));
+      for (const [sel, kind, key] of [[translateSel, 'translate', 'translateModel'], [assistSel, 'assist', 'assistModel']]) {
+        const chosen = c[key] || '';
+        const auto = c.autoModels?.[kind] || DEFAULT_MODELS[id]?.[kind] || '';
+        const autoLabel = auto ? `자동 선택 — ${labelOf(auto)}`
+          : `자동 선택 (${String(c.apiKey || '').trim() ? '모델 목록을 불러오면 고릅니다' : '키를 저장하면 고릅니다'})`;
+        const options = [el('option', { value: '', selected: !chosen }, autoLabel)];
+        if (chosen && !models.some((m) => m.id === chosen)) options.push(el('option', { value: chosen, selected: true }, labelOf(chosen)));
+        for (const m of models) options.push(el('option', { value: m.id, selected: m.id === chosen }, m.label || m.id));
+        sel.replaceChildren(...options);
+      }
+      const n = this.#models[id]?.length;
+      modelHint.textContent = n
+        ? `이 키로 쓸 수 있는 모델 ${n}개(최신순)입니다. ‘자동 선택’은 번역에 빠르고 저렴한 모델, 요약·채팅에 더 좋은 모델을 고르고, 쓰던 모델이 없어지면 다른 모델로 바꿉니다.`
+        : meta.autoHint;
+      if (meta.priced) {
+        costNote.textContent = [priceText(settings.model('translate', id), settings.model('assist', id)), '예상 비용이 이 앱의 사용량에 집계됩니다.']
+          .filter(Boolean).join(' · ');
+      }
     };
-    updateHint();
+    for (const [sel, key] of [[translateSel, 'translateModel'], [assistSel, 'assistModel']]) {
+      sel.addEventListener('change', () => { settings.set({ [id]: { [key]: sel.value } }); savedToast(); renderModels(); });
+    }
+
+    const load = async ({ announce = true } = {}) => {
+      clearTimeout(timer);
+      if (!String(conf().apiKey || '').trim()) {
+        if (announce) setResult(result, 'error', '먼저 API 키를 입력하세요.');
+        return;
+      }
+      const mine = ++seq;
+      if (announce) setResult(result, 'busy', '모델 목록을 불러오는 중…');
+      try {
+        const { models, changes } = await this.#refreshModels(id);
+        if (mine !== seq || !result.isConnected) return;
+        this.#models[id] = Array.isArray(models) ? models : [];
+        renderModels();
+        const changed = this.#describeChanges(changes);
+        if (announce || changed) setResult(result, 'ok', `모델 ${this.#models[id].length}개를 불러왔습니다.${changed ? ` ${changed}` : ''}`);
+      } catch (err) {
+        if (mine === seq && result.isConnected) setResult(result, 'error', err?.message || '모델 목록을 불러오지 못했습니다.');
+      }
+    };
+
+    renderModels();
+    // Automatic listing only outside a ?mock=1 session (tests and demos never reach a real API by themselves).
+    const listAutomatically = !settings.isMockSession;
+    if (listAutomatically && String(conf().apiKey || '').trim() && !this.#models[id]) queueMicrotask(() => load({ announce: false }));
     return el('div', { class: 'subsection' },
-      el('h3', { class: 'subsection-title' }, icon('key', { size: 16 }), 'Claude API 키'),
+      el('h3', { class: 'subsection-title' }, icon('key', { size: 16 }), meta.title),
       this.#secretField({
-        label: 'API 키', value: c.apiKey, placeholder: 'sk-ant-…',
-        onSave: (v) => settings.set({ claude: { apiKey: v } }),
-        onTest: () => this.#testProvider('claude'),
+        label: 'API 키', value: conf().apiKey || '', placeholder: meta.placeholder, result,
+        onSave: (v) => {
+          if (v === (conf().apiKey || '')) return;
+          settings.set({ [id]: { apiKey: v } });
+          delete this.#models[id];
+          renderModels(); // (the cards' '키 저장됨' badge follows on their next render: no layout shift above 테스트)
+          clearTimeout(timer);
+          // A new key: read its models (unless 테스트 follows right away, which reads them anyway).
+          if (v && listAutomatically) timer = setTimeout(() => load(), KEY_LIST_DELAY_MS);
+        },
+        onTest: async () => {
+          clearTimeout(timer);
+          const mine = ++seq;
+          const res = await this.#testProvider(id);
+          if (res?.ok && mine === seq) {
+            if (Array.isArray(res.models)) {
+              this.#models[id] = res.models;
+              renderModels();
+            } else {
+              load({ announce: false });
+            }
+          }
+          return res;
+        },
       }),
       el('div', { class: 'field-row', style: { marginTop: '14px' } },
-        modelSelect('translateModel', '번역 모델'),
-        modelSelect('assistModel', '요약·채팅·설명 모델')),
-      priceHint,
-      el('details', { class: 'howto' },
-        el('summary', {}, 'Claude API 키 만드는 법'),
-        el('ol', {},
-          el('li', {}, extLink('https://platform.claude.com/settings/keys', 'Claude Console → API Keys'), ' 페이지에 로그인합니다.'),
-          el('li', {}, el('b', {}, 'Create Key'), '를 눌러 이름(예: paper-reader)을 정하고 키를 만듭니다.'),
-          el('li', {}, '표시된 키(', el('code', {}, 'sk-ant-'), '로 시작)를 복사해 위 칸에 붙여 넣고 ', el('b', {}, '테스트'), '를 누릅니다.'),
-          el('li', {}, 'API 사용료는 Claude Console 조직의 크레딧으로 청구됩니다. Claude Console의 ', el('b', {}, 'Limits'), '에서 월 사용 한도를 정해 두면 안심입니다.'),
-          el('li', {}, el('b', {}, 'Claude Max'), '(5x: 월 $100, 20x: 월 $200) 요금제라면 claude.ai에서 요금제에 포함된 API 크레딧을 Claude Console 조직에 연결하세요. 키는 크레딧이 연결된 그 조직에서 만들어야 합니다. 채팅 사용 한도와는 별개이며, Pro 요금제는 해당되지 않습니다.'))));
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '번역 모델'), translateSel),
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '요약·채팅·설명 모델'), assistSel)),
+      modelHint,
+      el('div', { class: 'btn-row' }, button('모델 목록 불러오기', { icon: 'refresh', size: 'sm', onClick: () => load() })),
+      costNote,
+      meta.privacy ? note('shield', meta.privacy) : null,
+      el('p', { class: 'howto key-howto' }, ...meta.howto(extLink(meta.keyUrl, meta.keyLink))));
+  }
+
+  /** The key's live models and what changed in the model choice (deps.refreshModels, js/ai/models.js). */
+  async #refreshModels(id) {
+    if (this.#deps.refreshModels) return this.#deps.refreshModels(id);
+    const provider = this.#provider(id);
+    if (!provider?.listModels) throw new Error('AI 모듈을 불러오지 못했습니다.');
+    return { models: await provider.listModels(), changes: [] };
+  }
+
+  #describeChanges(changes) {
+    try {
+      return changes?.length ? this.#deps.describeModelChanges?.(changes) || '' : '';
+    } catch (err) {
+      console.warn('[settings-view] describeModelChanges', err);
+      return '';
+    }
   }
 
   #relayDetail() {
@@ -240,6 +434,7 @@ class SettingsView {
         if (!codeResult.isConnected) return;
         setResult(codeResult, 'ok', relay.formatMe(me));
         renderModels();
+        this.#updateRelayCard(me);
       }, (err) => {
         if (codeResult.isConnected) setResult(codeResult, 'error', err?.message || '초대 코드를 확인하지 못했습니다.');
       });
@@ -261,6 +456,8 @@ class SettingsView {
           clearResult(codeResult);
           renderModels();
           this.#renderUsage();
+          // The cards above are left as they are: a layout change here would move the 테스트 button between
+          // mousedown and click. They show the invitee layout from the next provider switch or visit.
         },
         onTest: async () => {
           const code = settings.get().relay?.code || '';
@@ -269,6 +466,7 @@ class SettingsView {
             const me = await this.#loadMe(true);
             renderModels();
             this.#renderUsage();
+            this.#updateRelayCard(me);
             return { ok: true, message: relay.formatMe(me) };
           } catch (err) {
             return { ok: false, message: err?.message || '초대 코드를 확인하지 못했습니다.' };
@@ -296,75 +494,6 @@ class SettingsView {
       promise.catch(() => { if (this.#mePromise === promise) this.#mePromise = null; });
     }
     return this.#mePromise;
-  }
-
-  #geminiDetail() {
-    const g = settings.get().gemini;
-    const translateSel = el('select', { class: 'select', 'aria-label': '번역 모델' });
-    const assistSel = el('select', { class: 'select', 'aria-label': '요약·채팅·설명 모델' });
-    const status = el('div', { class: 'test-result' });
-    const fill = () => {
-      const current = settings.get().gemini;
-      for (const [sel, key] of [[translateSel, 'translateModel'], [assistSel, 'assistModel']]) {
-        const models = this.#geminiModels || [];
-        const options = models.map((m) => el('option', { value: m.id, selected: current[key] === m.id }, m.label || m.id));
-        if (!current[key]) options.unshift(el('option', { value: '', selected: true }, models.length ? '모델을 선택하세요' : '먼저 모델 목록을 불러오세요'));
-        else if (!models.some((m) => m.id === current[key])) options.unshift(el('option', { value: current[key], selected: true }, current[key]));
-        sel.replaceChildren(...options);
-      }
-    };
-    translateSel.addEventListener('change', () => { settings.set({ gemini: { translateModel: translateSel.value } }); savedToast(); });
-    assistSel.addEventListener('change', () => { settings.set({ gemini: { assistModel: assistSel.value } }); savedToast(); });
-    const load = async () => {
-      const provider = this.#provider('gemini');
-      if (!provider?.listModels) { setResult(status, 'error', 'AI 모듈을 불러오지 못했습니다.'); return; }
-      if (!settings.get().gemini.apiKey) { setResult(status, 'error', '먼저 API 키를 입력하세요.'); return; }
-      setResult(status, 'busy', '모델 목록을 불러오는 중…');
-      try {
-        const models = await provider.listModels();
-        this.#geminiModels = Array.isArray(models) ? models : [];
-        fill();
-        const cur = settings.get().gemini;
-        // Default (and replace 2.x picks, which new keys cannot use) with the newest stable Flash. Pro models are
-        // not on the free tier, so assist tasks use Flash too.
-        const pick = this.#geminiModels.length ? (provider.pickDefaultModel?.(this.#geminiModels) || '') : '';
-        const replaced = [];
-        const patch = {};
-        for (const key of ['translateModel', 'assistModel']) {
-          if (!pick) break;
-          if (!cur[key]) patch[key] = pick;
-          else if (provider.isLegacyModel?.(cur[key]) && cur[key] !== pick) { replaced.push(cur[key]); patch[key] = pick; }
-        }
-        if (Object.keys(patch).length) settings.set({ gemini: patch });
-        fill();
-        const note = replaced.length
-          ? ` 새 키로는 쓸 수 없는 이전 모델(${[...new Set(replaced)].join(', ')})을 ${pick}(으)로 바꿨습니다.` : '';
-        setResult(status, 'ok', `모델 ${this.#geminiModels.length}개를 불러왔습니다.${note}`);
-      } catch (err) {
-        setResult(status, 'error', err?.message || '모델 목록을 불러오지 못했습니다.');
-      }
-    };
-    fill();
-    if (g.apiKey && !this.#geminiModels) queueMicrotask(load);
-    return el('div', { class: 'subsection' },
-      el('h3', { class: 'subsection-title' }, icon('key', { size: 16 }), 'Gemini API 키'),
-      this.#secretField({
-        label: 'API 키', value: g.apiKey, placeholder: 'AIza…',
-        onSave: (v) => { settings.set({ gemini: { apiKey: v } }); },
-        onTest: () => this.#testProvider('gemini'),
-      }),
-      note('shield', '무료 등급에서는 입력 내용(번역할 문장, 질문)이 Google 제품 개선에 쓰일 수 있습니다. 미출판 원고·민감 자료에는 Claude 또는 Gemini 유료 등급을 쓰세요. Gemini 사용 비용은 이 앱의 사용량에 집계되지 않습니다.'),
-      el('div', { class: 'field-row', style: { marginTop: '14px' } },
-        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '번역 모델'), translateSel),
-        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '요약·채팅·설명 모델'), assistSel)),
-      el('div', { class: 'btn-row' }, button('모델 목록 불러오기', { icon: 'refresh', size: 'sm', onClick: load })),
-      status,
-      el('details', { class: 'howto' },
-        el('summary', {}, 'Gemini API 키 만드는 법'),
-        el('ol', {},
-          el('li', {}, extLink('https://aistudio.google.com/apikey', 'Google AI Studio → API keys'), ' 페이지에 Google 계정으로 로그인합니다.'),
-          el('li', {}, el('b', {}, 'Create API key'), '를 눌러 키를 만들고 복사합니다.'),
-          el('li', {}, '위 칸에 붙여 넣고 ', el('b', {}, '테스트'), ' → ', el('b', {}, '모델 목록 불러오기'), '를 누른 뒤 모델을 고릅니다.'))));
   }
 
   #provider(id) {
@@ -803,11 +932,11 @@ class SettingsView {
       return;
     }
     const isPriced = typeof this.#deps.usage?.isPriced === 'function' ? this.#deps.usage.isPriced : () => true;
-    let unpriced = false;
+    const unpriced = new Set(); // 'GPT', 'Gemini', …: no prices in the app
     const rows = Object.entries(summary.byModel || {}).map(([model, v]) => {
       const info = typeof v === 'number' ? { usd: v } : (v || {});
       const priced = isPriced(model);
-      if (!priced) unpriced = true;
+      if (!priced) unpriced.add(unpricedFamily(model));
       return el('tr', {},
         el('td', {}, modelName(model)),
         el('td', { class: 'num' }, fmtInt(info.calls)),
@@ -819,12 +948,12 @@ class SettingsView {
     host.replaceChildren(...[
       el('div', { class: 'usage-stats' },
         stat('기간', formatMonth(summary.month)),
-        stat('예상 비용', `${formatUsd(summary.usd || 0)}${unpriced ? ' + Gemini' : ''}`),
+        stat('예상 비용', `${formatUsd(summary.usd || 0)}${unpriced.size ? ` + ${[...unpriced].join('·')}` : ''}`),
         stat('AI 호출', `${fmtInt(summary.calls || 0)}회`)),
       rows.length ? el('div', { class: 'md-table-wrap' }, el('table', { class: 'data-table' },
         el('thead', {}, el('tr', {}, el('th', {}, '모델'), el('th', { class: 'num' }, '호출'), el('th', { class: 'num' }, '입력 토큰'), el('th', { class: 'num' }, '출력 토큰'), el('th', { class: 'num' }, '비용'))),
         el('tbody', {}, rows))) : null,
-      unpriced ? note('info', 'Gemini 사용 비용은 요금 정보가 없어 예상 비용에 포함되지 않습니다. Google AI Studio의 결제 화면에서 확인하세요.') : null,
+      unpriced.size ? note('info', `${[...unpriced].join('·')} 사용 비용은 요금 정보가 없어 예상 비용에 포함되지 않습니다(비용 미집계). 각 회사 결제 화면(OpenAI Platform, Google AI Studio)에서 확인하세요.`) : null,
       note('info', '토큰 수와 공개 요금표로 계산한 추정치이며 이 브라우저에서 쓴 양만 집계됩니다. 실제 청구액은 각 AI 서비스 콘솔에서 확인하세요.'),
     ].filter(Boolean));
   }
@@ -853,7 +982,7 @@ class SettingsView {
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
           'API 키·초대 코드와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
-          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic 또는 Google, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
+          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic·OpenAI·Google 중 하나, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
         shared ? note('alert-triangle', shared) : null,
         persisted,
         el('div', { class: 'btn-row' }, clearBtn, wipeBtn),
@@ -880,14 +1009,15 @@ class SettingsView {
   }
 
   async #clearSecrets() {
-    const ok = await confirmDialog('이 기기에 저장된 Claude·Gemini·Semantic Scholar API 키, 초대 코드·관리자 토큰과 GitHub 토큰을 모두 지울까요?\n라이브러리와 번역 데이터는 지워지지 않습니다.',
+    const ok = await confirmDialog('이 기기에 저장된 Claude·GPT·Gemini·Semantic Scholar API 키, 초대 코드·관리자 토큰과 GitHub 토큰을 모두 지울까요?\n라이브러리와 번역 데이터는 지워지지 않습니다.',
       { okLabel: '지우기', danger: true, title: '키·토큰 지우기' });
     if (!ok) return;
     settings.set({
-      claude: { apiKey: '' }, gemini: { apiKey: '' }, github: { token: '' }, semanticScholar: { apiKey: '' },
-      relay: { code: '', adminToken: '', name: '', allowedModels: [], translateModel: '', assistModel: '' },
+      claude: { apiKey: '' }, openai: { apiKey: '' }, gemini: { apiKey: '' }, github: { token: '' }, semanticScholar: { apiKey: '' },
+      relay: { code: '', adminToken: '', name: '', allowedModels: [], translateModel: '', assistModel: '', autoModels: { translate: '', assist: '' } },
     });
     this.#mePromise = null;
+    this.#models = {};
     try { await this.#deps.library?.reconfigureSync?.(); } catch (err) { console.warn('[settings-view] reconfigureSync', err); }
     toast('이 기기에서 키와 토큰을 지웠습니다.', { kind: 'success' });
     this.#render();
@@ -1182,7 +1312,7 @@ export function mountJoinView(container, { code, deps, navigate }) {
       return;
     }
     const s = settings.get();
-    const hadKey = Boolean(s.claude?.apiKey || s.gemini?.apiKey);
+    const hadKey = Boolean(s.claude?.apiKey || s.openai?.apiKey || s.gemini?.apiKey);
     try {
       const me = await relay.registerInviteCode(normalized, { signal: controller.signal });
       if (!alive) return;
@@ -1350,6 +1480,14 @@ function savedToast() {
 function modelName(id) {
   const known = CLAUDE_MODELS.find((m) => m.id === id);
   return known ? known.label.replace(/\s*\(.*\)$/, '') : id;
+}
+
+/** 'GPT' / 'Gemini' for a model without prices in the app (its id otherwise). */
+function unpricedFamily(model) {
+  const id = String(model || '');
+  if (/^(models\/)?gemini/i.test(id)) return 'Gemini';
+  if (/^(ft:)?(gpt|o\d|chatgpt)/i.test(id)) return 'GPT';
+  return id || '기타';
 }
 
 function priceText(translateModel, assistModel) {

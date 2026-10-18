@@ -20,7 +20,7 @@ const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/relay-client';
 const FIXTURES = 'C:/Users/dindoo/Projects/pr-fixtures';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SETTINGS_KEY = 'pr.settings.v1';
-const STRICT_CONNECT_SRC = ["'self'", 'https://api.anthropic.com', 'https://generativelanguage.googleapis.com', 'https://api.github.com', 'https://api.semanticscholar.org'];
+const STRICT_CONNECT_SRC = ["'self'", 'https://api.anthropic.com', 'https://api.openai.com', 'https://generativelanguage.googleapis.com', 'https://api.github.com', 'https://api.semanticscholar.org'];
 const HAIKU_LABEL = 'Claude Haiku 5.5 (빠름·저렴)';
 
 mkdirSync(OUT, { recursive: true });
@@ -255,7 +255,7 @@ try {
     return `POST ${c.path}${c.search} anthropic-beta=${c.headers['anthropic-beta']}; ${r.chunks.length} deltas → “${r.chunks.join('')}”; usage out=${r.done.usage.outputTokens}`;
   });
 
-  await test('errors: relay 401/403/429 shown as-is (codes auth/permission/quota), 429 not retried, 403 re-reads /relay/me, owner-side and network failures', async () => {
+  await test('errors: relay 401/403/429 shown as-is (codes auth/not_found(model)/quota), 429 not retried, 403 re-reads /relay/me, owner-side and network failures', async () => {
     const d = await device({ seed: { provider: 'relay', relay: { url: RELAY_URL, code: CODES.haiku } } });
     await d.page.goto(`${APP}#/`);
     await booted(d.page);
@@ -268,7 +268,7 @@ try {
         await getProvider().complete({ model, messages: [{ role: 'user', content: 'x' }], maxTokens: 100 });
         return { ok: true };
       } catch (e) {
-        return { code: e.code, fatal: e.fatal, status: e.status, message: e.message, ms: Math.round(performance.now() - t0) };
+        return { code: e.code, fatal: e.fatal, status: e.status, model: e.model ?? null, message: e.message, ms: Math.round(performance.now() - t0) };
       }
     }, { code, model });
     const stopped = await run(CODES.stopped);
@@ -290,7 +290,9 @@ try {
     const offline = await run(CODES.haiku);
 
     assertEqual([stopped.code, stopped.fatal, stopped.message], ['auth', true, '초대 코드가 올바르지 않거나 사용이 중지되었습니다.'], '401');
-    assertEqual([sonnet.code, sonnet.fatal, sonnet.message], ['permission', true, '이 초대 코드로는 claude-sonnet-5-5을 쓸 수 없습니다.'], '403');
+    // A model the code does not allow is not_found with the model (getProvider() would switch a configured model to an
+    // allowed one; this request named it explicitly, so it is not replaced), with the relay's own message.
+    assertEqual([sonnet.code, sonnet.fatal, sonnet.status, sonnet.model, sonnet.message], ['not_found', true, 403, 'claude-sonnet-5-5', '이 초대 코드로는 claude-sonnet-5-5을 쓸 수 없습니다.'], '403');
     assert(meAfter === meBefore + 1, `403 should re-read /relay/me once (${meBefore} → ${meAfter})`);
     assertEqual([spent.code, spent.status, spent.message], ['quota', 429, '오늘 사용 한도($0.50)를 모두 썼습니다. 내일 오전 0시(한국 시간)에 다시 열립니다.'], '429');
     assertEqual(tries429, 1, 'POSTs for one 429 (x-should-retry: false is not exposed by CORS; the client must still not retry)');

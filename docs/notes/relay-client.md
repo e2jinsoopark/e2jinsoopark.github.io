@@ -12,14 +12,18 @@ API key. The worker (`relay/`) is documented in `relay/README.md`.
 | `js/ai/claude.js` | `makeClaudeProvider({ id, label, auth, missingKeyMessage, describeError })`. `claudeProvider` is one instance (requests unchanged); per-provider client cache and fallback-beta memory. `auth()` may return `baseURL` and `fetch`. |
 | `js/ai/relay.js` | `relayProvider` = the Claude provider with `baseURL = settings.relayUrl()`, `apiKey = code`. `fetchMe` / `refreshMe` / `registerInviteCode` / `saveInviteCode` / `saveRelayUrl`, admin client `listCodes` / `createCode` / `updateCode` / `usage`, `inviteLink` / `inviteMessage`, `normalizeInviteCode` / `isInviteCode`, `isRelayOriginAllowed` (reads the page CSP). |
 | `js/ai/providers.js` | Registers `relay`; `export * as relay from './relay.js'`, so `app.js` gets the helpers with the dynamically loaded AI modules (`deps.relay`) — no static import of AI code from the UI. |
-| `js/ui/settings-view.js` | AI section: 초대 코드 card first (“키 없이 쓰기 (초대 코드)”): 서버 주소, 초대 코드 (테스트 → “홍길동님 · 오늘 $0.03 / $0.50 · 모델: Haiku 5.5”), model selects limited to the code's models. 사용량 shows `/relay/me` while the relay is selected. New section **초대 코드 관리 (관리자)** (`#set-invites`, collapsed). `mountJoinView` for `#/join/<CODE>`. |
+| `js/ui/settings-view.js` | AI section: 초대 코드 card first (“키 없이 쓰기 (초대 코드)”): 서버 주소, 초대 코드 (테스트 → “홍길동님 · 오늘 $0.03 / $0.50 · 모델: Haiku 5.5”), model selects limited to the code's models. For an invitee (code saved) the invite card shows the name and today's usage and the own-key cards (Claude · GPT · Gemini) sit under **내 API 키 쓰기**; switching keeps the code, the invite card switches back in one click (`models.md`). 사용량 shows `/relay/me` while the relay is selected. New section **초대 코드 관리 (관리자)** (`#set-invites`, collapsed). `mountJoinView` for `#/join/<CODE>`. |
 | `js/app.js` | Route `#/join/<CODE>`; `deps.relay`; one quiet `/relay/me` per visit for relay users (keeps allowed models current). |
 
 ## Behaviour
 
-- **Models.** `/relay/me.allowedModels` is remembered in `settings.relay.allowedModels`. Translation defaults to
-  Haiku 5.5; summaries/chat to Sonnet 5.5 when allowed, else Haiku 5.5; unknown (before the first check) → Haiku 5.5.
-  A saved choice the code no longer allows falls back. A 403 from the relay re-reads `/relay/me` in the background.
+- **Models.** `/relay/me.allowedModels` is remembered in `settings.relay.allowedModels`; `refreshMe()` (every visit,
+  테스트) and `registerInviteCode()` pick the models from it with the Claude rule (`relay.autoModels`: newest Haiku for
+  translation, newest Sonnet else Haiku for summaries/chat — see `models.md`), so a code that gains or loses Sonnet
+  is followed. Unknown (before the first check) → Haiku 5.5. A saved choice the code no longer allows falls back to
+  자동 선택. A 403 from the relay re-reads `/relay/me` in the background. Anthropic's 404 "model: …" passed through
+  the relay is `not_found` with `err.model` (self-healing retries once on the code's other model); the relay's own
+  404s keep the server-address message.
 - **Join link** `#/join/<CODE>` (code normalized: case, spaces, dashes, a pasted whole link, Crockford O→0 / I,L→1):
   the code is checked with `/relay/me` *before* anything is saved; then provider = `relay`, the code, name and models
   are stored, the hash is replaced by `#/` (the code leaves the address bar and history) and a welcome screen
@@ -27,7 +31,9 @@ API key. The worker (`relay/`) is documented in `relay/README.md`.
   Malformed code → format error, no request.
 - **Errors.** The relay's own answers have Korean messages and are shown as they are: 401 → `auth` (fatal),
   403 → `permission` (fatal), 429 → `quota` (stops a translation run once, like Gemini's daily quota; “내일 다시” is
-  added if the message lacks it). Answers passed through from Anthropic about the *owner's* key or credit → “초대해
+  added if the message lacks it). A 403 that names the requested model (“이 초대 코드로는 <model>을 쓸 수
+  없습니다.” — the owner removed it while this tab still asks for it) is `not_found` with `err.model` instead (still
+  fatal, same message), so `getProvider()` switches to an allowed model and retries once (`models.md`). Answers passed through from Anthropic about the *owner's* key or credit → “초대해
   준 분에게 알려 주세요” (`server`, fatal). Connection failures say whether the page CSP blocked the address.
 - **No retries on a relay refusal.** The SDK honours `x-should-retry: false`, but a cross-origin response hides
   headers that are not in `Access-Control-Expose-Headers`. The Worker in `relay/` exposes `x-should-retry` (verified

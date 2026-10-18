@@ -42,7 +42,7 @@ export function priceFor(model) {
 }
 
 /**
- * Cost of one request in USD. Gemini and other non-Claude models are not priced (0; the UI says so, see isPriced).
+ * Cost of one request in USD. GPT, Gemini and other non-Claude models are not priced (0; the UI says so, see isPriced).
  * The long-context rate card (Claude Haiku 5.5 above 100K prompt tokens) is chosen by the TOTAL prompt size:
  * uncached input + cache reads + cache writes, and applies to every token of that request, output included.
  * A usage with `parts` (one entry per attempt, e.g. after a server-side refusal fallback) is the sum of its parts,
@@ -71,22 +71,26 @@ export function costUsd(usage) {
   return usd / 1_000_000;
 }
 
-/** True when cost can be estimated for this model (Gemini and unknown models are not priced). */
+/** True when cost can be estimated for this model (Claude only: GPT, Gemini and unknown models are not priced). */
 export function isPriced(model) {
   return Boolean(priceFor(model)) || /^claude-/.test(String(model || ''));
 }
 
 const warnedUnpriced = new Set();
+// Known rates per Claude family, for newer models of that family (e.g. a new Haiku picked from the live model list).
+const FAMILY_PRICE_KEYS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' };
 /**
- * A Claude model missing from PRICES (e.g. a new fallback target) is priced at the requested model's rates rather
- * than booked as free.
+ * A Claude model missing from PRICES (e.g. a new fallback target) is priced at the requested model's rates, else at
+ * its family's known rates, rather than booked as free.
  */
 function claudeFallbackPrice(usage) {
   if (!/^claude-/.test(String(usage.model || ''))) return null;
-  const price = priceFor(usage.requestedModel);
+  const familyKey = FAMILY_PRICE_KEYS[/^claude-(haiku|sonnet|opus)-/.exec(usage.model)?.[1]];
+  const basis = priceFor(usage.requestedModel) ? usage.requestedModel : familyKey;
+  const price = priceFor(basis);
   if (price && !warnedUnpriced.has(usage.model)) {
     warnedUnpriced.add(usage.model);
-    console.warn('[ai] no price for', usage.model, '— estimating at', usage.requestedModel, 'rates');
+    console.warn('[ai] no price for', usage.model, '— estimating at', basis, 'rates');
   }
   return price;
 }

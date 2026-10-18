@@ -33,11 +33,16 @@ export const CLAUDE_MODELS = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (최고 품질·비쌈)' },
 ];
 
+/**
+ * Fallback models when no live model list has been read yet (settings.model()). The models actually used are
+ * picked from each key's live list (js/ai/models.js: translate = fast/cheap tier, assist = stronger tier).
+ */
 export const DEFAULT_MODELS = {
   claude: { translate: 'claude-haiku-5-5', assist: 'claude-sonnet-5-5' },
   // Invite-code relay: the assist default applies only when the code allows Sonnet (else Haiku, see settings.model()).
   relay: { translate: 'claude-haiku-5-5', assist: 'claude-sonnet-5-5' },
-  // Gemini model ids change often; the settings screen lists live models from the API.
+  // GPT and Gemini model ids change often: always picked from the key's live model list.
+  openai: { translate: '', assist: '' },
   gemini: { translate: '', assist: '' },
   mock: { translate: 'mock', assist: 'mock' },
 };
@@ -73,4 +78,6 @@ export const STORAGE_KEYS = {
   settings: 'pr.settings.v1',
   usage: 'pr.usage.v1',
   ui: 'pr.ui.v1',
+  // Models that answered "not found" for a key (js/ai/models.js): not picked again for a while, in every tab.
+  models: 'pr.models.v1',
 };

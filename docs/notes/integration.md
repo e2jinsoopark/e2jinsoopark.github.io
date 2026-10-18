@@ -73,6 +73,37 @@ max_tokens salvage + scaled caps, refusal bisection, fidelity, first mention, ha
 budget, render-failure backoff), `tests/shell/run.mjs` (sanitizer classes, 연결 테스트 saves, onboarding deep link),
 `tests/shell/run-real.mjs` (bad key → one toast with 설정 열기), `tests/features/run.mjs` (no auto summary, S2 consent).
 
+## GPT and automatic model choice (2026-10-18)
+
+Third own-key provider `openai` (“GPT (OpenAI)”, `js/ai/openai.js`, `openai.md`) and automatic model choice with
+self-healing for every provider (`js/ai/models.js`, `models.md`): models are picked from each key's live list
+(on key save/test, code registration, every relay visit), `getProvider()` replaces a configured model that answers
+not_found and retries once (one toast). Cross-module changes: `core/settings.js` (`openai`, `autoModels`, user picks
+`''` = 자동 선택, migration of old Claude/Gemini values, `model(kind, provider)`, `isAiReady()` = key saved),
+`core/config.js` (`DEFAULT_MODELS.openai`), `index.html` CSP `connect-src` + `https://api.openai.com` (exact strings
+in `tests/shell/run.mjs` and the relay-client CSP test updated), `app.js` (`deps.refreshModels`,
+`deps.describeModelChanges`, toast on bus `'ai:model-change'`), settings cards (초대 코드 · Claude · GPT · Gemini;
+invitee layout with 내 API 키 쓰기), copy that named only Claude/Gemini (onboarding, reader prompt,
+`AI_NOT_READY_MESSAGE`, usage note “+ GPT·Gemini”). `tests/shell/stubs/ai-providers.js` uses the real `models.js`.
+Test: `node tests/models/run.mjs`.
+
+### Integration pass (verifier, 2026-10-18)
+
+`openai.js` reconciled with the registry and the healing wrapper (exports, `kind`, error codes and `err.model` were
+already compatible); then the model choice was attacked on purpose and these root causes fixed (regression tests in
+`tests/models/run.mjs`, `tests/ai/openai.test.mjs`, `tests/relay-client/run.mjs`):
+
+| Problem found | Fix |
+|---|---|
+| The not_found memory was per page load: a listed-but-unusable model was picked again after every reload (one failed request + one toast per visit; for the relay until the owner changed the code) | `models.js` remembers it per key/code fingerprint in localStorage (`STORAGE_KEYS.models`, 30 days, all tabs); an explicit pick in 설정 drops the mark |
+| A heal whose model list failed (401 / offline) blocked every later heal of that model for 60 s | failed heals are shared for 5 s only |
+| GPT/Gemini key with no text model: every call listed the models again and then sent a request without a model (GPT: a misleading "모델이 선택되지 않았습니다" 400; Gemini: `ids[0]` could be a TTS/image model) | concurrent model-less calls share one list; no usable model → one Korean `not_found` before any paid request; Gemini picker never returns speech/image/embedding ids and falls back to the best legacy Flash only when nothing newer exists |
+| Relay 403 "이 초대 코드로는 <model>을 쓸 수 없습니다" (code changed while a tab is open) stopped the task | `not_found` with `err.model` → healed to an allowed model |
+| OpenAI 403 "must be verified to use the model" was `permission` (every summary failed for unverified organizations) | `not_found` with `err.model` → healed to another GPT model; a verification message about streaming still falls back to non-streaming |
+| `?mock=1` with a saved invite code: the invitee card called the real `/relay/me` | skipped in mock sessions |
+| 설정 open in two tabs: a provider picked in one left the other showing the old card checked (clicking it did nothing) | the AI section re-renders on an external provider change |
+| OpenAI docs drift (re-checked live) | `prompt_cache_key` before GPT-5.6; `phase: 'final_answer'` on assistant history turns for GPT-5.3+ (`openai.md`) |
+
 ## Invite-code relay (2026-10-18)
 
 Colleagues without an API key use the owner's Cloudflare Worker (`relay/`) through invite codes. Architecture, the

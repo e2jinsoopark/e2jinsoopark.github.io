@@ -2,18 +2,24 @@
 //
 // Provider = {
 //   id, label,
-//   async complete({ model, system, messages, json?, maxTokens, effort?, signal }) → { text, json?, usage, stopReason }
+//   async complete({ model, system, messages, json?, maxTokens, effort?, signal }) → { text, json?, usage, stopReason, model }
 //   async *stream({ ...same, no json }) → yields { type:'text', text } … finally { type:'done', usage, stopReason }
-//   async listModels() → [{ id, label }]
-//   async testKey() → { ok, message }
+//   async listModels() → [{ id, label }]            newest first
+//   async testKey() → { ok, message, models? }       models: the live list, when the check read it anyway
+//   pickDefaultModel(models, kind) → id              kind 'translate' = fast/cheap tier, 'assist' = stronger tier
+//   isLegacyModel(id) → boolean                      ids new keys typically cannot use
 // }
 // system:   string | [{ text, cache?: true }]
 // messages: [{ role: 'user'|'assistant', content: string | Part[] }]
 // Part:     { type:'text', text } | { type:'image', mediaType:'image/png', data /* base64 */ }
 //
-// Note: claude.js / gemini.js / mock.js / relay.js import aiError() from here while this file imports them. The
-// cycle is safe because aiError/isAbort are hoisted function declarations and the provider objects are only read
-// inside getProvider() at call time — keep it that way (no top-level use of imported bindings in either direction).
+// getProvider() hands out the providers wrapped by js/ai/models.js (automatic model choice, self-healing when a
+// configured model answers not_found); rawProvider() is the unwrapped one.
+//
+// Note: claude.js / gemini.js / openai.js / mock.js / relay.js import aiError() from here while this file imports
+// them. The cycle is safe because aiError/isAbort are hoisted function declarations and the provider objects are
+// only read inside getProvider() at call time — keep it that way (no top-level use of imported bindings in either
+// direction).
 //
 // `relay` re-exports js/ai/relay.js (invite codes, /relay/me, admin API) so the app gets it with this dynamically
 // loaded module instead of importing the AI modules statically.
@@ -21,20 +27,24 @@ import { settings } from '../core/settings.js';
 import { claudeProvider } from './claude.js';
 import { geminiProvider } from './gemini.js';
 import { mockProvider } from './mock.js';
+import { syncModels, withModelHealing } from './models.js';
+import { openaiProvider } from './openai.js';
 import { relayProvider } from './relay.js';
 
 export * as relay from './relay.js';
+export { describeModelChanges } from './models.js';
 
-/** Selectable providers for the settings screen (mock is test-only and not listed). */
+/** Selectable providers for the settings screen, in its order (mock is test-only and not listed). */
 export const PROVIDER_OPTIONS = [
-  { id: 'relay', label: '초대 코드 (키 없이 쓰기)' },
-  { id: 'claude', label: 'Claude (Anthropic)' },
-  { id: 'gemini', label: 'Gemini (Google)' },
+  { id: 'relay', label: '키 없이 쓰기 (초대 코드)' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'openai', label: 'GPT (OpenAI)' },
+  { id: 'gemini', label: 'Gemini' },
 ];
 
 /**
  * Error codes carried on `err.code`. `fatal` errors stop a whole translation run (bad key, no access, no credit),
- * the rest fail only the current request.
+ * the rest fail only the current request. A missing/retired model is 'not_found' with the id in `err.model`.
  */
 export const AI_ERROR_CODES = Object.freeze({
   noKey: 'no_key',
@@ -80,12 +90,31 @@ export function throwIfAborted(signal) {
 }
 
 /**
- * The provider for `id` (default: the one selected in settings; `?mock=1` forces 'mock').
+ * The provider for `id` without the model wrapper (default: the one selected in settings; `?mock=1` forces 'mock').
  * @param {string} [id]
  */
-export function getProvider(id = settings.get().provider) {
-  const registry = { relay: relayProvider, claude: claudeProvider, gemini: geminiProvider, mock: mockProvider };
+export function rawProvider(id = settings.get().provider) {
+  const registry = { relay: relayProvider, claude: claudeProvider, openai: openaiProvider, gemini: geminiProvider, mock: mockProvider };
   const provider = registry[id];
   if (!provider) throw aiError(`알 수 없는 AI 제공자입니다: ${id}`, { code: 'bad_request' });
   return provider;
+}
+
+/**
+ * The provider for `id` as the app uses it: automatic model choice and self-healing (js/ai/models.js).
+ * @param {string} [id]
+ */
+export function getProvider(id = settings.get().provider) {
+  return withModelHealing(rawProvider(id));
+}
+
+/**
+ * Read the key's live model list and pick the models (settings[id].autoModels; a choice the provider no longer
+ * lists goes back to 자동 선택). Call after a key is saved. Listing errors are thrown (Korean aiError).
+ * @param {string} [id]
+ * @param {{ signal?: AbortSignal, models?: object[] }} [opts]
+ * @returns {Promise<{ models: { id: string, label: string }[], changes: object[] }>}
+ */
+export function refreshModels(id = settings.get().provider, opts = {}) {
+  return syncModels(rawProvider(id), opts);
 }

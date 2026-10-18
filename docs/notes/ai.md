@@ -30,9 +30,18 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
 - **tasks**: options also accept `paperId` (usage tagging). `summarize`/`keyPoints` also return `model`;
   the stream's final `{ done: true, usage, model }`. Exported helpers: `normalizeHistory`, `selectKeyPoints`.
 - **mock.js** exports `mockControl` (latency, dropped ids, injected failures, request log, max concurrency seen) for tests.
+- **Model helpers** (2026-10-18, see `models.md`): every real provider also has `pickDefaultModel(models, kind)`
+  (`'translate'` = fast/cheap tier, `'assist'` = stronger tier) and `isLegacyModel(id)`; `testKey()` may return the
+  live list as `models`. A model the key/code cannot use (missing, retired, not allowed for the invite code, needing a
+  verified OpenAI organization) is `not_found` **with `err.model`**. `getProvider()` returns the
+  provider wrapped by `js/ai/models.js` (automatic model choice, self-healing on not_found); `rawProvider()` is the
+  plain one; `refreshModels(id)` reads the key's list and picks the models. Providers: `relay`, `claude`, `openai`
+  (`openai.js`, see `openai.md`), `gemini`, `mock`. Tasks return / stream the model that answered (`res.model`,
+  `done.model`).
 - **claude.js** exports `loadSdk`, `buildParams`, `resetClaudeState`, `isFallbackBetaDisabled`, `FALLBACK_BETA`;
-  **gemini.js** exports `buildBody`, `toGeminiSchema`, `GEMINI_BASE`. **providers.js** exports `PROVIDER_OPTIONS`,
-  `AI_ERROR_CODES`, `aiError`, `isAbort`, `throwIfAborted`.
+  **gemini.js** exports `buildBody`, `toGeminiSchema`, `GEMINI_BASE`, `pickGeminiModel`, `isLegacyGeminiModel`;
+  **claude.js** also `pickClaudeModel`, `isLegacyClaudeModel`. **providers.js** exports `PROVIDER_OPTIONS`,
+  `AI_ERROR_CODES`, `aiError`, `isAbort`, `throwIfAborted`, `rawProvider`, `refreshModels`, `describeModelChanges`.
 
 ## Decisions
 
@@ -93,8 +102,9 @@ Tests: `tests/ai/*` (run `node tests/ai/run-all.mjs`; output goes to `C:/Users/d
   model-specific). Thought parts are dropped from text; `thoughtsTokenCount` is counted as output. Retries: 5xx
   (×2, backoff) and 429 only when `RetryInfo.retryDelay ≤ 20 s` (per-minute limits); a 429 without it (daily free-tier
   quota) fails at once with a Korean message about the free tier's daily quota and stops the translation run.
-  The key is sent only as `x-goog-api-key`, never in the URL. Gemini usage is not priced (`isPriced()` false; the
-  UI shows "비용 미집계" instead of $0).
+  The key is sent only as `x-goog-api-key`, never in the URL. Gemini and GPT usage is not priced (`isPriced()` false;
+  the UI shows "비용 미집계" instead of $0). A newer Claude model missing from `PRICES` (e.g. a new Haiku picked
+  automatically) is estimated at its family's known rates (Haiku/Sonnet/Opus 5.5).
 - **Claude errors**: a 400 "credit balance is too low" is `billing` (fatal, Korean text with the Max-credit hint).
   `testKey()` says the credit balance is not checked. Requests get a timeout from their output size (2–10 min) and
   `maxRetries: 2`. Chat turns ask for automatic caching of the conversation tail (`cache_control` top level), and the

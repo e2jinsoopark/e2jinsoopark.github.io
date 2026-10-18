@@ -430,7 +430,7 @@ class ReaderView {
       ...(running ? [{ label: '번역 중지', icon: 'stop', onClick: () => this.#cancelTranslation() }] : []),
       'sep',
       { note: `번역 모델: ${modelLabel(settings.model('translate')) || '미설정'} · ${done}/${total} 문장` },
-      ...(usage ? [{ note: `이번 달 AI 사용액(추정): ${formatUsd(usage.usd)} · ${usage.calls ?? 0}회${unpriced ? ' (Gemini 비용은 집계하지 않음)' : ''}` }] : []),
+      ...(usage ? [{ note: `이번 달 AI 사용액(추정): ${formatUsd(usage.usd)} · ${usage.calls ?? 0}회${unpriced ? ' (GPT·Gemini 비용은 집계하지 않음)' : ''}` }] : []),
     ], Math.max(8, r.right - 260), r.bottom + 4);
   }
 
@@ -1165,7 +1165,7 @@ class ReaderView {
       title: 'AI 연결이 필요합니다',
       size: 'sm',
       body: el('div', {},
-        el('p', {}, '번역하려면 설정 → AI 번역에서 초대 코드를 넣거나(키 없이 쓰기), Claude 또는 Gemini API 키를 입력하세요.'),
+        el('p', {}, '번역하려면 설정 → AI 번역에서 초대 코드를 넣거나(키 없이 쓰기), 내 Claude·GPT·Gemini API 키 중 하나를 입력하세요.'),
         el('p', { class: 'field-hint' }, '초대 코드와 API 키는 이 브라우저에만 저장되며, AI를 쓸 때만 해당 서버로 전송됩니다.')),
       actions: [
         { label: '나중에' },

@@ -88,6 +88,9 @@ async function boot() {
     if (external) library.reconfigureSync?.().catch((err) => console.warn('[app] reconfigureSync', err));
   });
 
+  // A configured model that no longer exists was replaced (js/ai/models.js): say so once.
+  bus.on('ai:model-change', ({ message } = {}) => { if (message) toast(message, { kind: 'warning', timeout: 8000 }); });
+
   const deps = buildDeps(modules, library, failures);
   if (failures.length) showBanner(bannerHost, failures);
   refreshRelayIdentity(deps);
@@ -136,6 +139,8 @@ function buildDeps(m, library, failures) {
     PdfViewer: m.viewer?.PdfViewer ?? null,
     Translator: m.translator?.Translator ?? null,
     getProvider: m.providers?.getProvider ?? null,
+    refreshModels: m.providers?.refreshModels ?? null, // live model list → automatic model choice (js/ai/models.js)
+    describeModelChanges: m.providers?.describeModelChanges ?? null,
     relay: m.providers?.relay ?? null, // js/ai/relay.js, re-exported by providers.js
     usage: m.usage ?? null,
     GitHubClient: m.github?.GitHubClient ?? null,

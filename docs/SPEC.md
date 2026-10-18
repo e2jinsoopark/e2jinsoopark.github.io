@@ -52,6 +52,8 @@ js/store/library.js             Store builder — Library model (folders, papers
 js/ai/providers.js              AI builder — provider registry
 js/ai/claude.js                 AI builder — Claude via @anthropic-ai/sdk
 js/ai/gemini.js                 AI builder — Gemini REST
+js/ai/openai.js                 GPT (OpenAI) Responses API (docs/notes/openai.md)
+js/ai/models.js                 automatic model choice + self-healing wrapper (docs/notes/models.md)
 js/ai/mock.js                   AI builder — offline deterministic mock
 js/ai/prompts.js                AI builder — all prompt text
 js/ai/translator.js             AI builder — batching/caching translation orchestrator
@@ -270,9 +272,15 @@ export function getProvider(id = settings.get().provider) → Provider
 //   async complete({ model, system /* string | [{text, cache?: true}] */, messages /* [{role, content: string | Part[]}] */,
 //                    json?: JSONSchema, maxTokens, effort?: 'low'|'medium'|'high', signal }) → { text, json?, usage }
 //   async *stream({ ...same, no json }) → yields { type:'text', text } … finally { type:'done', usage }
-//   async listModels() → [{ id, label }]
-//   async testKey() → { ok, message }
+//   async listModels() → [{ id, label }]          newest first
+//   async testKey() → { ok, message, models? }
+//   pickDefaultModel(models, kind /* 'translate' | 'assist' */) → id;  isLegacyModel(id) → boolean
 // }  Part = { type:'text', text } | { type:'image', mediaType:'image/png', data /* base64 */ }
+// getProvider() wraps the provider (js/ai/models.js): automatic model choice, one retry on another model when the
+// configured one answers not_found (err.model). Providers: relay, claude, openai, gemini, mock.
+// A model the key / invite code cannot use (missing, retired, not allowed for the code, needs a verified OpenAI
+// organization) must be thrown as not_found WITH err.model; such models are skipped by the automatic choice for 30 days
+// per key (localStorage STORAGE_KEYS.models, a fingerprint of the key, never the key).
 // usage = { model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
 
 // claude.js: lazy `import(VENDOR.anthropicSdk)`; new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
@@ -371,7 +379,8 @@ export function installReaderFeatures(ctx) → { dispose() }
   per-paper progress (번역 %), sync status chip (GitHub 동기화: 꺼짐/동기화 중/완료/오류).
 - **Reader** (`#/paper/<id>`): toolbar (← 라이브러리, 제목, 페이지 n/N, 확대/축소/폭 맞춤, 보기: 원문|나란히|번역 겹쳐보기,
   번역 시작(전체/이 페이지)+진행률+비용, 핵심 밑줄, 그림·표 설명, 설정), split view with draggable divider (PDF left, tabs right).
-- **Settings** (`#/settings`): AI provider (Claude/Gemini), API key (password field + 테스트), models, GitHub sync
+- **Settings** (`#/settings`): AI provider (초대 코드 / Claude / GPT / Gemini), API key (password field + 테스트), models
+  (자동 선택 from the key's live list, or a user pick), GitHub sync
   (owner/repo/branch/token + 연결 테스트 + how-to text for a fine-grained token with Contents read/write on ONE repo),
   translation options (용어집, 전문용어 영어 병기, 참고문헌 번역 여부), theme/font size, this month's usage/cost,
   "이 기기에서 키·토큰 지우기".

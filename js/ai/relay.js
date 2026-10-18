@@ -8,7 +8,8 @@
 import { APP_PUBLIC_URL, CLAUDE_MODELS, RELAY_DEFAULT_URL } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { formatUsd } from '../core/util.js';
-import { makeClaudeProvider } from './claude.js';
+import { isLegacyClaudeModel, makeClaudeProvider, pickClaudeModel } from './claude.js';
+import { applyModelList } from './models.js';
 import { aiError } from './providers.js';
 
 export const RELAY_LABEL = '초대 코드';
@@ -24,6 +25,8 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const HANGUL = /[가-힣]/;
 const CODE_RE = /^PR-[0-9A-Z]{4}-[0-9A-Z]{4}$/;
 const STATUS_CODES = { 400: 'bad_request', 401: 'auth', 403: 'permission', 404: 'not_found', 413: 'bad_request', 429: 'quota' };
+// A new code starts on 자동 선택 (models picked from the code's allowed ones).
+const NO_MODEL_CHOICE = Object.freeze({ translateModel: '', assistModel: '', autoModels: { translate: '', assist: '' } });
 
 const NO_URL_MESSAGE = '초대 코드 서버 주소가 없습니다. 설정 → AI 번역 → 키 없이 쓰기에서 서버 주소를 입력해 주세요.';
 const NO_CODE_MESSAGE = '초대 코드가 없습니다. 설정 → AI 번역 → 키 없이 쓰기에서 초대 코드를 입력해 주세요.';
@@ -125,15 +128,23 @@ export const relayProvider = {
   complete: (opts) => base().complete(opts),
   stream: (opts) => base().stream(opts),
   listModels: () => base().listModels(),
-  /** Checks the code with GET /relay/me (no tokens) and remembers its name and models. */
+  /** Checks the code with GET /relay/me (no tokens), remembers its name and models; `models` = the allowed ones. */
   async testKey() {
     try {
-      return { ok: true, message: formatMe(await refreshMe()) };
+      const me = await refreshMe();
+      return { ok: true, message: formatMe(me), models: me.allowedModels.map((id) => ({ id, label: modelLabel(id) })) };
     } catch (err) {
       return { ok: false, message: err?.message || BAD_CODE_MESSAGE };
     }
   },
+  // The code's allowed models are Claude models: translation → newest Haiku, summaries/chat → newest Sonnet.
+  pickDefaultModel: (models, kind) => pickClaudeModel(models, kind),
+  isLegacyModel: (id) => isLegacyClaudeModel(id),
 };
+
+function modelLabel(id) {
+  return CLAUDE_MODELS.find((m) => m.id === id)?.label || id;
+}
 
 /**
  * fetch for the SDK client. The relay's own refusals (429: today's budget is used up) say `x-should-retry: false`,
@@ -159,7 +170,7 @@ function errorMessageOf(text) {
  * Relay-specific error mapping (null = the Claude provider's generic one). The relay's own answers — bad code,
  * model not allowed, daily budget — carry Korean, user-presentable messages and are shown as they are.
  */
-function describeRelayError(err, sdk) {
+function describeRelayError(err, sdk, info = {}) {
   const status = err?.status;
   const detail = String(err?.error?.error?.message || '');
   const warn = (code) => console.warn('[relay] error', code, status ?? '', detail || err?.message || '');
@@ -167,6 +178,11 @@ function describeRelayError(err, sdk) {
     const code = STATUS_CODES[status] || (status >= 500 ? 'server' : 'unknown');
     warn(code);
     if (code === 'permission') refreshMe().catch(() => {}); // the owner may have changed the code's models
+    // "이 초대 코드로는 <model>을 쓸 수 없습니다." — the code no longer allows the model this tab still asks for:
+    // not_found with the model, so getProvider() switches to an allowed one and retries (js/ai/models.js).
+    if (code === 'permission' && info.model && detail.includes(info.model)) {
+      return aiError(detail, { code: 'not_found', status, model: info.model, cause: err });
+    }
     const message = code === 'quota' && !/내일/.test(detail) ? `${detail} 내일 다시 시도해 주세요.` : detail;
     return aiError(message, { code, status, cause: err });
   }
@@ -183,6 +199,12 @@ function describeRelayError(err, sdk) {
   }
   if (err instanceof sdk.NotFoundError) {
     warn('not_found');
+    // Anthropic's own 404 passed through ("model: claude-…"): the model is gone, not the server address.
+    if (info.model && /\bmodel\b/i.test(detail)) {
+      return aiError(`초대 코드 서버에서 ${info.model} 모델을 찾을 수 없습니다. 설정에서 다른 모델을 고르거나, 계속되면 초대해 준 분에게 알려 주세요.`, {
+        code: 'not_found', status, model: info.model, cause: err,
+      });
+    }
     return aiError(NOT_FOUND_MESSAGE, { code: 'not_found', status, cause: err });
   }
   return null;
@@ -210,7 +232,10 @@ export async function fetchMe({ code = settings.get().relay?.code, url, signal }
   };
 }
 
-/** fetchMe() for the saved code, remembering its name and allowed models (they pick the models to request). */
+/**
+ * fetchMe() for the saved code, remembering its name and allowed models; the models to request are picked from the
+ * allowed ones (js/ai/models.js), so a code the owner changed is followed on the next visit.
+ */
 export async function refreshMe({ signal } = {}) {
   const code = normalizeInviteCode(settings.get().relay?.code);
   const me = await fetchMe({ code, signal });
@@ -219,23 +244,22 @@ export async function refreshMe({ signal } = {}) {
   const patch = {};
   if (r.name !== me.name) patch.name = me.name;
   if (JSON.stringify(r.allowedModels || []) !== JSON.stringify(me.allowedModels)) patch.allowedModels = me.allowedModels;
-  for (const key of ['translateModel', 'assistModel']) {
-    if (r[key] && me.allowedModels.length && !me.allowedModels.includes(r[key])) patch[key] = '';
-  }
   if (Object.keys(patch).length) settings.set({ relay: patch });
+  applyModelList(relayProvider, me.allowedModels); // drops choices the code no longer allows, picks the defaults
   return me;
 }
 
 /**
  * Join link / pasted code: check the code first, then switch this browser to the relay with it (an invalid code
- * leaves the settings untouched).
+ * leaves the settings untouched). Other providers' keys stay saved, so the user can switch back in 설정.
  * @returns {Promise<Awaited<ReturnType<typeof fetchMe>> & { code: string }>}
  */
 export async function registerInviteCode(raw, { signal } = {}) {
   const code = normalizeInviteCode(raw);
   if (!isInviteCode(code)) throw aiError(FORMAT_MESSAGE, { code: 'bad_request' });
   const me = await fetchMe({ code, signal });
-  settings.set({ provider: 'relay', relay: { code, name: me.name, allowedModels: me.allowedModels, translateModel: '', assistModel: '' } });
+  settings.set({ provider: 'relay', relay: { code, name: me.name, allowedModels: me.allowedModels, ...NO_MODEL_CHOICE } });
+  applyModelList(relayProvider, me.allowedModels);
   return { ...me, code };
 }
 
@@ -244,7 +268,7 @@ export function saveInviteCode(raw) {
   const code = normalizeInviteCode(raw);
   const r = settings.get().relay || {};
   if (code === r.code) return code;
-  settings.set({ relay: { code, name: '', allowedModels: [], translateModel: '', assistModel: '' } });
+  settings.set({ relay: { code, name: '', allowedModels: [], ...NO_MODEL_CHOICE } });
   return code;
 }
 

@@ -1,5 +1,6 @@
 // Paper-level AI tasks. All answers are Korean Markdown and may cite sentences as [p3-12] (the UI links them).
 // Stream protocol for chat/explain: yields text chunks (strings), and finally { done: true, usage, model }.
+// Results name the model that answered: getProvider() may replace a configured model that no longer exists.
 import { settings } from '../core/settings.js';
 import { aiError, getProvider, throwIfAborted } from './providers.js';
 import {
@@ -34,7 +35,7 @@ export async function summarize(doc, { signal, paperId } = {}) {
   }), { paperId, task: 'summary' });
   const markdown = res.text.trim();
   if (!markdown) throw aiError('요약 결과가 비어 있습니다. 다시 시도해 주세요.', { code: 'parse' });
-  return { markdown: res.stopReason === 'max_tokens' ? markdown + TRUNCATED_NOTE : markdown, usage: res.usage, model };
+  return { markdown: res.stopReason === 'max_tokens' ? markdown + TRUNCATED_NOTE : markdown, usage: res.usage, model: res.model || model };
 }
 
 /**
@@ -88,7 +89,7 @@ export async function keyPoints(doc, { signal, paperId } = {}) {
     messages: [{ role: 'user', content: keyPointsPrompt(KEY_POINTS_MAX) }],
     json: KEYPOINTS_SCHEMA, maxTokens: 8000, effort: 'medium', signal,
   }), { paperId, task: 'keyPoints' });
-  return { items: selectKeyPoints(doc, res.json?.items, KEY_POINTS_MAX), usage: res.usage, model };
+  return { items: selectKeyPoints(doc, res.json?.items, KEY_POINTS_MAX), usage: res.usage, model: res.model || model };
 }
 
 /**
@@ -128,10 +129,11 @@ async function* streamTask(opts, { paperId }) {
   throwIfAborted(opts.signal);
   let usage = null;
   let stopReason = null;
+  let model = null; // the model that answered (another one when the configured model was replaced, js/ai/models.js)
   try {
     for await (const ev of getProvider().stream(opts)) {
       if (ev.type === 'text' && ev.text) yield ev.text;
-      else if (ev.type === 'done') ({ usage, stopReason } = ev);
+      else if (ev.type === 'done') ({ usage, stopReason, model = null } = ev);
     }
   } catch (err) {
     // Stopped or failed mid-answer: what was already generated (and the whole prompt) is billed.
@@ -140,7 +142,7 @@ async function* streamTask(opts, { paperId }) {
   }
   if (usage) recordUsage(usage, { paperId, task: opts.task });
   if (stopReason === 'max_tokens') yield TRUNCATED_NOTE;
-  yield { done: true, usage, model: opts.model };
+  yield { done: true, usage, model: model || opts.model };
 }
 
 /** Keep the last turns, start with a user turn, merge consecutive same-role turns, drop empty ones. */

@@ -7,7 +7,7 @@
 // - system is always an array of text blocks; blocks marked `cache: true` get cache_control (prompt caching).
 // - non-streaming calls on Sonnet 5.5 / Opus 5.5 opt into server-side refusal fallback (beta).
 // makeClaudeProvider() also backs the invite-code relay (js/ai/relay.js): same requests, another baseURL and key.
-import { CLAUDE_MODELS, VENDOR } from '../core/config.js';
+import { CLAUDE_MODELS, DEFAULT_MODELS, VENDOR } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { aiError, throwIfAborted } from './providers.js';
 
@@ -94,6 +94,8 @@ export function makeClaudeProvider({ id, label, auth, missingKeyMessage, describ
     stream: (opts) => streamWith(ctx, opts),
     listModels: () => listModelsWith(ctx),
     testKey: () => testKeyWith(ctx),
+    pickDefaultModel: (models, kind) => pickClaudeModel(models, kind),
+    isLegacyModel: (modelId) => isLegacyClaudeModel(modelId),
   };
   providerState.set(provider, ctx.state);
   return provider;
@@ -205,6 +207,43 @@ async function testKeyWith(ctx) {
   } catch (err) {
     return { ok: false, message: err.message };
   }
+}
+
+// ───────────────────────────── models ─────────────────────────────
+
+const CLAUDE_ID = /^claude-(haiku|sonnet|opus)-(\d+)(?:-(\d{1,2}))?(?:-(\d{8}))?$/;
+
+/**
+ * Ids new keys cannot use: the retired naming scheme (claude-3-5-sonnet-…, claude-3-haiku-…, claude-2.1,
+ * claude-instant-1.2). Current ids start with the family name (claude-haiku-5-5).
+ */
+export function isLegacyClaudeModel(id) {
+  return /^claude-(?:instant\b|\d)/.test(String(id || ''));
+}
+
+/**
+ * Default model for a task from a live model list: translation → the newest Haiku (fast, cheap), summaries/chat →
+ * the newest Sonnet (else Haiku, then Opus). An empty or Claude-less list (listing failed) → DEFAULT_MODELS.claude.
+ * @param {({ id: string } | string)[]} models
+ * @param {'translate'|'assist'} [kind]
+ */
+export function pickClaudeModel(models, kind = 'translate') {
+  const ids = (models || []).map((m) => (typeof m === 'string' ? m : m?.id))
+    .filter((id) => typeof id === 'string' && CLAUDE_ID.test(id) && !isLegacyClaudeModel(id));
+  const order = kind === 'translate' ? ['haiku', 'sonnet', 'opus'] : ['sonnet', 'haiku', 'opus'];
+  for (const family of order) {
+    const newest = ids.filter((id) => CLAUDE_ID.exec(id)[1] === family).sort(newerClaudeFirst)[0];
+    if (newest) return newest;
+  }
+  return DEFAULT_MODELS.claude[kind === 'translate' ? 'translate' : 'assist'];
+}
+
+/** Sort: higher version first; for the same version the undated alias before dated snapshots, newer dates first. */
+function newerClaudeFirst(a, b) {
+  const [, , aMajor, aMinor = '0', aDate = ''] = CLAUDE_ID.exec(a);
+  const [, , bMajor, bMinor = '0', bDate = ''] = CLAUDE_ID.exec(b);
+  return Number(bMajor) - Number(aMajor) || Number(bMinor) - Number(aMinor)
+    || (aDate ? 1 : 0) - (bDate ? 1 : 0) || bDate.localeCompare(aDate);
 }
 
 // ───────────────────────────── internals ─────────────────────────────
@@ -362,7 +401,9 @@ function toKoreanError(err, sdk, { model, signal } = {}) {
     return make('이 API 키로는 요청한 Claude 모델이나 기능을 사용할 권한이 없습니다. Anthropic Console에서 권한을 확인해 주세요.', 'permission');
   }
   if (err instanceof sdk.NotFoundError) {
-    return make(`Claude 모델을 찾을 수 없습니다${model ? `(${model})` : ''}. 설정에서 모델을 다시 선택해 주세요.`, 'not_found');
+    // On a Messages request a 404 means the model (retired, or not available to this key): `model` lets the
+    // caller pick another one (js/ai/models.js).
+    return make(`Claude 모델을 찾을 수 없습니다${model ? `(${model})` : ''}. 설정에서 모델을 다시 선택해 주세요.`, 'not_found', model ? { model } : {});
   }
   if (err instanceof sdk.RateLimitError) {
     return make('Claude 요청 한도(분당 요청·토큰 수)를 초과했습니다. 잠시 후 다시 시도하거나 설정에서 동시 번역 수를 줄여 주세요.', 'rate_limit');

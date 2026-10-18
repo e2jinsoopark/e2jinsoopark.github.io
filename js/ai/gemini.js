@@ -114,13 +114,14 @@ export const geminiProvider = {
     return out.sort((a, b) => geminiVersion(b.id) - geminiVersion(a.id) || a.id.localeCompare(b.id));
   },
 
-  pickDefaultModel: (models) => pickGeminiModel(models),
+  pickDefaultModel: (models, kind) => pickGeminiModel(models, kind),
   isLegacyModel: (id) => isLegacyGeminiModel(id),
 
+  /** Lists the key's models (free); the list comes back as `models` so the caller need not list them again. */
   async testKey() {
     try {
       const models = await geminiProvider.listModels();
-      return { ok: true, message: `Gemini API 키가 확인되었습니다(사용 가능한 모델 ${models.length}개).` };
+      return { ok: true, message: `Gemini API 키가 확인되었습니다(사용 가능한 모델 ${models.length}개).`, models };
     } catch (err) {
       return { ok: false, message: err.message };
     }
@@ -144,19 +145,31 @@ export function isLegacyGeminiModel(id) {
 }
 
 /**
- * Default model for a free-tier key: the newest stable plain Flash (e.g. gemini-3.8-flash). Pro models are not on
- * the free tier, so Flash is used for assist tasks as well.
- * @param {{ id: string }[]} models
+ * Default model for a task: the newest stable plain Flash (e.g. gemini-3.8-flash) for translation and for
+ * summaries/chat alike. Flash is the safe default: the model list does not say whether a key may call Pro (free-tier
+ * keys list Pro models but cannot use them), so a Pro model is never picked automatically — the user can still
+ * choose one in 설정. Fallbacks: gemini-flash-latest → a preview Flash → any Flash (for summaries/chat not a
+ * "-lite" one while another exists; never a speech/image variant) → another text model. Legacy (2.x) ids are used
+ * only when the key lists nothing newer (an old project may still run them), the same way.
+ * @param {({ id: string } | string)[]} models
+ * @param {'translate'|'assist'} [kind]
  */
-export function pickGeminiModel(models) {
-  const ids = (models || []).map((m) => m.id);
-  const newest = (re) => ids.filter((id) => re.test(id) && !isLegacyGeminiModel(id))
-    .sort((a, b) => geminiVersion(b) - geminiVersion(a))[0];
-  return newest(/^gemini-\d+(\.\d+)?-flash$/)
-    || (ids.includes('gemini-flash-latest') ? 'gemini-flash-latest' : '')
-    || newest(/^gemini-\d+(\.\d+)?-flash(-preview)?$/)
-    || newest(/flash/)
-    || ids[0] || '';
+export function pickGeminiModel(models, kind = 'translate') {
+  const all = (models || []).map((m) => (typeof m === 'string' ? m : m?.id)).map((id) => String(id || '').replace(/^models\//, '')).filter(Boolean);
+  const special = /tts|image|audio|live|embedding|native|transcribe|computer-use|robotics/;
+  const pick = (ids) => {
+    const newest = (re, skip = null) => ids.filter((id) => re.test(id) && !skip?.test(id))
+      .sort((a, b) => geminiVersion(b) - geminiVersion(a))[0];
+    return newest(/^gemini-\d+(\.\d+)?-flash$/)
+      || (ids.includes('gemini-flash-latest') ? 'gemini-flash-latest' : '')
+      || newest(/^gemini-\d+(\.\d+)?-flash(-preview)?$/)
+      || (kind === 'assist' ? newest(/flash/, new RegExp(`${special.source}|lite`)) : '')
+      || newest(/flash/, special)
+      || newest(/^gemini-/, special)
+      || '';
+  };
+  return pick(all.filter((id) => !isLegacyGeminiModel(id))) || pick(all.filter(isLegacyGeminiModel))
+    || all.find((id) => !special.test(id)) || '';
 }
 
 function apiKey() {
@@ -209,9 +222,9 @@ function retryDelayMs(status, data, attempt) {
 function httpErrorFromBody(status, data, model) {
   const e = data?.error || {};
   const reasons = (e.details || []).map((d) => d.reason).filter(Boolean);
-  const make = (message, code) => {
+  const make = (message, code, extra = {}) => {
     console.warn('[ai] Gemini error', status, e.status || '', e.message || '');
-    return aiError(message, { code, status });
+    return aiError(message, { code, status, ...extra });
   };
   if (reasons.includes('API_KEY_INVALID') || status === 401) {
     return make('Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.', 'auth');
@@ -220,7 +233,8 @@ function httpErrorFromBody(status, data, model) {
     return make('이 API 키로 Gemini API를 사용할 권한이 없습니다. Google AI Studio에서 키와 API 사용 설정을 확인해 주세요.', 'permission');
   }
   if (status === 404) {
-    return make(`Gemini 모델을 찾을 수 없습니다${model ? `(${model})` : ''}. 설정에서 모델을 다시 선택해 주세요.`, 'not_found');
+    // Retired ids and the 2.x models new keys may not use answer 404: `model` lets the caller pick another one.
+    return make(`Gemini 모델을 찾을 수 없습니다${model ? `(${model})` : ''}. 설정에서 모델을 다시 선택해 주세요.`, 'not_found', model ? { model } : {});
   }
   if (status === 429) {
     return make('Gemini 사용 한도를 초과했습니다. 무료 등급은 하루 요청 수(일일 할당량)와 분당 요청 수가 제한되어 있어, 일일 할당량을 다 쓰면 다음 날(태평양 시간 자정) 초기화될 때까지 기다려야 합니다. 잠시 후 다시 시도하거나 동시 번역 수를 줄여 주세요.', 'quota');

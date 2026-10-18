@@ -11,7 +11,7 @@ export const HIGHLIGHT_COLORS = Object.freeze([
 ]);
 export const COLOR_LABELS = Object.freeze(Object.fromEntries(HIGHLIGHT_COLORS.map((c) => [c.id, c.label])));
 
-export const AI_NOT_READY_MESSAGE = 'AI를 쓰려면 설정에서 초대 코드나 API 키를 먼저 입력해 주세요.';
+export const AI_NOT_READY_MESSAGE = 'AI를 쓰려면 설정 → AI 번역에서 초대 코드를 넣거나 Claude·GPT·Gemini 중 하나의 API 키를 먼저 입력해 주세요.';
 export const NO_TEXT_MESSAGE = '이 PDF에는 추출할 수 있는 텍스트가 없습니다(스캔본일 수 있습니다).';
 
 /** An AbortSignal that aborts as soon as any of the given signals does. Falsy entries are ignored. */
