@@ -439,6 +439,8 @@ class ReaderView {
     const els = this.#els;
     if (!tr || !els.tr) return;
     const { done = 0, total = 0, costUsd = 0 } = tr.progress || {};
+    // Sentences copied as-is (URLs, numbers) count as done but do not mean a run has happened.
+    const translated = tr.progress?.translated ?? done;
     const running = this.#runs.size > 0;
     const complete = total > 0 && done >= total;
     const available = this.#canTranslate();
@@ -446,7 +448,7 @@ class ReaderView {
     const pct = Math.floor(ratio * 100);
     const { main, wrap, progress, bar, cost, stop } = els.tr;
 
-    const label = running ? '번역 중…' : complete ? '번역 완료' : done > 0 ? '이어서 번역' : '번역 시작';
+    const label = running ? '번역 중…' : complete ? '번역 완료' : translated > 0 ? '이어서 번역' : '번역 시작';
     main.querySelector('.btn-label').textContent = label;
     main.replaceChild(running ? spinner(15) : icon(complete ? 'check' : 'languages', { size: 18 }), main.firstChild);
     main.disabled = running || complete || !available || this.#paperDeleted;
@@ -454,7 +456,7 @@ class ReaderView {
     main.title = !available ? this.#unavailableReason() : complete ? '모든 문장을 번역했습니다'
       : `현재 쪽부터 논문 전체를 번역합니다 (${done}/${total} 문장 완료${estimate ? ` · 남은 문장 ${estimate}` : ''})`;
     wrap.classList.toggle('is-complete', complete && !running);
-    progress.hidden = !(running || (done > 0 && !complete));
+    progress.hidden = !(running || (translated > 0 && !complete));
     bar.set(ratio);
     els.tr.pct.textContent = `${pct}%`;
     cost.textContent = costUsd ? formatUsd(costUsd) : '';
@@ -463,7 +465,7 @@ class ReaderView {
     const failed = this.#pane?.failedSids.length || 0;
     const status = [];
     if (!total) status.push(this.#doc?.hasTextLayer === false ? '스캔 PDF — 번역할 텍스트가 없습니다' : '번역할 문장이 없습니다');
-    else if (!done && !running && available) {
+    else if (!translated && !running && available) {
       // Before the first run, say what the button does and roughly what it costs.
       const estimate = this.#costEstimateText();
       status.push(`아직 번역 전입니다 · ‘번역 시작’을 누르면 현재 쪽부터 논문 전체(${total.toLocaleString('ko-KR')}문장${estimate ? `, ${estimate}` : ''})를 번역합니다`);

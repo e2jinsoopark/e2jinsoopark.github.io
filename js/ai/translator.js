@@ -96,12 +96,15 @@ export class Translator extends EventTarget {
     const sids = this._translatableSids();
     let done = 0;
     let failed = 0;
+    let translated = 0; // done by the model (cached or new), i.e. excluding sentences copied as-is
     for (const sid of sids) {
-      if (this._map.has(sid)) done++;
-      else if (this._failed.has(sid)) failed++;
+      if (this._map.has(sid)) {
+        done++;
+        if (this._items.has(sid)) translated++;
+      } else if (this._failed.has(sid)) failed++;
     }
     return {
-      done, total: sids.length, costUsd: this._costUsd, failed,
+      done, translated, total: sids.length, costUsd: this._costUsd, failed,
       pending: this._queue.length + this._inflight.size, running: this.running,
     };
   }

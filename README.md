@@ -4,6 +4,8 @@
 어느 쪽이든 문장에 마우스를 올리면 반대쪽의 짝 문장이 함께 표시됩니다.
 GitHub Pages에서 바로 열리는 정적 웹앱이라 설치할 것이 없습니다.
 
+**바로 열기: <https://e2jinsoopark.github.io/>** (가짜 AI로 둘러보기: <https://e2jinsoopark.github.io/?mock=1>)
+
 ## 주요 기능
 
 | 기능 | 설명 |
@@ -45,6 +47,7 @@ API 키와 GitHub 토큰은 **그 브라우저에만** 저장됩니다. 다른 �
 
 1. 논문을 저장할 **비공개** 저장소를 하나 준비합니다 (예: `paper-library`).
 2. <https://github.com/settings/personal-access-tokens/new> 에서 **Fine-grained token** 만들기
+   - Resource owner: 저장소를 가진 계정(보통 본인 개인 계정)
    - Repository access: **Only select repositories** → 위 저장소 하나만 선택
    - Permissions → Repository permissions → **Contents: Read and write** (나머지는 건드리지 않음)
    - 만료 기간을 정하고 **Generate token**
