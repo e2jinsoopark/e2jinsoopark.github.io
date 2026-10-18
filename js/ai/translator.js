@@ -4,15 +4,19 @@
 // - Queue: every translate*() call puts its sentences at the FRONT of one shared queue (latest request first,
 //   reading order within it); a pool of workers (settings.translate.concurrency) drains it in batches.
 // - Batches: queued sentences in reading order, ≤ LIMITS.translateBatchMaxSentences and ≤ translateBatchMaxChars.
-//   Each request = stable cached system prompt (rules + title/abstract/glossary) + 2 preceding source sentences.
+//   Each request = stable cached system prompt (rules + title/abstract/glossary) + 2 preceding source sentences
+//   + the paper's established terms that occur in the batch (after the cached prefix, see terms.js).
 // - The first batch of a cold run goes alone so it writes the prompt cache; the other workers start after it.
 // - Ids missing from a response are retried once; a batch cut by max_tokens is split in half. Then: failed.
+// - A translation that is still the English source (no Hangul although the sentence has words to translate) is
+//   re-requested once, then marked failed (retryable) - never counted as done.
 import { emit } from '../core/bus.js';
 import { LIMITS } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { clamp, hash } from '../core/util.js';
 import { aiError, getProvider, isAbort } from './providers.js';
-import { TRANSLATION_SCHEMA, translationSystem, translationUserMessage } from './prompts.js';
+import { MAX_TERMS_PER_REQUEST, TRANSLATION_SCHEMA, translationSystem, translationUserMessage } from './prompts.js';
+import { glossaryKeys, TermMap } from './terms.js';
 import { addUsage, costUsd, emptyUsage, recordUsage } from './usage.js';
 
 const BASE_KINDS = ['body', 'heading', 'caption'];
@@ -34,8 +38,40 @@ const ID_LABELS = /\b(?:e-?mail|email|doi|url|orcid|https?|www|available\s+(?:at
 // e.g. an exhausted API credit balance is reported as a 400).
 const RUN_STOPPING_CODES = new Set(['quota', 'bad_request']);
 const MAX_INTRODUCED_TERMS = 80;
-// Common English function words: a sentence with several of them is prose, so its translation must contain Hangul.
-const FUNCTION_WORDS = new Set(['the', 'of', 'and', 'in', 'to', 'with', 'for', 'was', 'were', 'is', 'are', 'that', 'this', 'by', 'on', 'from', 'as', 'be', 'or', 'an', 'at', 'which', 'these', 'their', 'has', 'have', 'had', 'not', 'than', 'between']);
+const HANGUL = /[가-힣]/;
+// Chinese characters or kana in a Korean answer whose source has none: a model slip (Haiku 5.5 wrote 文献 for 문헌,
+// 중症 for 중증 in real runs). Korean nursing prose does not use hanja, so it is re-requested once like other problems.
+const FOREIGN_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+const UNTRANSLATED_MESSAGE = '영어 그대로 돌아온 번역은 실패로 표시했습니다. 문장 옆 ‘다시 시도’로 다시 번역하거나, 설정에서 번역 모델을 바꿔 보세요.';
+
+// -- "has words to translate" (hasWordsToTranslate) --
+// Lower-case words that do not make a line translatable: name particles and title connectors ("Nursing in
+// Critical Care", "van der Berg"), units, statistics and Latin abbreviations.
+const NON_CONTENT = new Set([
+  'of', 'and', 'the', 'in', 'for', 'on', 'at', 'to', 'with', 'by', 'from', 'an', 'via', 'de', 'del', 'della', 'der', 'den',
+  'van', 'von', 'du', 'la', 'le', 'da', 'di', 'dos', 'das', 'el', 'al', 'bin', 'ibn', 'et', 'und', 'zu', 'y',
+  'mg', 'kg', 'ml', 'dl', 'mmhg', 'cm', 'mm', 'kcal', 'mmol', 'mol', 'min', 'hr', 'hrs', 'sec', 'ms', 'wk', 'wks', 'yr', 'yrs',
+  'mo', 'iu', 'ng', 'pg', 'df', 'sd', 'se', 'ci', 'or', 'rr', 'ns', 'ln', 'log', 'exp', 'max', 'vs', 'cf', 'ie', 'eg', 'etc',
+  'ca', 'approx', 'pp', 'vol', 'no', 'ed', 'eds',
+]);
+// Words that make a line prose in any capitalisation ("WHAT IS KNOWN ABOUT THIS TOPIC"); never part of names.
+const PROSE_WORDS = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'has', 'have', 'had', 'this', 'that', 'these',
+  'those', 'which', 'what', 'who', 'how', 'why', 'not', 'than', 'between', 'about', 'there', 'its', 'we', 'our', 'they',
+  'their', 'can', 'may', 'should', 'would', 'could', 'will']);
+// Capitalised words that always have a Korean rendering: section headings, front-matter labels, affiliation units and
+// months. Words that also occur in journal or institution names (Research, Review, Studies, Clinical, Hospital,
+// University, Institute, Center, Nursing, Care) are deliberately absent, so a name kept in English is not "untranslated".
+const LABEL_WORDS = new Set([
+  'abstract', 'introduction', 'background', 'method', 'methods', 'methodology', 'results', 'discussion', 'conclusion',
+  'conclusions', 'limitations', 'implications', 'acknowledgement', 'acknowledgements', 'acknowledgment', 'acknowledgments',
+  'references', 'appendix', 'keywords', 'keyword', 'correspondence', 'corresponding', 'received', 'revised', 'accepted',
+  'funding', 'department', 'division', 'faculty', 'january', 'february', 'march', 'april', 'june', 'july',
+  'august', 'september', 'october', 'november', 'december',
+]);
+// Two-word labels ("open access", "School of Nursing", "META-ANALYSIS") on the lower-cased words.
+const LABEL_PHRASES = /\b(?:open access|school of|college of|meta analysis|original article|research article|review article|conflicts? of interest|author contributions?|data availability|ethics statement|supporting information)\b/;
+// A "Label:" at the start of the line or after a "|" separator (Keywords:, Correspondence:, Received:, Background:).
+const LABEL_COLON = /(?:^|\|)\s*[A-Za-z][A-Za-z-]*(?:\s+[A-Za-z][A-Za-z-]*){0,3}\s*:(?!\/)/;
 
 /**
  * @typedef {{ done: number, total: number, costUsd: number, failed: number, pending: number, running: boolean }} Progress
@@ -66,6 +102,8 @@ export class Translator extends EventTarget {
     /** English terms already given in parentheses in this paper's translations (first-mention rule across batches). */
     this._introduced = [];
     this._introducedSet = new Set();
+    /** Korean renderings this paper's translations established for recurring terms (sent to later batches). */
+    this._terms = new TermMap();
     /** @type {Map<string, AbortSignal>} sid → signal of the run that sent it (stale runs must not touch it) */
     this._inflight = new Map();
     this._queue = [];
@@ -137,15 +175,26 @@ export class Translator extends EventTarget {
     return out;
   }
 
-  /** Translation data file contents (SPEC 2.2 kind 'translation'). */
+  /** Established term renderings of this paper, in the order they were established: [{ en, ko }]. */
+  get terms() {
+    return this._terms.list();
+  }
+
+  /**
+   * Translation data file contents (SPEC 2.2 kind 'translation'). `terms` (optional, added 2026-10-18) holds the
+   * established renderings `{ [key]: { en, ko } }`; older readers ignore it.
+   */
   toJSON() {
-    return {
+    const out = {
       version: 1,
       targetLang: this._targetLang,
       segVersion: this.doc?.segVersion ?? null,
       updatedAt: Date.now(),
       items: Object.fromEntries(this._items),
     };
+    const terms = this._terms.toJSON();
+    if (terms) out.terms = terms;
+    return out;
   }
 
   /**
@@ -155,8 +204,9 @@ export class Translator extends EventTarget {
    */
   mergeCached(cached) {
     const added = [];
-    for (const [sid, item] of this._validCachedItems(cached)) {
-      if (this._map.has(sid)) continue;
+    if (this._sameLang(cached)) this._terms.load(cached.terms);
+    for (const [sid, item, bad] of this._validCachedItems(cached)) {
+      if (bad || this._map.has(sid)) continue;
       this._items.set(sid, item);
       this._map.set(sid, item.t);
       this._failed.delete(sid);
@@ -340,6 +390,9 @@ export class Translator extends EventTarget {
       const s = this._byId.get(sid);
       return { sid, kind: s.kind, text: s.text };
     });
+    const context = this._contextFor(sids[0]);
+    const glossary = glossaryKeys(settings.get().translate?.glossary);
+    const source = [...context, ...items].map((x) => x.text).join('\n');
     let result;
     try {
       result = await this._provider().complete({
@@ -348,7 +401,11 @@ export class Translator extends EventTarget {
         system: translationSystem(this.doc, settings.get().translate || {}),
         messages: [{
           role: 'user',
-          content: translationUserMessage({ items, context: this._contextFor(sids[0]), introduced: this._introducedTerms() }),
+          content: translationUserMessage({
+            items, context, introduced: this._introducedTerms(),
+            terms: this._terms.relevant(source, { glossary, max: MAX_TERMS_PER_REQUEST }),
+            retry: attempt > 1,
+          }),
         }],
         json: TRANSLATION_SCHEMA,
         maxTokens: batchMaxTokens(items),
@@ -365,8 +422,16 @@ export class Translator extends EventTarget {
     this._lastResponseAt = Date.now();
     this._consecutiveFailures = 0;
     this._addCost(result.usage);
-    const accepted = this._accept(result.json?.translations, sids, result.usage?.model || model, signal, { lastTry: attempt > 1 });
-    if (accepted.size) await this._persist();
+    const rejected = new Set();
+    const accepted = this._accept(result.json?.translations, sids, result.usage?.model || model, signal, { lastTry: attempt > 1, rejected });
+    if (accepted.size) {
+      this._terms.note(result.json?.terms, {
+        source: items.map((it) => it.text).join('\n'),
+        translations: [...accepted].map((sid) => this._map.get(sid)),
+        glossary,
+      });
+      await this._persist();
+    }
     this._emitProgress();
     const missing = sids.filter((sid) => !accepted.has(sid));
     if (!missing.length) return;
@@ -378,7 +443,13 @@ export class Translator extends EventTarget {
       console.warn('[ai] translation missing or implausible ids, retrying once:', missing.join(' '));
       return this._translateBatch(missing, signal, 2);
     }
-    this._fail(missing, aiError(`일부 문장(${missing.length}개)의 번역을 받지 못했습니다. 해당 문장을 다시 번역해 보세요.`, { code: 'parse' }), signal);
+    const untranslated = missing.filter((sid) => rejected.has(sid));
+    const lost = missing.filter((sid) => !rejected.has(sid));
+    if (untranslated.length) {
+      console.warn('[ai] translation still English after a retry, marked failed:', untranslated.join(' '));
+      this._fail(untranslated, aiError(UNTRANSLATED_MESSAGE, { code: 'parse' }), signal);
+    }
+    if (lost.length) this._fail(lost, aiError(`일부 문장(${lost.length}개)의 번역을 받지 못했습니다. 해당 문장을 다시 번역해 보세요.`, { code: 'parse' }), signal);
   }
 
   async _handleBatchError(err, sids, signal, attempt) {
@@ -432,10 +503,11 @@ export class Translator extends EventTarget {
 
   /**
    * Validate a response: known ids of this batch with non-empty text, first occurrence wins. A translation that
-   * looks unfaithful (numbers missing, no Korean in a prose sentence, far too short) is left out on the first try
-   * so it is re-requested once; on the last try it is kept but carries a warning (`w`) the reader shows.
+   * looks unfaithful (still English, numbers missing, far too short) is left out on the first try so it is
+   * re-requested once. On the last try a translation that is still English is rejected (added to `rejected`; the
+   * caller marks it failed); any other problem is kept with a warning (`w`) the reader shows.
    */
-  _accept(translations, sids, model, signal, { lastTry = true } = {}) {
+  _accept(translations, sids, model, signal, { lastTry = true, rejected = null } = {}) {
     const want = new Set(sids);
     const got = new Set();
     const warned = [];
@@ -446,6 +518,7 @@ export class Translator extends EventTarget {
       const s = this._byId.get(id);
       const problem = fidelityProblem(s, ko);
       if (problem && !lastTry) continue;
+      if (problem === 'untranslated') { rejected?.add(id); continue; }
       const item = { h: hash(s.text), t: ko, m: model };
       if (problem) { item.w = problem; warned.push(id); }
       this._items.set(id, item);
@@ -577,20 +650,28 @@ export class Translator extends EventTarget {
   }
 
   _loadCache(cached) {
-    for (const [sid, item] of this._validCachedItems(cached)) {
+    if (this._sameLang(cached)) this._terms.load(cached.terms);
+    for (const [sid, item, bad] of this._validCachedItems(cached)) {
+      // Saved before an English answer counted as a failure: shown as failed (retryable), not as done.
+      if (bad) { this._failed.add(sid); continue; }
       this._items.set(sid, item);
       this._map.set(sid, item.t);
       this._noteIntroduced(item.t);
     }
   }
 
+  _sameLang(cached) {
+    return Boolean(cached && typeof cached === 'object') && (!cached.targetLang || cached.targetLang === this._targetLang);
+  }
+
   /**
-   * Cache items that still match the current sentence text (and target language). A sid whose stored item does
-   * not match falls back to any stored item with the same text hash (a resegmentation shifted the sids).
+   * Cache items that still match the current sentence text (and target language), as [sid, item, bad]. A sid whose
+   * stored item does not match falls back to any stored item with the same text hash (a resegmentation shifted the
+   * sids). `bad`: the stored translation is still the English source (fidelityProblem 'untranslated').
    */
   *_validCachedItems(cached) {
     if (!cached || typeof cached.items !== 'object' || cached.items === null) return;
-    if (cached.targetLang && cached.targetLang !== this._targetLang) return;
+    if (!this._sameLang(cached)) return;
     let byHash = null;
     for (const s of this._sentences) {
       const h = hash(s.text);
@@ -599,7 +680,9 @@ export class Translator extends EventTarget {
         byHash ??= hashIndex(cached.items);
         it = byHash.get(h);
       }
-      if (it) yield [s.sid, it.w ? { h, t: it.t, m: it.m || '', w: it.w } : { h, t: it.t, m: it.m || '' }];
+      if (!it) continue;
+      const item = it.w ? { h, t: it.t, m: it.m || '', w: it.w } : { h, t: it.t, m: it.m || '' };
+      yield [s.sid, item, s.kind !== 'furniture' && fidelityProblem(s, it.t) === 'untranslated'];
     }
   }
 
@@ -645,13 +728,37 @@ function hashIndex(items) {
 }
 
 /**
- * Cheap checks that a translation is not missing content: every multi-digit number / decimal of the source is
- * still there; a prose sentence came back with Korean in it; a long sentence is not cut to a fragment.
+ * True when a sentence has words a Korean translation must render, so an answer without any Hangul is still the
+ * English source. False for copy-as-is content (URLs, DOIs, e-mail addresses, numbers) and for lines of names only
+ * (author lists, a journal title such as "Nursing in Critical Care", "Taipei, Taiwan", "RCT"). Signals, in order:
+ * a "Label:" (Keywords:, Correspondence:, Received:), a prose word in any case, a heading / front-matter / affiliation
+ * word or month, a two-word label (open access, School of), any other lower-case word.
+ */
+export function hasWordsToTranslate(text) {
+  if (isCopyAsIs(text)) return false;
+  const rest = String(text).replace(IDENTIFIERS, ' ').replace(ID_LABELS, ' ');
+  if (LABEL_COLON.test(rest)) return true;
+  if (LABEL_PHRASES.test(rest.toLowerCase().replace(/[^a-z]+/g, ' '))) return true;
+  for (const token of rest.match(/[A-Za-z][A-Za-z’']*/g) || []) {
+    const word = token.toLowerCase().replace(/[’'].*$/, '');
+    if (word.length < 2) continue;
+    if (PROSE_WORDS.has(word) || LABEL_WORDS.has(word)) return true;
+    if (token[0] >= 'a' && token[0] <= 'z' && !NON_CONTENT.has(word)) return true;
+  }
+  return false;
+}
+
+/**
+ * Cheap checks that a translation is usable: it is not still the English source (no Hangul although the sentence
+ * has words to translate: 'untranslated', never accepted as done); no Chinese characters or kana crept in ('script');
+ * every multi-digit number / decimal of the source is still there; a long sentence is not cut to a fragment.
  * Returns a short reason, or null.
  */
 export function fidelityProblem(sentence, ko) {
   const text = sentence?.text || '';
   if (sentence?.kind === 'reference' || isCopyAsIs(text)) return null;
+  if (!HANGUL.test(ko) && hasWordsToTranslate(text)) return 'untranslated';
+  if (FOREIGN_SCRIPT.test(ko) && !FOREIGN_SCRIPT.test(text)) return 'script';
   // Number tokens with their decimal point (".05" and "0.05" compare equal); single digits are skipped (often
   // written as Korean words); thousands separators are ignored.
   const nums = (s) => (s.replace(/(\d),(?=\d{3}\b)/g, '$1').match(/\.?\d+(?:\.\d+)*/g) || [])
@@ -663,9 +770,6 @@ export function fidelityProblem(sentence, ko) {
     if (!c) return 'numbers';
     have.set(n, c - 1);
   }
-  const words = text.toLowerCase().match(/[a-z]{2,}/g) || [];
-  const functionWords = new Set(words.filter((w) => FUNCTION_WORDS.has(w)));
-  if (words.length >= 6 && functionWords.size >= 2 && !/[가-힣]/.test(ko)) return 'untranslated';
   if (text.length > 80 && ko.length < text.length * 0.2) return 'short';
   return null;
 }

@@ -914,6 +914,57 @@ try {
     return `${st.hash} → “${st.title.slice(0, 40)}…”, ${st.translated} translated spans, button “${st.label}”, annotations on [${st.annotated}], ${st.auto} key-point sentences, ${st.translateCalls} translate calls after reload`;
   });
 
+  await test('regression untranslated-counted-done (reader): a stored translation that is still English opens as failed with 다시 시도; the retry translates it', async () => {
+    const path = `papers/${paperIds.lu2025}/translation.json`;
+    // What an older version saved for a front-matter line the model left in English (kept as done, with a warning).
+    const sid = await page.evaluate(async (path) => {
+      const idb = await new Promise((res, rej) => { const r = indexedDB.open('paper-reader'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      const rec = await new Promise((res, rej) => { const g = idb.transaction('files').objectStore('files').get(path); g.onsuccess = () => res(g.result); g.onerror = () => rej(g.error); });
+      const file = JSON.parse(typeof rec.data === 'string' ? rec.data : new TextDecoder().decode(rec.data));
+      const [id, item] = Object.entries(file.items).find(([, it]) => /^〔번역〕 [A-Z][a-z]+ [a-z]+ [a-z]+ [a-z]+/.test(it.t));
+      item.t = item.t.replace(/^〔번역〕 /, '');
+      item.w = 'untranslated';
+      await new Promise((res, rej) => {
+        const tx = idb.transaction('files', 'readwrite');
+        tx.objectStore('files').put({ ...rec, data: JSON.stringify(file), dirty: 1, mtime: Date.now() }, path);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+      idb.close();
+      return id;
+    }, path);
+    await page.reload();
+    await waitForReader(page);
+    const span = page.locator(`.tp-s.is-failed[data-sid="${sid}"]`);
+    await span.waitFor({ timeout: 10000 });
+    const before = await page.evaluate((sid) => ({
+      translated: document.querySelectorAll('.tp-s.is-translated').length,
+      failed: [...document.querySelectorAll('.tp-s.is-failed')].map((e) => e.dataset.sid),
+      retry: Boolean(document.querySelector(`.tp-s[data-sid="${sid}"] .tp-retry`)),
+      lang: document.querySelector(`.tp-s[data-sid="${sid}"]`).getAttribute('lang'),
+      status: document.querySelector('.tp-header-status')?.textContent || '',
+    }), sid);
+    assert(before.translated === 447 && before.failed.length === 1 && before.failed[0] === sid && before.retry && before.lang === 'en', JSON.stringify(before));
+    await shot(page, 'e2e-23-english-failed');
+    await span.locator('.tp-retry').click();
+    await page.waitForFunction((sid) => document.querySelector(`.tp-s.is-translated[data-sid="${sid}"]`), sid, { timeout: 10000 });
+    const after = await page.evaluate(async (sid) => {
+      const { mockControl } = await import('/js/ai/mock.js');
+      const out = {
+        text: document.querySelector(`.tp-s[data-sid="${sid}"]`).textContent,
+        failed: document.querySelectorAll('.tp-s.is-failed').length,
+        sent: mockControl.requests.filter((r) => r.task === 'translate').map((r) => r.ids),
+      };
+      mockControl.reset(); // later tests count this page's translate calls from zero (as after a reload)
+      return out;
+    }, sid);
+    assert(/^〔번역〕/.test(after.text) && after.failed === 0 && JSON.stringify(after.sent) === JSON.stringify([[sid]]), JSON.stringify(after));
+    const saved = await waitFor(async () => {
+      const f = await fileJson(page, path);
+      return f?.items?.[sid]?.t?.startsWith('〔번역〕') ? f.items[sid] : null;
+    }, 8000, 'retried translation saved');
+    return `${sid} opened as failed (lang=en, 다시 시도, status “${before.status.trim()}”); retry sent only [${after.sent}] → “${after.text.slice(0, 40)}…”, saved without warning=${!saved.w}`;
+  });
+
   // -------------------------------------------------------------------------------- sync
 
   /** Fill the GitHub form in 설정 and press 저장하고 동기화 시작. */

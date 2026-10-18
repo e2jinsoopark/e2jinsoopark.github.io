@@ -5,6 +5,9 @@ import { KNOWN_MODELS, MAX_CODE_DAILY_LIMIT_USD } from './config.js';
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const CODE_RE = /^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
 const NAME_MAX = 40;
+// U+FFFD (what a non-UTF-8 body decodes to) and lone surrogates (from "\ud800" escapes): text that cannot be shown.
+const BROKEN_TEXT = /\uFFFD|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/;
 
 /** A fresh code "PR-XXXX-XXXX" (40 random bits; 256 is a multiple of 32, so `byte & 31` is unbiased). */
 export function generateCode() {
@@ -39,6 +42,10 @@ export function validateCodeInput(body, { partial, defaults }) {
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const length = [...name].length;
     if (length < 1 || length > NAME_MAX) return { error: `이름(name)은 1~${NAME_MAX}자로 입력해 주세요.` };
+    if (BROKEN_TEXT.test(name)) {
+      return { error: '이름(name)에 깨진 글자(�)가 있습니다. 보내는 쪽의 인코딩이 UTF-8이 아니었을 수 있습니다. UTF-8로 다시 입력해 주세요.' };
+    }
+    if (CONTROL_CHARS.test(name)) return { error: '이름(name)에 줄바꿈이나 제어 문자를 넣을 수 없습니다.' };
     value.name = name;
   }
   if (body.active !== undefined) {

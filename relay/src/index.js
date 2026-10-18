@@ -24,6 +24,7 @@ const MSG = {
   noKey: '중계 서버에 Anthropic API 키가 설정되지 않았습니다. 관리자에게 알려 주세요.',
   badOrigin: '이 웹사이트(Origin)에서는 중계 서버를 쓸 수 없습니다.',
   badJson: '요청 본문이 올바른 JSON이 아닙니다.',
+  notUtf8: '요청 본문이 UTF-8이 아니어서 이름의 한글이 깨집니다. UTF-8로 다시 보내 주세요(앱의 초대 코드 관리 화면을 쓰거나, curl은 UTF-8로 저장한 파일을 --data-binary @파일.json으로 보내세요).',
   badShape: '요청 형식이 올바르지 않습니다. model, max_tokens(1 이상의 정수), messages(배열)가 필요합니다.',
   tooLarge: `요청이 너무 큽니다(최대 ${MAX_BODY_BYTES / 1024 / 1024}MB). 더 짧은 내용으로 다시 시도해 주세요.`,
   upstreamDown: 'Anthropic 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
@@ -350,13 +351,31 @@ function codeRecord(row) {
   };
 }
 
-/** @returns {Promise<{ value: any } | { error: Response }>} */
+/**
+ * Admin bodies must be UTF-8: a name typed in a Korean Windows console is often sent as CP949, which a lenient
+ * decoder turns into U+FFFD and the invitee then sees "������님". Such a body is refused with a Korean hint instead.
+ * @returns {Promise<{ value: any } | { error: Response }>}
+ */
 async function readAdminJson(request) {
   const read = await readBody(request, MAX_ADMIN_BODY_BYTES);
   if (read.tooLarge) return { error: apiError(413, 'request_too_large', '요청이 너무 큽니다.') };
-  const value = parseJson(read.bytes);
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.bytes);
+  } catch {
+    return { error: apiError(400, 'invalid_request_error', MSG.notUtf8) };
+  }
+  const value = parseJsonText(text);
   if (value === undefined) return { error: apiError(400, 'invalid_request_error', MSG.badJson) };
   return { value };
+}
+
+function parseJsonText(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 // ───────────────────────────── helpers ─────────────────────────────

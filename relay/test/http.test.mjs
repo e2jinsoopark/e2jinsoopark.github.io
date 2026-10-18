@@ -536,6 +536,37 @@ export const tests = [
     },
   },
   {
+    name: 'regression broken-invitee-name: a CP949 body or a U+FFFD name → 400 in Korean on create and patch; the stored name is unchanged',
+    fn: async () => {
+      // "테스트" in CP949 / EUC-KR, as a Korean Windows console sends it: not valid UTF-8.
+      const cp949 = Uint8Array.from([0xC5, 0xD7, 0xBD, 0xBA, 0xC6, 0xAE]);
+      assert.equal(new TextDecoder('euc-kr').decode(cp949), '테스트', 'fixture bytes are CP949 "테스트"');
+      const enc = new TextEncoder();
+      const body = (nameBytes) => Uint8Array.from([...enc.encode('{"name":"'), ...nameBytes, ...enc.encode('"}')]);
+      const headers = { 'content-type': 'application/json' };
+      const created = await call('/relay/admin/codes', { method: 'POST', admin: true, headers, body: body(cp949) });
+      const m1 = assertError(created, 400, 'invalid_request_error');
+      assert.match(m1, /UTF-8/);
+      assert.match(m1, /[가-힣]/);
+      const fffd = await call('/relay/admin/codes', { method: 'POST', admin: true, body: { name: '\uFFFD\uFFFD \uFFFD\u05BD\uFFFD\u01AE' } });
+      const m2 = assertError(fffd, 400, 'invalid_request_error');
+      assert.match(m2, /깨진 글자/);
+      const { code } = await newCode({ name: '정상 이름' });
+      const p1 = await call(`/relay/admin/codes/${code}`, { method: 'PATCH', admin: true, headers, body: body(cp949) });
+      assert.match(assertError(p1, 400, 'invalid_request_error'), /UTF-8/);
+      const p2 = await call(`/relay/admin/codes/${code}`, { method: 'PATCH', admin: true, body: { name: '홍길동\uFFFD' } });
+      assert.match(assertError(p2, 400, 'invalid_request_error'), /깨진 글자/);
+      const list = await call('/relay/admin/codes', { admin: true });
+      assert.equal(list.json.codes.find((c) => c.code === code).name, '정상 이름', 'refused patches change nothing');
+      const me = await call('/relay/me', { code });
+      assert.ok(!JSON.stringify(me.json).includes('\uFFFD'), me.text);
+      const fixed = await call(`/relay/admin/codes/${code}`, { method: 'PATCH', admin: true, body: { name: '관리자 테스트' } });
+      assert.equal(fixed.status, 200, fixed.text);
+      assert.equal(fixed.json.name, '관리자 테스트');
+      return `create CP949 → "${m1}"; U+FFFD name → "${m2}"; patch refused the same way; a UTF-8 patch repairs the name`;
+    },
+  },
+  {
     name: 'admin usage report: N consecutive KST days newest first, zeros included, byModel tokens',
     fn: async ({ fake }) => {
       const now = '2026-12-03T10:00:00+09:00';

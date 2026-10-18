@@ -68,6 +68,18 @@ await test('mergeTranslation: union, local wins per sid; another segVersion is u
   return JSON.stringify(v.items);
 });
 
+await test('mergeTranslation: `terms` (established term renderings) union by key, local wins a shared key, absent stays absent', () => {
+  const local = { segVersion: 1, items: {}, terms: { 'endotracheal tube': { en: 'endotracheal tube (ETT)', ko: '기관내관' } } };
+  const remote = { segVersion: 1, items: {}, terms: { 'endotracheal tube': { en: 'endotracheal tube', ko: '기관튜브' }, 'skin tear': { en: 'skin tear', ko: '피부 찢김' } } };
+  const m = mergeTranslation(local, remote);
+  assert(m.terms['endotracheal tube'].ko === '기관내관' && m.terms['skin tear'].ko === '피부 찢김', JSON.stringify(m.terms));
+  const old = mergeTranslation({ segVersion: 1, items: { a: { t: 'A' } } }, remote); // an older file without terms
+  assert(old.terms && Object.keys(old.terms).length === 2, `remote terms kept: ${JSON.stringify(old)}`);
+  const none = mergeTranslation({ segVersion: 1, items: {} }, { segVersion: 1, items: {} });
+  assert(!('terms' in none), 'no terms field invented');
+  return JSON.stringify(m.terms);
+});
+
 await test('regression library-tie-reverts-remote-fields: a 3-way-merged item supersedes both sides (no revert on the next write)', () => {
   // Laptop renamed P at t=2000; the desktop touched P (lastOpenedAt) at t=3000 before pulling.
   const base = { version: 1, folders: [], papers: [{ id: 'P', title: 'Old', lastOpenedAt: 1000, updatedAt: 1000 }] };

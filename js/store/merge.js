@@ -31,6 +31,8 @@ export function mergeAnnotations(local, remote, base = null) {
  * translation.json: union of items. On a sid present on both sides the higher segmentation version wins
  * (a sid can name a different sentence after resegmentation), local on a tie. Nothing is dropped wholesale:
  * every reader validates items by `h === hash(sentence.text)`, so items from either version stay usable.
+ * `terms` (the paper's established term renderings, `{ [key]: { en, ko } }`, optional) is a union by key too:
+ * remote's established order first, local wins a shared key (readers keep the first rendering of a concept).
  */
 export function mergeTranslation(local, remote) {
   if ((local.targetLang || 'ko') !== (remote.targetLang || 'ko')) return local;
@@ -38,13 +40,17 @@ export function mergeTranslation(local, remote) {
   const rs = Number(remote.segVersion) || 0;
   const li = isObject(local.items) ? local.items : {};
   const ri = isObject(remote.items) ? remote.items : {};
-  return {
+  const out = {
     ...remote,
     ...local,
     segVersion: ls || rs ? Math.max(ls, rs) : local.segVersion ?? remote.segVersion,
     updatedAt: newerTime(local.updatedAt, remote.updatedAt),
     items: rs > ls ? { ...li, ...ri } : { ...ri, ...li },
   };
+  if (isObject(local.terms) || isObject(remote.terms)) {
+    out.terms = { ...(isObject(remote.terms) ? remote.terms : {}), ...(isObject(local.terms) ? local.terms : {}) };
+  }
+  return out;
 }
 
 /**

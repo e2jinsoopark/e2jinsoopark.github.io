@@ -482,6 +482,39 @@ const tests = [
     },
   },
   {
+    name: 'regression hanja-slip: a Korean answer with Chinese characters (文献, 중症) is re-requested once; the clean retry is kept without a warning, a repeated slip is kept with one',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const bodies = translatable.filter((x) => x.kind === 'body');
+        const a = bodies[0];
+        const b = bodies[1];
+        let callsA = 0;
+        let callsB = 0;
+        mockControl.translateWith = (it) => {
+          if (it.sid === a.sid) { callsA++; return callsA === 1 ? '다음 기준에 해당하는 文献은 제외하였다.' : '다음 기준에 해당하는 문헌은 제외하였다.'; }
+          if (it.sid === b.sid) { callsB++; return '기관내관 삽관은 중症 환자에게 필수적인 중재이다.'; }
+          return '〔번역〕 ' + it.text;
+        };
+        const t = new Translator({ doc });
+        await t.translateAll();
+        return {
+          callsA, callsB, keptA: t.translations.get(a.sid), warnA: t.warnings.get(a.sid) ?? null,
+          keptB: t.translations.get(b.sid), warnB: t.warnings.get(b.sid) ?? null, savedB: t.toJSON().items[b.sid]?.w ?? null,
+          p: t.progress,
+        };
+      `);
+      assert.equal(r.callsA, 2, 'retried once');
+      assert.equal(r.keptA, '다음 기준에 해당하는 문헌은 제외하였다.');
+      assert.equal(r.warnA, null, 'the clean retry carries no warning');
+      assert.equal(r.callsB, 2, 'retried once, not more');
+      assert.equal(r.warnB, 'script');
+      assert.equal(r.savedB, 'script', 'the warning is saved with the item');
+      assert.equal(r.p.failed, 0, 'a script slip is a warning, never a failure');
+      return `A: ${r.callsA} requests → "${r.keptA}"; B: ${r.callsB} requests, kept with warning ${r.warnB}`;
+    },
+  },
+  {
     name: 'first-mention rule across batches: earlier English parentheticals are listed as introduced; context carries its Korean',
     query: Q,
     fn: async ({ page }) => {
@@ -523,6 +556,161 @@ const tests = [
       assert.equal(r.before.done, r.before.total);
       assert.equal(r.sent, 0, 'nothing re-sent');
       return `${r.before.done}/${r.before.total} restored by hash, ${r.sent} requests`;
+    },
+  },
+  {
+    name: 'regression term-drift: renderings one batch reports are binding for later batches (<terms> after the cached prefix), saved in translation.json, reloaded and merged; the glossary wins',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        const { mergeTranslation } = await import('/js/store/merge.js');
+        settings.set({ translate: { concurrency: 1, glossary: [] } });
+        const body = (p) => doc.sentences.filter((s) => s.page === p && s.kind === 'body');
+        const s1 = body(1)[2], s4 = body(4)[5], s9 = body(9)[3];
+        s1.text = 'An endotracheal tube (ETT) holder reduced medical device-related pressure injuries (MDRPIs).';
+        s4.text = 'Securing the ETTs prevented tube dislodgement in most patients.';
+        s9.text = 'MDRPIs were less frequent with holders, and the endotracheal tubes stayed in place for the whole stay in the unit.';
+        const ko = (t) => '〔번역〕 ' + t.replace(/endotracheal tubes?/gi, '기관내관').replace(/medical device-related pressure injur(?:y|ies)/gi, '의료기기 관련 욕창');
+        const report = (req) => (req.items.some((it) => /endotracheal/i.test(it.text))
+          ? [{ en: 'endotracheal tube (ETT)', ko: '기관내관' }, { en: 'medical device-related pressure injury (MDRPI)', ko: '의료기기 관련 욕창 (MDRPI)' },
+            { en: 'holder', ko: '홀더' } /* not what the translation says */, { en: 'endotracheal tube', ko: '기관내 튜브' } /* a second rendering */]
+          : []);
+        mockControl.translateWith = (it) => ko(it.text);
+        mockControl.termsWith = report;
+        const saves = [];
+        const t = new Translator({ doc, save: async (o) => { saves.push(JSON.parse(JSON.stringify(o))); } });
+        await t.translateAll();
+        const rs = reqs();
+        const reqOf = (s) => rs.find((q) => q.ids.includes(s.sid));
+        const sys0 = JSON.stringify(rs[0].system);
+        const ctxText = (q) => P.parseTranslationUserMessage(q.messages[0].content).context.join(' ');
+        const mentions = (q) => /\\bETTs?\\b|endotracheal|MDRPI/i.test(q.items.map((i) => i.text).join(' ') + ' ' + ctxText(q));
+        const firstAt = rs.indexOf(reqOf(s1));
+        const out = {
+          terms: t.terms, firstAt,
+          before: rs.slice(0, firstAt + 1).map((q) => q.terms.length),
+          at4: reqOf(s4).terms, at9: reqOf(s9).terms,
+          unrelated: rs.filter((q, i) => i > firstAt && !mentions(q)).map((q) => q.terms.length),
+          sameSystem: rs.every((q) => JSON.stringify(q.system) === sys0),
+          listInSystem: sys0.includes('→ 기관내관'),
+          userHasList: reqOf(s4).messages[0].content.includes('<terms>\\nendotracheal tube (ETT) → 기관내관\\n</terms>'),
+          saved: saves.at(-1).terms, savedItems: Object.keys(saves.at(-1).items).length,
+        };
+        // Reopened from the file, and merged with another device's file (union by key, first rendering kept).
+        const file = saves.at(-1);
+        out.reloaded = new Translator({ doc, cached: file }).terms;
+        const other = { ...file, items: {}, terms: { 'skin tear': { en: 'skin tear', ko: '피부 찢김' }, 'endotracheal tube': { en: 'endotracheal tube', ko: '기관튜브' } } };
+        const merged = mergeTranslation(file, other);
+        out.mergedKeys = Object.keys(merged.terms);
+        out.merged = new Translator({ doc, cached: merged }).terms.map((x) => x.en + '=' + x.ko);
+        const late = new Translator({ doc });
+        late.mergeCached(other);
+        out.mergeCachedTerms = late.terms.map((x) => x.ko);
+        // The user's glossary overrides an established term: it is no longer sent for that term.
+        mockControl.reset(); mockControl.latencyMs = 5; mockControl.translateWith = (it) => ko(it.text);
+        settings.set({ translate: { glossary: [{ src: 'endotracheal tube', tgt: '기관 내 튜브' }] } });
+        const g = new Translator({ doc, cached: { ...file, items: {} } });
+        await g.translateAll();
+        out.glossed4 = reqs().find((q) => q.ids.includes(s4.sid)).terms;
+        out.glossed9 = reqs().find((q) => q.ids.includes(s9.sid)).terms.map((x) => x.en);
+        return out;
+      `);
+      const ETT = { en: 'endotracheal tube (ETT)', ko: '기관내관' };
+      const MDRPI = { en: 'medical device-related pressure injury (MDRPI)', ko: '의료기기 관련 욕창' };
+      assert.deepEqual(r.terms, [ETT, MDRPI], 'only renderings found in the translations; the first one wins');
+      assert.ok(r.before.every((n) => n === 0), 'nothing established before the first mention');
+      assert.deepEqual(r.at4, [ETT], 'page 4 (ETTs) gets the ETT rendering only');
+      assert.deepEqual(r.at9, [ETT, MDRPI], 'page 9 gets both');
+      assert.ok(r.unrelated.length > 5 && r.unrelated.every((n) => n === 0), 'batches without these terms carry no <terms>');
+      assert.ok(r.sameSystem, 'the cached system prefix is identical for every batch');
+      assert.equal(r.listInSystem, false, 'the growing list is not in the system prompt');
+      assert.ok(r.userHasList);
+      assert.deepEqual(r.saved, { 'endotracheal tube': ETT, 'medical device related pressure injury': MDRPI });
+      assert.deepEqual(r.reloaded, [ETT, MDRPI]);
+      assert.deepEqual(r.mergedKeys.sort(), ['endotracheal tube', 'medical device related pressure injury', 'skin tear']);
+      assert.ok(r.merged.includes('endotracheal tube (ETT)=기관내관') && r.merged.includes('skin tear=피부 찢김') && !r.merged.some((x) => x.includes('기관튜브')),
+        JSON.stringify(r.merged));
+      assert.deepEqual(r.mergeCachedTerms, ['피부 찢김', '기관튜브'], "a fresh translator takes the other file's terms");
+      assert.deepEqual(r.glossed4, [], 'glossary covers endotracheal tube → not sent');
+      assert.deepEqual(r.glossed9, [MDRPI.en]);
+      return `established ${r.terms.map((x) => `${x.en}→${x.ko}`).join('; ')} at batch #${r.firstAt}; page 4 got ${JSON.stringify(r.at4)}; ${r.unrelated.length} unrelated batches sent none; merged ${r.merged.join(', ')}`;
+    },
+  },
+  {
+    name: 'regression untranslated-counted-done: an answer still in English (front matter, affiliations) is re-requested once, then FAILED (retryable) — never done; name-only lines pass; cached English loads as failed',
+    query: Q,
+    fn: async ({ page }) => {
+      const r = await inPage(page, `
+        settings.set({ translate: { concurrency: 1 } });
+        const b = doc.sentences.filter((s) => s.page === 1 && s.kind === 'body');
+        const lines = {
+          affil: '1Department of Nursing, Example General Hospital, Taipei, Taiwan | 2School of Nursing, Example University, Taipei, Taiwan',
+          corr: 'Correspondence: Jane Doe (jane.doe@example.org)',
+          dates: 'Received: 15 January 2025 | Revised: 6 September 2025 | Accepted: 12 September 2025',
+          keywords: 'Keywords: AnchorFast | endotracheal tube holder | meta-analysis',
+          authors: 'Jane Doe1,2 | John Roe1 | Ana van der Berg3',
+          copyright: '© 2025 The Author(s).',
+        };
+        const sid = {};
+        Object.keys(lines).forEach((k, i) => { b[i].text = lines[k]; sid[k] = b[i].sid; });
+        const heading = doc.sentences.find((s) => s.page === 1 && s.kind === 'heading');
+        heading.text = 'Nursing in Critical Care'; lines.journal = heading.text; sid.journal = heading.sid;
+        const english = new Set(Object.values(sid));
+        mockControl.translateWith = (it) => (english.has(it.sid) ? it.text : '〔번역〕 ' + it.text);
+        const t = new Translator({ doc });
+        const errors = []; const failedEvents = [];
+        t.addEventListener('error', (e) => errors.push(e.detail));
+        t.addEventListener('update', (e) => e.detail.failed && failedEvents.push(...e.detail.failed));
+        const progress = await t.translateAll();
+        const status = (tr) => Object.fromEntries(Object.entries(sid).map(([k, s]) => [k, tr.statusOf(s)]));
+        const saved = JSON.parse(JSON.stringify(t.toJSON()));
+        const out = {
+          progress, status: status(t), sid, errors, failedEvents,
+          counts: Object.fromEntries(Object.entries(sid).map(([k, s]) => [k, reqs().filter((q) => q.ids.includes(s)).length])),
+          retryFlag: reqs().filter((q) => q.ids.includes(sid.affil)).map((q) => q.retry),
+          shown: Object.keys(sid).filter((k) => t.translations.has(sid[k])),
+          savedKeys: Object.keys(sid).filter((k) => saved.items[sid[k]]),
+        };
+        // A file written before this fix kept those English answers as done (with a warning).
+        const old = JSON.parse(JSON.stringify(saved));
+        for (const k of ['affil', 'corr', 'dates', 'keywords']) old.items[sid[k]] = { h: hash(lines[k]), t: lines[k], m: 'claude-haiku-5-5', w: 'untranslated' };
+        const t2 = new Translator({ doc, cached: old });
+        out.reopened = { status: status(t2), progress: t2.progress };
+        const t3 = new Translator({ doc });
+        out.mergeAdded = t3.mergeCached(old).filter((s) => english.has(s)).map((s) => Object.keys(sid).find((k) => sid[k] === s));
+        // The retry the pane offers ('다시 시도' → translateSids) succeeds once the model answers in Korean.
+        mockControl.reset(); mockControl.latencyMs = 5;
+        const failed = Object.values(sid).filter((s) => t2.statusOf(s) === 'failed');
+        const p = await t2.translateSids(failed);
+        out.retried = { progress: p, status: status(t2), sent: reqs().flatMap((q) => q.ids).sort(), failed: failed.sort() };
+        return out;
+      `);
+      const failedKeys = ['affil', 'corr', 'dates', 'keywords'];
+      for (const k of failedKeys) {
+        assert.equal(r.status[k], 'failed', `${k} must be failed`);
+        assert.equal(r.counts[k], 2, `${k}: one retry`);
+      }
+      for (const k of ['authors', 'copyright', 'journal']) {
+        assert.equal(r.status[k], 'done', `${k}: a name-only line may stay as is`);
+        assert.equal(r.counts[k], 1);
+      }
+      assert.deepEqual(r.retryFlag, [false, true], 'the retry tells the model the segment came back in English');
+      assert.equal(r.progress.failed, 4);
+      assert.equal(r.progress.done, r.progress.total - 4);
+      assert.deepEqual(r.shown.sort(), ['authors', 'copyright', 'journal']);
+      assert.deepEqual(r.savedKeys.sort(), ['authors', 'copyright', 'journal'], 'English answers are not saved');
+      assert.deepEqual([...r.failedEvents].sort(), failedKeys.map((k) => r.sid[k]).sort(), "'update' names them failed (the pane shows 다시 시도)");
+      assert.equal(r.errors.length, 1);
+      assert.match(r.errors[0].message, /영어 그대로/);
+      assert.equal(r.errors[0].fatal, false);
+      for (const k of failedKeys) assert.equal(r.reopened.status[k], 'failed', `reopened ${k}`);
+      assert.equal(r.reopened.status.authors, 'done');
+      assert.equal(r.reopened.progress.failed, 4);
+      assert.deepEqual(r.mergeAdded.sort(), ['authors', 'copyright', 'journal'], 'mergeCached skips English items too');
+      assert.deepEqual(r.retried.sent, r.retried.failed);
+      for (const k of failedKeys) assert.equal(r.retried.status[k], 'done');
+      assert.equal(r.retried.progress.failed, 0);
+      return `failed after 2 requests each: ${failedKeys.join(', ')}; accepted as is: authors, copyright, journal; error "${r.errors[0].message}"; reopened old file → ${r.reopened.progress.failed} failed; retry → done`;
     },
   },
   {

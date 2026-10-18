@@ -222,6 +222,7 @@ class ReaderView {
     this.#pane = new TranslationPane(els.tpHost, { doc: this.#doc });
     this.#translator = this.#createTranslator(cached);
     this.#syncPaneMap(true);
+    this.#seedFailedStatus();
     this.#refreshCheckMarks();
 
     this.#buildToolbar();
@@ -1146,6 +1147,16 @@ class ReaderView {
       kind: 'warning', timeout: 0,
       action: { label: '라이브러리로', onClick: () => this.#navigate('#/') },
     });
+  }
+
+  /**
+   * Sentences the translator already counts as failed when the paper opens (a stored answer that was still the
+   * English source): marked failed in the pane, with its retry button and in "실패한 문장 다시 번역".
+   */
+  #seedFailedStatus() {
+    const tr = this.#translator;
+    if (typeof tr?.statusOf !== 'function') return;
+    for (const s of this.#doc?.sentences || []) if (tr.statusOf(s.sid) === 'failed') this.#pane.setStatus(s.sid, 'failed');
   }
 
   /** Sentences whose translation failed a fidelity check: a dotted underline + tooltip in the pane. */

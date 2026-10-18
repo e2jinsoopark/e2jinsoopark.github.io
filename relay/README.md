@@ -109,6 +109,11 @@ curl -H "Authorization: Bearer <ADMIN_TOKEN>" https://paper-relay.<계정>.worke
 curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" -H "content-type: application/json" -d "{\"name\":\"Hong\",\"dailyLimitUsd\":0.5}" https://paper-relay.<계정>.workers.dev/relay/admin/codes
 ```
 
+한글 이름은 앱의 초대 코드 관리 화면에서 만드는 것이 안전합니다. 한국어 Windows 콘솔의 `curl -d "…한글…"`은 본문을
+CP949로 보내는 일이 있어, 받는 쪽에서는 이름이 `������님`처럼 깨집니다. 그래서 관리자 API는 UTF-8이 아닌 본문과
+깨진 글자(U+FFFD)·제어 문자가 든 이름을 400(한국어 안내)으로 거절합니다. curl을 쓸 때는 UTF-8로 저장한 파일을
+보내세요: `curl … --data-binary @code.json …`. 이미 깨진 이름은 `PATCH`로 새 이름을 보내면 고쳐집니다.
+
 초대 코드를 쓰는 쪽(`x-api-key: <코드>` 또는 `Authorization: Bearer <코드>`): `POST /v1/messages`(Anthropic과 같은 형식, `?beta=true` 포함), `GET /v1/models`(허용 모델만), `GET /relay/me`(이름·허용 모델·한도·오늘 사용액·초기화 시각).
 
 ## 로컬에서 실행·테스트

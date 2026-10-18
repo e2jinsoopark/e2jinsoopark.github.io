@@ -69,6 +69,9 @@ allowed models only (the app's Claude "test key" and model list use this).
 - `GET /relay/admin/usage?days=30` → `{ days: [{ day, usd, requests, byModel: {...} }] }`.
 - Validation: name 1–40 chars; dailyLimitUsd 0–20; allowedModels ⊆ `KNOWN_MODELS`
   (`claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`).
+- Admin bodies must be valid UTF-8 (strict decode; a CP949 body from a Korean Windows console → 400
+  `invalid_request_error` with a Korean hint), and a name containing U+FFFD, a lone surrogate or a control
+  character → 400 (create and patch). A name that was stored broken before is repaired by a `PATCH` with a new name.
 
 ### Config (wrangler)
 Secrets: `ANTHROPIC_API_KEY`, `ADMIN_TOKEN`.

@@ -131,8 +131,12 @@ top/bottom position on ≥ 3 pages, bare page numbers, journal running heads, li
 ```js
 // kind 'translation'
 { version: 1, targetLang: 'ko', segVersion, updatedAt,
-  items: { [sid]: { h: hash(sentence.text), t: '번역문', m: 'claude-haiku-5-5' } } }
-// A cached item is valid only if items[sid].h === hash(currentSentence.text).
+  items: { [sid]: { h: hash(sentence.text), t: '번역문', m: 'claude-haiku-5-5', w?: 'numbers'|'short' } },
+  terms?: { [key /* normalised English */]: { en: 'endotracheal tube (ETT)', ko: '기관내관' } } }
+// A cached item is valid only if items[sid].h === hash(currentSentence.text), and it is shown only if it is not
+// still the English source (an item without Hangul for a sentence with words to translate loads as failed).
+// `terms` (optional): the Korean renderings this paper's translations established (js/ai/terms.js); older files
+// have none, older readers ignore it.
 
 // kind 'annotations'
 { version: 1, updatedAt,
@@ -234,7 +238,7 @@ export class GitHubConflictError extends Error {}
 // sync.js — local-first: every write lands in IndexedDB immediately and marks the path dirty;
 // a debounced push (≈3 s) commits dirty paths in one commit; pull on start, on window focus, every 2 min.
 // Merge on conflict: library.json and annotations.json merge per item id (newer updatedAt wins; tombstones win ties);
-// translation.json merges items (union, keep local on equal sid); ai.json shallow-merges top-level keys by updatedAt;
+// translation.json merges items (union, keep local on equal sid) and terms (union by key, keep local); ai.json shallow-merges top-level keys by updatedAt;
 // paper.pdf immutable.
 export class SyncEngine extends EventTarget {
   constructor({ db, getConfig /* () => settings.github */ })
@@ -312,8 +316,10 @@ export class Translator extends EventTarget {
 }
 // Batching: consecutive translatable sentences, ≤ LIMITS.translateBatchMaxSentences and ≤ translateBatchMaxChars,
 // each request carries the paper title+abstract and glossary in a stable (cacheable) system prompt, plus the
-// 2 preceding source sentences as read-only context. Output via JSON schema {translations:[{id,ko}]};
-// verify every id; retry missing ids once; on hard failure mark them failed (no infinite retries).
+// 2 preceding source sentences as read-only context and, after the cached prefix, the paper's established term
+// renderings that occur in the batch. Output via JSON schema {translations:[{id,ko}], terms:[{en,ko}]};
+// verify every id; retry missing ids once; on hard failure mark them failed (no infinite retries). An answer that
+// is still the English source (no Hangul, words to translate) is retried once, then failed — never done.
 
 // tasks.js — all return Korean markdown; may cite sentences as [p3-12] which the UI turns into links
 export async function summarize(doc, { signal }) → { markdown, usage }

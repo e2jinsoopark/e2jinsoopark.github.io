@@ -157,6 +157,30 @@ export const tests = [
     },
   },
   {
+    name: 'regression broken-invitee-name: a name with U+FFFD, a lone surrogate or a control character is refused in Korean (create and patch)',
+    fn: () => {
+      const defaults = { allowedModels: ['claude-haiku-5-5'], dailyLimitUsd: 0.5 };
+      // What a CP949 "관리자 테스트" body looked like after a lenient UTF-8 decode (seen on the live relay).
+      const mojibake = '\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD \uFFFD\uFFFD\uFFFD\u05BD\uFFFD\u01AE';
+      const out = [];
+      for (const name of [mojibake, '홍길동\uFFFD', '홍\uD800길동', '홍\uDC00', '홍길동\n관리자', 'a\u0000b']) {
+        for (const partial of [false, true]) {
+          const r = validateCodeInput({ name }, { partial, defaults });
+          assert.ok(r.error, `accepted ${JSON.stringify(name)} (partial ${partial})`);
+          assert.match(r.error, /[가-힣]/, 'Korean message');
+          out.push(r.error);
+        }
+      }
+      assert.match(out[0], /깨진 글자/);
+      assert.match(out.at(-1), /제어 문자/);
+      // Valid Korean, emoji (a proper surrogate pair) and punctuation stay accepted.
+      for (const name of ['관리자 테스트', '박간호 😀', 'Kim (EICU2)']) {
+        assert.equal(validateCodeInput({ name }, { partial: false, defaults }).value?.name, name, name);
+      }
+      return `${out.length} broken names refused, e.g. "${out[0]}"`;
+    },
+  },
+  {
     name: 'CORS origin matching: exact entries and :* port patterns, no prefix tricks',
     fn: () => {
       for (const o of ['https://e2jinsoopark.github.io', 'http://localhost:5173', 'http://localhost', 'http://127.0.0.1:8103']) {

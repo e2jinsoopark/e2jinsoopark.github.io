@@ -21,10 +21,12 @@ export const mockControl = {
   failNext: [],
   /** Optional (item) => ko | null for translation answers (null = leave the id out). Tests of the fidelity checks. */
   translateWith: null,
+  /** Optional (request) => [{ en, ko }] for the `terms` of translation answers (default: none reported). */
+  termsWith: null,
   /** Optional (request) => failure | null, checked on every call (content-dependent failures, e.g. one refused id). */
   failWhen: null,
   /** Every request seen, in order: { kind, task, model, effort, maxTokens, system, messages, json, ids, items,
-   *  concurrent, startedAt, endedAt } */
+   *  terms (the <terms> sent), retry, concurrent, startedAt, endedAt } */
   requests: [],
   inFlight: 0,
   maxInFlight: 0,
@@ -34,6 +36,7 @@ export const mockControl = {
     this.dropIdsAlways = new Set();
     this.failNext = [];
     this.translateWith = null;
+    this.termsWith = null;
     this.failWhen = null;
     this.requests = [];
     this.inFlight = 0;
@@ -93,7 +96,7 @@ function answer(opts, req) {
   const schema = opts.json;
   if (schema?.properties?.translations) {
     const translations = translateItems(req.items);
-    const json = { translations };
+    const json = { translations, terms: (mockControl.termsWith && mockControl.termsWith(req)) || [] };
     return { text: JSON.stringify(json), json };
   }
   if (schema) {
@@ -191,7 +194,8 @@ function begin(kind, opts) {
   mockControl.inFlight += 1;
   mockControl.maxInFlight = Math.max(mockControl.maxInFlight, mockControl.inFlight);
   const user = lastUserText(opts.messages);
-  const items = opts.json?.properties?.translations ? parseTranslationUserMessage(user).items : [];
+  const parsed = opts.json?.properties?.translations ? parseTranslationUserMessage(user) : null;
+  const items = parsed ? parsed.items : [];
   const req = {
     kind,
     task: opts.task || null,
@@ -203,6 +207,8 @@ function begin(kind, opts) {
     json: opts.json || null,
     ids: items.map((i) => i.sid),
     items,
+    terms: parsed ? parsed.terms : [],
+    retry: parsed ? parsed.retry : false,
     concurrent: mockControl.inFlight,
     startedAt: performance.now(),
     endedAt: null,
