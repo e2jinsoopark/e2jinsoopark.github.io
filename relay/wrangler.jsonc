@@ -4,6 +4,9 @@
   "main": "src/index.js",
   "compatibility_date": "2026-09-01",
   "workers_dev": true,
+  // Run next to Anthropic's API in the US. Without this, requests from Korea are sometimes served from Hong Kong,
+  // where the Anthropic API refuses traffic (403 "Request not allowed").
+  "placement": { "region": "aws:us-east-1" },
   "d1_databases": [
     {
       "binding": "DB",
