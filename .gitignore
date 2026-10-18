@@ -1,3 +1,9 @@
 node_modules/
 *.log
 .DS_Store
+
+# Invite-code relay (relay/): local Worker secrets and wrangler's local state/build output
+relay/.dev.vars
+relay/.dev.vars.*
+!relay/.dev.vars.example
+.wrangler/

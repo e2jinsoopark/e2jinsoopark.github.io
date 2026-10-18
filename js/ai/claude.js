@@ -6,6 +6,7 @@
 // - JSON answers use output_config.format = { type: 'json_schema', schema }.
 // - system is always an array of text blocks; blocks marked `cache: true` get cache_control (prompt caching).
 // - non-streaming calls on Sonnet 5.5 / Opus 5.5 opt into server-side refusal fallback (beta).
+// makeClaudeProvider() also backs the invite-code relay (js/ai/relay.js): same requests, another baseURL and key.
 import { CLAUDE_MODELS, VENDOR } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { aiError, throwIfAborted } from './providers.js';
@@ -23,9 +24,10 @@ const NO_CREDIT_MESSAGE = 'Claude API 크레딧이 없거나 부족합니다. Cl
   + 'Claude Max 요금제라면 claude.ai에서 API 크레딧을 Console 조직에 연결하고, 크레딧이 연결된 그 조직에서 만든 API 키를 쓰세요.';
 
 let sdkPromise = null;
-let clientCache = { apiKey: '', client: null };
-// Set when the fallback beta was rejected (400) and the same request then succeeded without it.
-let fallbackBetaRejected = false;
+// Per provider: the cached client, and whether the fallback beta was rejected (400) while the same request then
+// succeeded without it.
+const providerState = new Map();
+const freshState = () => ({ apiKey: '', baseURL: '', client: null, fallbackBetaRejected: false });
 
 /** Lazily import the SDK module (namespace with `default` = Anthropic and the typed error classes). */
 export async function loadSdk() {
@@ -39,15 +41,14 @@ export async function loadSdk() {
   return sdkPromise;
 }
 
-/** For tests: forget the cached client and the remembered fallback-beta rejection. */
+/** For tests: forget the cached clients and the remembered fallback-beta rejections. */
 export function resetClaudeState() {
-  clientCache = { apiKey: '', client: null };
-  fallbackBetaRejected = false;
+  for (const state of providerState.values()) Object.assign(state, freshState());
 }
 
-/** True after the server-side fallback beta was rejected once in this session. */
-export function isFallbackBetaDisabled() {
-  return fallbackBetaRejected;
+/** True after the server-side fallback beta was rejected once in this session (on `provider`, default Claude). */
+export function isFallbackBetaDisabled(provider = claudeProvider) {
+  return Boolean(providerState.get(provider)?.fallbackBetaRejected);
 }
 
 /**
@@ -75,122 +76,152 @@ function requestTimeoutMs(maxTokens) {
   return Math.min(REQUEST_TIMEOUT_MAX_MS, Math.max(REQUEST_TIMEOUT_MIN_MS, 30_000 + (maxTokens || DEFAULT_MAX_TOKENS) * 12));
 }
 
-export const claudeProvider = {
+/**
+ * A provider speaking the Claude Messages API through the SDK.
+ * @param {{ id: string, label: string,
+ *           auth: () => { apiKey: string, baseURL?: string, fetch?: typeof fetch },
+ *           missingKeyMessage: string,
+ *           describeError?: (err: unknown, sdk: object, info: { model?: string }) => Error | null }} opts
+ *   auth() is read on every request (it may throw a Korean aiError, e.g. no server address); describeError() may
+ *   map an SDK error before the generic Korean mapping (null = use the generic one).
+ */
+export function makeClaudeProvider({ id, label, auth, missingKeyMessage, describeError = null }) {
+  const ctx = { state: freshState(), auth, missingKeyMessage, describeError };
+  const provider = {
+    id,
+    label,
+    complete: (opts) => completeWith(ctx, opts),
+    stream: (opts) => streamWith(ctx, opts),
+    listModels: () => listModelsWith(ctx),
+    testKey: () => testKeyWith(ctx),
+  };
+  providerState.set(provider, ctx.state);
+  return provider;
+}
+
+export const claudeProvider = makeClaudeProvider({
   id: 'claude',
   label: 'Claude (Anthropic)',
+  auth: () => ({ apiKey: String(settings.get().claude?.apiKey || '').trim() }),
+  missingKeyMessage: 'Claude API 키가 없습니다. 설정에서 API 키를 입력해 주세요.',
+});
 
-  async complete(opts) {
-    throwIfAborted(opts.signal);
-    const { client, sdk } = await getClient();
-    const params = buildParams({ ...opts, maxTokens: Math.min(opts.maxTokens || DEFAULT_MAX_TOKENS, MAX_NONSTREAMING_TOKENS) });
-    let message;
-    try {
-      message = await createMessage(client, sdk, params, opts.signal);
-    } catch (err) {
-      throw toKoreanError(err, sdk, { model: params.model, signal: opts.signal });
-    }
-    return readMessage(message, { json: Boolean(opts.json), model: params.model });
-  },
+async function completeWith(ctx, opts) {
+  throwIfAborted(opts.signal);
+  const { client, sdk } = await getClient(ctx);
+  const params = buildParams({ ...opts, maxTokens: Math.min(opts.maxTokens || DEFAULT_MAX_TOKENS, MAX_NONSTREAMING_TOKENS) });
+  let message;
+  try {
+    message = await createMessage(ctx, client, sdk, params, opts.signal);
+  } catch (err) {
+    throw mapError(ctx, err, sdk, { model: params.model, signal: opts.signal });
+  }
+  return readMessage(message, { json: Boolean(opts.json), model: params.model });
+}
 
-  async *stream(opts) {
-    throwIfAborted(opts.signal);
-    const { client, sdk } = await getClient();
-    const params = buildParams(opts);
-    // Sonnet 5.5 / Opus 5.5: the server-side refusal fallback works on streams too (the retry happens on the
-    // same stream; a `fallback` content block marks it and is ignored here, only text deltas are yielded).
-    let useBeta = FALLBACK_MODELS.has(params.model) && !fallbackBetaRejected;
-    let stream = null;
-    let finished = false;
-    let started = false;
-    try {
-      for (;;) {
-        stream = useBeta
-          ? client.beta.messages.stream({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' }, { signal: opts.signal })
-          : client.messages.stream(params, { signal: opts.signal });
-        try {
-          for await (const event of stream) {
-            if (!started) {
-              started = true;
-              // The beta was rejected (400 before any event) but the plain request is now running: remember it.
-              if (!useBeta && FALLBACK_MODELS.has(params.model) && !fallbackBetaRejected) {
-                fallbackBetaRejected = true;
-                console.warn('[ai] server-side fallback beta rejected on a stream; continuing without it');
-              }
-            }
-            if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-              yield { type: 'text', text: event.delta.text };
-            }
-          }
-          break;
-        } catch (err) {
-          // A 400 arrives before any event: the same request without the beta tells beta vs genuine bad request.
-          if (useBeta && !started && err instanceof sdk.BadRequestError && !opts.signal?.aborted) {
-            useBeta = false;
-            continue;
-          }
-          throw err;
-        }
-      }
-      const message = await stream.finalMessage();
-      finished = true;
-      const usage = toUsage(message, params.model);
-      if (message.stop_reason === 'refusal') throw refusalError(message, usage);
-      yield { type: 'done', usage, stopReason: message.stop_reason };
-    } catch (err) {
-      finished = true;
-      const out = toKoreanError(err, sdk, { model: params.model, signal: opts.signal });
-      // Stopped or failed mid-answer: the prompt and the streamed part are billed — carry the usage so far.
-      if (!out.usage && stream?.currentMessage?.usage) out.usage = toUsage(stream.currentMessage, params.model);
-      throw out;
-    } finally {
-      // The consumer stopped early (break / return): close the HTTP stream.
-      if (!finished) stream?.abort();
-    }
-  },
-
-  async listModels() {
-    const { client, sdk } = await getClient();
-    const known = new Map(CLAUDE_MODELS.map((m) => [m.id, m.label]));
-    try {
-      const out = [];
-      for await (const m of client.models.list({ limit: 100 })) {
-        if (String(m.id).startsWith('claude-')) out.push({ id: m.id, label: known.get(m.id) || m.display_name || m.id });
-      }
-      return out.length ? out : CLAUDE_MODELS.map((m) => ({ ...m }));
-    } catch (err) {
-      throw toKoreanError(err, sdk, {});
-    }
-  },
-
-  async testKey() {
-    try {
-      const { client, sdk } = await getClient();
+async function* streamWith(ctx, opts) {
+  throwIfAborted(opts.signal);
+  const { client, sdk } = await getClient(ctx);
+  const { state } = ctx;
+  const params = buildParams(opts);
+  // Sonnet 5.5 / Opus 5.5: the server-side refusal fallback works on streams too (the retry happens on the
+  // same stream; a `fallback` content block marks it and is ignored here, only text deltas are yielded).
+  let useBeta = FALLBACK_MODELS.has(params.model) && !state.fallbackBetaRejected;
+  let stream = null;
+  let finished = false;
+  let started = false;
+  try {
+    for (;;) {
+      stream = useBeta
+        ? client.beta.messages.stream({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' }, { signal: opts.signal })
+        : client.messages.stream(params, { signal: opts.signal });
       try {
-        await client.models.list({ limit: 1 }); // free: lists models, no tokens billed
+        for await (const event of stream) {
+          if (!started) {
+            started = true;
+            // The beta was rejected (400 before any event) but the plain request is now running: remember it.
+            if (!useBeta && FALLBACK_MODELS.has(params.model) && !state.fallbackBetaRejected) {
+              state.fallbackBetaRejected = true;
+              console.warn('[ai] server-side fallback beta rejected on a stream; continuing without it');
+            }
+          }
+          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+            yield { type: 'text', text: event.delta.text };
+          }
+        }
+        break;
       } catch (err) {
-        throw toKoreanError(err, sdk, {});
+        // A 400 arrives before any event: the same request without the beta tells beta vs genuine bad request.
+        if (useBeta && !started && err instanceof sdk.BadRequestError && !opts.signal?.aborted) {
+          useBeta = false;
+          continue;
+        }
+        throw err;
       }
-      return {
-        ok: true,
-        message: 'Claude API 키가 유효합니다. (크레딧 잔액은 확인하지 않습니다. 번역할 때 크레딧 오류가 나면 Claude Console의 Billing을 확인하세요.)',
-      };
-    } catch (err) {
-      return { ok: false, message: err.message };
     }
-  },
-};
+    const message = await stream.finalMessage();
+    finished = true;
+    const usage = toUsage(message, params.model);
+    if (message.stop_reason === 'refusal') throw refusalError(message, usage);
+    yield { type: 'done', usage, stopReason: message.stop_reason };
+  } catch (err) {
+    finished = true;
+    const out = mapError(ctx, err, sdk, { model: params.model, signal: opts.signal });
+    // Stopped or failed mid-answer: the prompt and the streamed part are billed — carry the usage so far.
+    if (!out.usage && stream?.currentMessage?.usage) out.usage = toUsage(stream.currentMessage, params.model);
+    throw out;
+  } finally {
+    // The consumer stopped early (break / return): close the HTTP stream.
+    if (!finished) stream?.abort();
+  }
+}
+
+async function listModelsWith(ctx) {
+  const { client, sdk } = await getClient(ctx);
+  const known = new Map(CLAUDE_MODELS.map((m) => [m.id, m.label]));
+  try {
+    const out = [];
+    for await (const m of client.models.list({ limit: 100 })) {
+      if (String(m.id).startsWith('claude-')) out.push({ id: m.id, label: known.get(m.id) || m.display_name || m.id });
+    }
+    return out.length ? out : CLAUDE_MODELS.map((m) => ({ ...m }));
+  } catch (err) {
+    throw mapError(ctx, err, sdk, {});
+  }
+}
+
+async function testKeyWith(ctx) {
+  try {
+    const { client, sdk } = await getClient(ctx);
+    try {
+      await client.models.list({ limit: 1 }); // free: lists models, no tokens billed
+    } catch (err) {
+      throw mapError(ctx, err, sdk, {});
+    }
+    return {
+      ok: true,
+      message: 'Claude API 키가 유효합니다. (크레딧 잔액은 확인하지 않습니다. 번역할 때 크레딧 오류가 나면 Claude Console의 Billing을 확인하세요.)',
+    };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+}
 
 // ───────────────────────────── internals ─────────────────────────────
 
-async function getClient() {
-  const apiKey = String(settings.get().claude?.apiKey || '').trim();
-  if (!apiKey) throw aiError('Claude API 키가 없습니다. 설정에서 API 키를 입력해 주세요.', { code: 'no_key' });
+async function getClient(ctx) {
+  const { apiKey, baseURL = '', fetch: fetchImpl } = ctx.auth();
+  if (!apiKey) throw aiError(ctx.missingKeyMessage, { code: 'no_key' });
   const sdk = await loadSdk();
-  if (clientCache.apiKey !== apiKey || !clientCache.client) {
+  const { state } = ctx;
+  if (state.apiKey !== apiKey || state.baseURL !== baseURL || !state.client) {
     const Anthropic = sdk.default;
-    clientCache = { apiKey, client: new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: MAX_RETRIES }) };
+    const options = { apiKey, dangerouslyAllowBrowser: true, maxRetries: MAX_RETRIES };
+    if (baseURL) options.baseURL = baseURL;
+    if (fetchImpl) options.fetch = fetchImpl;
+    Object.assign(state, { apiKey, baseURL, client: new Anthropic(options) });
   }
-  return { client: clientCache.client, sdk };
+  return { client: state.client, sdk };
 }
 
 /**
@@ -198,9 +229,9 @@ async function getClient() {
  * and the identical request without the beta succeeds, the beta is the problem — remember and skip it from now on.
  * (No error-message matching: a genuinely bad request fails the second time too and is reported as such.)
  */
-async function createMessage(client, sdk, params, signal) {
+async function createMessage(ctx, client, sdk, params, signal) {
   const options = { signal, timeout: requestTimeoutMs(params.max_tokens) };
-  if (!FALLBACK_MODELS.has(params.model) || fallbackBetaRejected) {
+  if (!FALLBACK_MODELS.has(params.model) || ctx.state.fallbackBetaRejected) {
     return client.messages.create(params, options);
   }
   try {
@@ -208,7 +239,7 @@ async function createMessage(client, sdk, params, signal) {
   } catch (err) {
     if (!(err instanceof sdk.BadRequestError)) throw err;
     const message = await client.messages.create(params, options);
-    fallbackBetaRejected = true;
+    ctx.state.fallbackBetaRejected = true;
     console.warn('[ai] server-side fallback beta rejected; continuing without it:', err.message);
     return message;
   }
@@ -296,9 +327,22 @@ function toSystemBlocks(system) {
       : { type: 'text', text: b.text }));
 }
 
+/** The provider's own mapping first (never for our errors or cancellations), then the generic one. */
+function mapError(ctx, err, sdk, info) {
+  if (ctx.describeError && !isOurs(err) && !(err instanceof sdk.APIUserAbortError) && !info.signal?.aborted) {
+    const mapped = ctx.describeError(err, sdk, info);
+    if (mapped) return mapped;
+  }
+  return toKoreanError(err, sdk, info);
+}
+
+function isOurs(err) {
+  return err?.name === 'AiError' || Boolean(err?.code && 'fatal' in err);
+}
+
 /** Map SDK errors (by class, most specific first) to Korean aiErrors. */
 function toKoreanError(err, sdk, { model, signal } = {}) {
-  if (err?.name === 'AiError' || (err?.code && 'fatal' in err)) return err; // already ours
+  if (isOurs(err)) return err; // already ours
   const detail = err?.error?.error?.message || err?.message || '';
   const make = (message, code, extra = {}) => {
     console.warn('[ai] Claude error', code, err?.status ?? '', detail);

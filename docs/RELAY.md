@@ -28,12 +28,14 @@ Quota/denial responses set `x-should-retry: false` (the Anthropic SDK honours it
 
 ### CORS
 - `Access-Control-Allow-Origin`: echo the request `Origin` only if it is in `ALLOWED_ORIGINS` (comma list; entries may be
-  exact origins or `http://localhost:*` / `http://127.0.0.1:*` patterns). Otherwise no CORS headers (browser blocks).
+  exact origins or `http://localhost:*` / `http://127.0.0.1:*` patterns). Otherwise no CORS headers (browser blocks;
+  as built: 403 `permission_error` without CORS headers, nothing forwarded).
 - Preflight `OPTIONS`: 204, `Access-Control-Allow-Methods: GET, POST, PATCH, OPTIONS`,
   `Access-Control-Allow-Headers`: echo `Access-Control-Request-Headers` (the SDK sends x-stainless-* headers,
   anthropic-version, anthropic-beta, anthropic-dangerous-direct-browser-access, x-api-key, content-type),
   `Access-Control-Max-Age: 86400`, `Vary: Origin`.
-- Expose: `request-id, x-relay-today-usd, x-relay-limit-usd`.
+- Expose: `request-id, x-relay-today-usd, x-relay-limit-usd, x-should-retry, retry-after, retry-after-ms` (as built:
+  the retry headers are exposed so the browser SDK sees `x-should-retry: false` and does not retry a budget 429).
 
 ### `POST /v1/messages` (also with `?beta=true`, which the SDK uses for `client.beta.messages.*`)
 1. Validate code; body ≤ 6 MB; JSON with `model`, `max_tokens`, `messages`.
@@ -103,6 +105,21 @@ Free-plan friendly: one D1 read for code+budget per request, one upsert per fini
   disable/enable; edit limit. Never show the admin token after saving (password field + 지우기).
 - Errors from the relay (401/403/429 with Korean messages) are shown as-is; a 429 quota stops a translation run once
   (fatal for the run, like Gemini's daily quota) with "내일 다시" guidance — no failed-sentence spam.
-- CSP `connect-src` gets the relay origin (`RELAY_DEFAULT_URL`'s origin) plus `http://127.0.0.1:8787 http://localhost:8787`
-  only for local testing? → **No**: keep production CSP strict; tests serve a test copy or use route interception.
-  The integrator decides the cleanest way and documents it.
+- CSP `connect-src` gets the relay origin (`RELAY_DEFAULT_URL`'s origin) only — never loopback addresses. Decided at
+  integration: tests against a local Worker stage a copy of the published files with the two deploy edits and serve
+  it from a local server (`tests/relay-e2e/test-site.mjs`); see `docs/notes/relay.md` (test hook, deploy checklist).
+
+## 3. As built (integration, 2026-10-18)
+
+Additions and precisions on top of §1–§2, verified end to end with the real Worker (`tests/relay-e2e/run.mjs`):
+- Refused with 403 `permission_error` because they are billed beyond tokens or could pick other models: server tools
+  (`tools` entries with a `type` other than `custom`), `mcp_servers`, `container`, `speed` ≠ `standard`, a `fallbacks`
+  list (`fallbacks: "default"` is allowed and each fallback attempt is priced at its own model's rates).
+- No code at all → 401 `authentication_error` "초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요."
+- `POST /relay/admin/codes` → 201. `createdAt` / `lastUsedAt` are ISO strings (`lastUsedAt` null until first use).
+  `GET /relay/admin/usage` lists every KST day of the window newest first (zero days included), `byModel` values are
+  `{ usd, requests, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`, optional `&code=PR-…` filter.
+- `GET /` → `{ service: 'paper-relay', ok: true }` (deploy check). `/v1/models` also takes `limit`, `after_id`, `before_id`.
+- Admin is refused (401) while `ADMIN_TOKEN` is shorter than 16 characters. `TEST_MODE=1` (tests only) lets the
+  `x-relay-test-now` header move the clock — never set in production.
+- App: the 초대 코드 관리 section is `#set-invites` (deep link `#/settings/invites`), separate from the AI section.

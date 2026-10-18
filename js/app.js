@@ -1,5 +1,5 @@
 // App bootstrap: theme, module loading with graceful degradation, Library, hash router.
-// Routes: #/ (library) · #/paper/<id> (reader) · #/settings
+// Routes: #/ (library) · #/paper/<id> (reader) · #/settings[/<section>] · #/join/<CODE> (invite link)
 import { bus } from './core/bus.js';
 import { APP_VERSION } from './core/config.js';
 import { settings } from './core/settings.js';
@@ -8,7 +8,7 @@ import { button, closeAllLayers, iconButton, messageScreen, modal, spinner, toas
 import { icon } from './ui/icons.js';
 import { mountLibraryView } from './ui/library-view.js';
 import { mountReaderView } from './ui/reader-view.js';
-import { mountSettingsView } from './ui/settings-view.js';
+import { mountJoinView, mountSettingsView } from './ui/settings-view.js';
 
 /** Modules owned by other builders, loaded dynamically so one broken module cannot blank the app. */
 const MODULES = [
@@ -90,7 +90,18 @@ async function boot() {
 
   const deps = buildDeps(modules, library, failures);
   if (failures.length) showBanner(bannerHost, failures);
+  refreshRelayIdentity(deps);
   startRouter(viewEl, deps);
+}
+
+/**
+ * Invite-code users: re-read the code's allowed models once per visit (the owner may have changed them), so the
+ * next request asks for a model the code allows. Quiet — a bad code is reported where it is used.
+ */
+function refreshRelayIdentity(deps) {
+  const s = settings.get();
+  if (s.provider !== 'relay' || !s.relay?.code || parseRoute(location.hash).name === 'join') return;
+  deps.relay?.refreshMe?.().catch((err) => console.warn('[app] invite code check', err?.message || err));
 }
 
 // ------------------------------------------------------------------ modules
@@ -125,6 +136,7 @@ function buildDeps(m, library, failures) {
     PdfViewer: m.viewer?.PdfViewer ?? null,
     Translator: m.translator?.Translator ?? null,
     getProvider: m.providers?.getProvider ?? null,
+    relay: m.providers?.relay ?? null, // js/ai/relay.js, re-exported by providers.js
     usage: m.usage ?? null,
     GitHubClient: m.github?.GitHubClient ?? null,
     features: m.features
@@ -136,14 +148,12 @@ function buildDeps(m, library, failures) {
 
 // ------------------------------------------------------------------- router
 
-/** @returns {{ name: 'library'|'paper'|'settings', id?: string }} */
+/** @returns {{ name: 'library'|'paper'|'settings'|'join', id?: string, section?: string, code?: string }} */
 export function parseRoute(hash) {
   const parts = String(hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (parts[0] === 'paper' && parts[1]) {
-    let id = parts[1];
-    try { id = decodeURIComponent(id); } catch { /* keep raw */ }
-    return { name: 'paper', id };
-  }
+  const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  if (parts[0] === 'paper' && parts[1]) return { name: 'paper', id: decode(parts[1]) };
+  if (parts[0] === 'join') return { name: 'join', code: parts[1] ? decode(parts[1]) : '' };
   if (parts[0] === 'settings') return parts[1] ? { name: 'settings', section: parts[1] } : { name: 'settings' };
   return { name: 'library' };
 }
@@ -166,6 +176,8 @@ function startRouter(viewEl, deps) {
         current = mountReaderView(viewEl, { paperId: r.id, deps, navigate });
       } else if (r.name === 'settings') {
         current = mountSettingsView(viewEl, { deps, navigate, backHref: previousHash, section: r.section });
+      } else if (r.name === 'join') {
+        current = mountJoinView(viewEl, { code: r.code, deps, navigate });
       } else {
         document.title = '논문 리더';
         current = mountLibraryView(viewEl, { deps, navigate });
@@ -179,7 +191,8 @@ function startRouter(viewEl, deps) {
         actions: [{ label: '라이브러리로', icon: 'arrow-left', onClick: () => navigate('#/') }],
       });
     }
-    if (r.name !== 'settings') previousHash = location.hash || '#/';
+    // The join link holds the code: never come back to it with 뒤로.
+    if (r.name !== 'settings') previousHash = r.name === 'join' ? '#/' : location.hash || '#/';
   };
   window.addEventListener('hashchange', route);
   route();

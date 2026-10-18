@@ -11,16 +11,23 @@
 // messages: [{ role: 'user'|'assistant', content: string | Part[] }]
 // Part:     { type:'text', text } | { type:'image', mediaType:'image/png', data /* base64 */ }
 //
-// Note: claude.js / gemini.js / mock.js import aiError() from here while this file imports them. The cycle is
-// safe because aiError/isAbort are hoisted function declarations and the provider objects are only read inside
-// getProvider() at call time — keep it that way (no top-level use of imported bindings in either direction).
+// Note: claude.js / gemini.js / mock.js / relay.js import aiError() from here while this file imports them. The
+// cycle is safe because aiError/isAbort are hoisted function declarations and the provider objects are only read
+// inside getProvider() at call time — keep it that way (no top-level use of imported bindings in either direction).
+//
+// `relay` re-exports js/ai/relay.js (invite codes, /relay/me, admin API) so the app gets it with this dynamically
+// loaded module instead of importing the AI modules statically.
 import { settings } from '../core/settings.js';
 import { claudeProvider } from './claude.js';
 import { geminiProvider } from './gemini.js';
 import { mockProvider } from './mock.js';
+import { relayProvider } from './relay.js';
+
+export * as relay from './relay.js';
 
 /** Selectable providers for the settings screen (mock is test-only and not listed). */
 export const PROVIDER_OPTIONS = [
+  { id: 'relay', label: '초대 코드 (키 없이 쓰기)' },
   { id: 'claude', label: 'Claude (Anthropic)' },
   { id: 'gemini', label: 'Gemini (Google)' },
 ];
@@ -77,7 +84,7 @@ export function throwIfAborted(signal) {
  * @param {string} [id]
  */
 export function getProvider(id = settings.get().provider) {
-  const registry = { claude: claudeProvider, gemini: geminiProvider, mock: mockProvider };
+  const registry = { relay: relayProvider, claude: claudeProvider, gemini: geminiProvider, mock: mockProvider };
   const provider = registry[id];
   if (!provider) throw aiError(`알 수 없는 AI 제공자입니다: ${id}`, { code: 'bad_request' });
   return provider;

@@ -1,0 +1,8 @@
+# Copy to .dev.vars for `npx wrangler dev` (local only; never commit .dev.vars).
+# In production these are secrets: npx wrangler secret put ANTHROPIC_API_KEY / ADMIN_TOKEN
+ANTHROPIC_API_KEY=sk-ant-...
+# 16+ random characters, e.g. node -e "console.log(crypto.randomUUID())"
+ADMIN_TOKEN=change-me-to-a-long-random-string
+# Optional local overrides of wrangler.jsonc vars:
+# UPSTREAM_URL=http://127.0.0.1:8788
+# TEST_MODE=1   # honours the x-relay-test-now header (tests only; never set in production)

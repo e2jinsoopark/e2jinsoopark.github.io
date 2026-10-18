@@ -1,11 +1,14 @@
 // User settings persisted in localStorage (this browser only). Secrets live here too:
 // they never leave the browser except as auth headers to their own API.
 import { bus } from './bus.js';
-import { DEFAULT_MODELS, STORAGE_KEYS } from './config.js';
+import { DEFAULT_MODELS, RELAY_DEFAULT_URL, STORAGE_KEYS } from './config.js';
 import { deepMerge, safeStorage } from './util.js';
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  provider: 'claude', // 'claude' | 'gemini' | 'mock'
+  provider: 'claude', // 'relay' | 'claude' | 'gemini' | 'mock'
+  // Invite-code relay (docs/RELAY.md). url '' = RELAY_DEFAULT_URL (so a moved worker reaches everyone who never
+  // typed an address); name/allowedModels mirror the last GET /relay/me; models '' = default for the code.
+  relay: { url: '', code: '', adminToken: '', name: '', allowedModels: [], translateModel: '', assistModel: '' },
   claude: { apiKey: '', translateModel: DEFAULT_MODELS.claude.translate, assistModel: DEFAULT_MODELS.claude.assist },
   gemini: { apiKey: '', translateModel: '', assistModel: '' },
   github: { owner: '', repo: '', branch: 'main', token: '' },
@@ -74,16 +77,35 @@ export const settings = {
   model(kind) {
     const p = current.provider;
     if (p === 'mock') return 'mock';
+    if (p === 'relay') return relayModel(current.relay || {}, kind);
     const conf = current[p] || {};
     return (kind === 'translate' ? conf.translateModel : conf.assistModel) || DEFAULT_MODELS[p]?.[kind] || '';
   },
   isAiReady() {
     const p = current.provider;
     if (p === 'mock') return true;
+    if (p === 'relay') return Boolean(settings.relayUrl() && String(current.relay?.code || '').trim());
     return Boolean(current[p]?.apiKey) && Boolean(settings.model('translate'));
+  },
+  /** Base URL of the invite-code relay (saved address, else RELAY_DEFAULT_URL), without trailing slashes. */
+  relayUrl() {
+    return String(current.relay?.url || RELAY_DEFAULT_URL || '').trim().replace(/\/+$/, '');
   },
   isSyncReady() {
     const g = current.github;
     return Boolean(g.owner && g.repo && g.token);
   },
 };
+
+/**
+ * Relay model for a task: the saved choice if the code allows it, else Haiku 5.5 for translation and Sonnet 5.5
+ * (when allowed, else Haiku 5.5) for summaries/chat. Unknown allowed models (no /relay/me yet) → Haiku 5.5.
+ */
+function relayModel(conf, kind) {
+  const allowed = Array.isArray(conf.allowedModels) ? conf.allowedModels.filter((m) => typeof m === 'string' && m) : [];
+  const saved = kind === 'translate' ? conf.translateModel : conf.assistModel;
+  if (saved && (!allowed.length || allowed.includes(saved))) return saved;
+  const { translate, assist } = DEFAULT_MODELS.relay;
+  const preferred = kind === 'translate' ? [translate] : [assist, translate];
+  return preferred.find((id) => allowed.includes(id)) || allowed[0] || translate;
+}

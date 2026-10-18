@@ -16,6 +16,17 @@ export const VENDOR = {
   anthropicSdk: 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm',
 };
 
+/**
+ * Invite-code relay (docs/RELAY.md): base URL of the owner's Cloudflare Worker, e.g.
+ * 'https://paper-relay.<account>.workers.dev' (no trailing slash). Empty until the worker is deployed.
+ * Deploying: set it here AND add the same origin to connect-src in index.html (the page CSP is static);
+ * tests/relay-client/run.mjs fails while the two disagree. See docs/notes/relay-client.md.
+ */
+export const RELAY_DEFAULT_URL = '';
+
+/** Public address of the app; invite links are `${APP_PUBLIC_URL}#/join/<CODE>`. */
+export const APP_PUBLIC_URL = 'https://e2jinsoopark.github.io/';
+
 export const CLAUDE_MODELS = [
   { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 (빠름·저렴)' },
   { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (고품질)' },
@@ -24,6 +35,8 @@ export const CLAUDE_MODELS = [
 
 export const DEFAULT_MODELS = {
   claude: { translate: 'claude-haiku-5-5', assist: 'claude-sonnet-5-5' },
+  // Invite-code relay: the assist default applies only when the code allows Sonnet (else Haiku, see settings.model()).
+  relay: { translate: 'claude-haiku-5-5', assist: 'claude-sonnet-5-5' },
   // Gemini model ids change often; the settings screen lists live models from the API.
   gemini: { translate: '', assist: '' },
   mock: { translate: 'mock', assist: 'mock' },

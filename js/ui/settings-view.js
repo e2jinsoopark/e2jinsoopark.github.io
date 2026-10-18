@@ -1,8 +1,10 @@
-// Settings view (#/settings): AI provider & keys, GitHub sync, translation options, display, usage, secrets.
+// Settings view (#/settings): AI provider & keys (incl. the invite-code relay), GitHub sync, translation options,
+// display, usage, secrets, invite-code admin. Also the invite join screen (#/join/<CODE>, mountJoinView).
+// The relay helpers (js/ai/relay.js) arrive as deps.relay with the dynamically loaded AI modules.
 import { APP_VERSION, CLAUDE_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { debounce, el, formatUsd, safeStorage } from '../core/util.js';
-import { button, confirmDialog, iconButton, modal, spinner, toast } from './components.js';
+import { button, confirmDialog, iconButton, messageScreen, modal, progressBar, spinner, toast } from './components.js';
 import { icon } from './icons.js';
 
 const SECTIONS = [
@@ -33,6 +35,8 @@ class SettingsView {
   #els = {};
   #cleanup = [];
   #geminiModels = null;
+  #mePromise = null; // GET /relay/me shared by the AI and usage sections while the view is open
+  #renderUsage = () => {};
 
   constructor(container, deps, navigate, backHref) {
     this.#deps = deps;
@@ -99,6 +103,7 @@ class SettingsView {
       this.#displaySection(),
       this.#usageSection(),
       this.#dataSection(),
+      this.#invitesSection(),
       el('p', { class: 'settings-footer' }, `논문 리더 ${APP_VERSION} · 모든 설정은 이 브라우저에만 저장됩니다.`));
     this.#root.replaceChildren(header, inner);
   }
@@ -112,12 +117,13 @@ class SettingsView {
       body.append(note('info', '테스트 모드(주소에 ?mock=1)로 실행 중입니다. 실제 AI 대신 모의 응답이 사용되며 비용이 들지 않습니다.'));
     }
     const cards = el('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'AI 제공자' },
+      this.#providerCard('relay', '키 없이 쓰기 (초대 코드)', '초대받았다면 API 키 없이 초대 코드만으로 번역·요약·채팅을 쓸 수 있습니다. 하루 사용 한도가 있습니다.'),
       this.#providerCard('claude', 'Claude (Anthropic)', '논문 번역 품질이 안정적입니다. 번역은 빠르고 저렴한 Haiku를 기본으로 사용합니다.'),
       this.#providerCard('gemini', 'Gemini (Google)', 'Google AI Studio에서 발급한 키를 사용합니다. 모델 목록은 키로 불러옵니다.'));
     this.#els.providerDetail = el('div', {});
     body.append(cards, this.#els.providerDetail);
     this.#renderProviderDetail();
-    return section('ai', 'AI 번역', 'bot', '번역·요약·채팅에 사용할 AI 서비스와 API 키를 설정합니다. 키는 이 브라우저에만 저장되고 해당 AI 서비스로만 전송됩니다.', body);
+    return section('ai', 'AI 번역', 'bot', '번역·요약·채팅에 사용할 AI를 고릅니다. 초대 코드가 있으면 키 없이 쓸 수 있고, 직접 쓰는 API 키는 이 브라우저에만 저장되어 해당 AI 서비스로만 전송됩니다.', body);
   }
 
   #providerCard(id, title, desc) {
@@ -128,6 +134,7 @@ class SettingsView {
       if (!input.checked) return;
       settings.set({ provider: id });
       this.#renderProviderDetail();
+      this.#renderUsage();
     });
     return el('label', { class: 'radio-card' }, input, el('span', { class: 'radio-title' }, title), el('span', { class: 'radio-desc' }, desc));
   }
@@ -137,6 +144,7 @@ class SettingsView {
     const host = this.#els.providerDetail;
     if (p === 'gemini') host.replaceChildren(this.#geminiDetail());
     else if (p === 'claude') host.replaceChildren(this.#claudeDetail());
+    else if (p === 'relay') host.replaceChildren(this.#relayDetail());
     else host.replaceChildren(el('p', { class: 'field-hint', style: { marginTop: '14px' } }, '테스트 모드에서는 제공자를 바꿀 수 없습니다. 주소에서 ?mock=1을 빼면 저장된 제공자가 사용됩니다.'), this.#claudeDetail());
   }
 
@@ -171,6 +179,123 @@ class SettingsView {
           el('li', {}, '표시된 키(', el('code', {}, 'sk-ant-'), '로 시작)를 복사해 위 칸에 붙여 넣고 ', el('b', {}, '테스트'), '를 누릅니다.'),
           el('li', {}, 'API 사용료는 Claude Console 조직의 크레딧으로 청구됩니다. Claude Console의 ', el('b', {}, 'Limits'), '에서 월 사용 한도를 정해 두면 안심입니다.'),
           el('li', {}, el('b', {}, 'Claude Max'), '(5x: 월 $100, 20x: 월 $200) 요금제라면 claude.ai에서 요금제에 포함된 API 크레딧을 Claude Console 조직에 연결하세요. 키는 크레딧이 연결된 그 조직에서 만들어야 합니다. 채팅 사용 한도와는 별개이며, Pro 요금제는 해당되지 않습니다.'))));
+  }
+
+  #relayDetail() {
+    const relay = this.#deps.relay;
+    if (!relay) {
+      return el('div', { class: 'subsection' },
+        note('alert-triangle', '초대 코드 모듈을 불러오지 못했습니다. 페이지를 새로 고친 뒤 다시 시도해 주세요.', 'is-warning'));
+    }
+    const r = settings.get().relay || {};
+    const urlInput = el('input', {
+      class: 'input', type: 'url', value: settings.relayUrl(), placeholder: 'https://….workers.dev', autocomplete: 'off',
+      spellcheck: 'false', autocapitalize: 'off', 'aria-label': '서버 주소',
+    });
+    const urlResult = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const showUrlState = () => {
+      const url = settings.relayUrl();
+      if (!url) setResult(urlResult, 'error', '서버 주소가 없습니다. 초대해 준 분에게 서버 주소를 받아 입력하세요.');
+      else if (!relay.isRelayOriginAllowed(url)) setResult(urlResult, 'error', '이 주소는 앱의 보안 정책(CSP connect-src)에 없어 브라우저가 연결을 막습니다. 기본 서버 주소를 쓰거나, 관리자가 index.html의 connect-src에 이 주소를 추가해야 합니다.');
+      else clearResult(urlResult);
+    };
+    urlInput.addEventListener('change', () => {
+      const raw = urlInput.value.trim();
+      if (raw && !/^https?:\/\/[^\s/]+/i.test(raw)) {
+        setResult(urlResult, 'error', '서버 주소는 https://로 시작하는 전체 주소로 입력하세요.');
+        return;
+      }
+      relay.saveRelayUrl(raw);
+      urlInput.value = settings.relayUrl();
+      this.#mePromise = null;
+      showUrlState();
+      savedToast();
+    });
+    urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); urlInput.blur(); } });
+    showUrlState();
+
+    const codeResult = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const models = el('div', { class: 'field-row', style: { marginTop: '14px' } });
+    const modelHint = el('p', { class: 'price-hint' });
+    const renderModels = () => {
+      const allowed = settings.get().relay?.allowedModels || [];
+      const select = (kind, key, label) => {
+        const current = settings.model(kind);
+        const ids = allowed.length ? allowed : [current];
+        const node = el('select', { class: 'select', 'aria-label': label, disabled: ids.length < 2 },
+          ids.map((id) => el('option', { value: id, selected: id === current }, modelLabel(id))));
+        node.addEventListener('change', () => { settings.set({ relay: { [key]: node.value } }); savedToast(); renderModels(); });
+        return el('label', { class: 'field' }, el('span', { class: 'field-label' }, label), node);
+      };
+      models.replaceChildren(select('translate', 'translateModel', '번역 모델'), select('assist', 'assistModel', '요약·채팅·설명 모델'));
+      modelHint.textContent = !allowed.length ? '테스트를 누르면 이 초대 코드로 쓸 수 있는 모델이 표시됩니다.'
+        : allowed.length === 1 ? `이 초대 코드로는 ${relay.modelShortName(allowed[0])}만 쓸 수 있습니다. ${priceText(allowed[0], allowed[0])}`
+          : `이 초대 코드로 쓸 수 있는 모델만 표시됩니다. ${priceText(settings.model('translate'), settings.model('assist'))}`;
+    };
+    renderModels();
+
+    const showMe = (promise) => {
+      setResult(codeResult, 'busy', '초대 코드를 확인하는 중…');
+      promise.then((me) => {
+        if (!codeResult.isConnected) return;
+        setResult(codeResult, 'ok', relay.formatMe(me));
+        renderModels();
+      }, (err) => {
+        if (codeResult.isConnected) setResult(codeResult, 'error', err?.message || '초대 코드를 확인하지 못했습니다.');
+      });
+    };
+    if (r.code && settings.relayUrl()) queueMicrotask(() => showMe(this.#loadMe()));
+
+    return el('div', { class: 'subsection' },
+      el('h3', { class: 'subsection-title' }, icon('key', { size: 16 }), '초대 코드'),
+      el('label', { class: 'field' }, el('span', { class: 'field-label' }, '서버 주소'), urlInput,
+        el('span', { class: 'field-hint' }, '초대해 준 분이 알려 준 주소입니다. 보통은 바꿀 필요가 없습니다.')),
+      urlResult,
+      el('div', { style: { marginTop: '14px' } }, this.#secretField({
+        label: '초대 코드', value: r.code || '', placeholder: 'PR-XXXX-XXXX', result: codeResult, emptyMessage: '초대 코드를 먼저 입력하세요.',
+        normalize: (v) => relay.normalizeInviteCode(v),
+        onSave: (v) => {
+          if (v === (settings.get().relay?.code || '')) return;
+          relay.saveInviteCode(v);
+          this.#mePromise = null;
+          clearResult(codeResult);
+          renderModels();
+          this.#renderUsage();
+        },
+        onTest: async () => {
+          const code = settings.get().relay?.code || '';
+          if (!relay.isInviteCode(code)) return { ok: false, message: '초대 코드 형식이 올바르지 않습니다. PR-XXXX-XXXX 형식인지 확인해 주세요.' };
+          try {
+            const me = await this.#loadMe(true);
+            renderModels();
+            this.#renderUsage();
+            return { ok: true, message: relay.formatMe(me) };
+          } catch (err) {
+            return { ok: false, message: err?.message || '초대 코드를 확인하지 못했습니다.' };
+          }
+        },
+      })),
+      models,
+      modelHint,
+      note('shield', '번역·요약·채팅할 문장은 초대 코드 서버(Cloudflare)를 거쳐 Anthropic의 Claude로 전송됩니다. 서버에는 사용량(토큰 수·금액)만 기록되며, 하루 사용 한도는 초대한 분이 정합니다.'),
+      el('details', { class: 'howto' },
+        el('summary', {}, '초대 코드 쓰는 법'),
+        el('ol', {},
+          el('li', {}, '초대해 준 분에게 받은 링크(', el('code', {}, '…/#/join/PR-…'), ')를 이 브라우저에서 열면 자동으로 등록됩니다.'),
+          el('li', {}, '코드만 받았다면 위 칸에 붙여 넣고 ', el('b', {}, '테스트'), '를 누르세요. 이름과 오늘 사용량이 보이면 준비가 끝났습니다.'),
+          el('li', {}, '하루 한도를 다 쓰면 그날은 번역·요약·채팅이 멈추고, 한국 시간 0시에 다시 열립니다.'))));
+  }
+
+  /** GET /relay/me once per view (force: a fresh check, e.g. 테스트). */
+  #loadMe(force = false) {
+    const relay = this.#deps.relay;
+    if (!relay) return Promise.reject(new Error('초대 코드 모듈을 불러오지 못했습니다.'));
+    if (force || !this.#mePromise) {
+      const promise = relay.refreshMe();
+      this.#mePromise = promise;
+      promise.catch(() => { if (this.#mePromise === promise) this.#mePromise = null; });
+    }
+    return this.#mePromise;
   }
 
   #geminiDetail() {
@@ -261,14 +386,14 @@ class SettingsView {
    * Password-style input with show/hide and an optional 테스트 button.
    * Saves on change (blur / Enter); 테스트 saves first, then runs onTest() → { ok, message }.
    */
-  #secretField({ label, value = '', placeholder = '', onSave, onTest, hint }) {
+  #secretField({ label, value = '', placeholder = '', onSave, onTest, hint, result = null, normalize = null, emptyMessage = '키를 먼저 입력하세요.' }) {
     const input = el('input', {
       class: 'input', type: 'password', value, placeholder, autocomplete: 'off', spellcheck: 'false',
       'aria-label': label, autocapitalize: 'off',
     });
-    const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    result ||= el('div', { class: 'test-result', 'aria-live': 'polite' });
     const save = () => {
-      const v = input.value.trim();
+      const v = normalize ? normalize(input.value) : input.value.trim();
       if (input.value !== v) input.value = v;
       onSave(v);
     };
@@ -285,7 +410,7 @@ class SettingsView {
     if (onTest) {
       const testBtn = button('테스트', { icon: 'check-circle', onClick: async () => {
         save();
-        if (!input.value) { setResult(result, 'error', '키를 먼저 입력하세요.'); return; }
+        if (!input.value) { setResult(result, 'error', emptyMessage); return; }
         testBtn.disabled = true;
         setResult(result, 'busy', '연결을 확인하는 중…');
         try {
@@ -630,41 +755,78 @@ class SettingsView {
 
   #usageSection() {
     const host = el('div', {});
-    const render = () => {
-      const summary = this.#deps.usage?.usageSummary ? safeCall(() => this.#deps.usage.usageSummary()) : null;
-      if (!summary) {
-        host.replaceChildren(el('p', { class: 'field-hint' }, this.#deps.usage ? '아직 사용 기록이 없습니다.' : '사용량 모듈을 불러오지 못했습니다.'));
-        return;
-      }
-      const isPriced = typeof this.#deps.usage?.isPriced === 'function' ? this.#deps.usage.isPriced : () => true;
-      let unpriced = false;
-      const rows = Object.entries(summary.byModel || {}).map(([model, v]) => {
-        const info = typeof v === 'number' ? { usd: v } : (v || {});
-        const priced = isPriced(model);
-        if (!priced) unpriced = true;
-        return el('tr', {},
-          el('td', {}, modelName(model)),
-          el('td', { class: 'num' }, fmtInt(info.calls)),
-          el('td', { class: 'num' }, fmtInt(info.inputTokens)),
-          el('td', { class: 'num' }, fmtInt(info.outputTokens)),
-          el('td', { class: 'num', title: priced ? null : '이 모델은 요금 정보가 없어 비용을 계산하지 않습니다.' },
-            priced ? formatUsd(info.usd ?? info.costUsd ?? 0) : '비용 미집계'));
-      });
-      host.replaceChildren(...[
-        el('div', { class: 'usage-stats' },
-          stat('기간', formatMonth(summary.month)),
-          stat('예상 비용', `${formatUsd(summary.usd || 0)}${unpriced ? ' + Gemini' : ''}`),
-          stat('AI 호출', `${fmtInt(summary.calls || 0)}회`)),
-        rows.length ? el('div', { class: 'md-table-wrap' }, el('table', { class: 'data-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, '모델'), el('th', { class: 'num' }, '호출'), el('th', { class: 'num' }, '입력 토큰'), el('th', { class: 'num' }, '출력 토큰'), el('th', { class: 'num' }, '비용'))),
-          el('tbody', {}, rows))) : null,
-        unpriced ? note('info', 'Gemini 사용 비용은 요금 정보가 없어 예상 비용에 포함되지 않습니다. Google AI Studio의 결제 화면에서 확인하세요.') : null,
-        note('info', '토큰 수와 공개 요금표로 계산한 추정치이며 이 브라우저에서 쓴 양만 집계됩니다. 실제 청구액은 각 AI 서비스 콘솔에서 확인하세요.'),
-      ].filter(Boolean));
+    this.#renderUsage = (force = false) => {
+      if (settings.get().provider === 'relay') this.#renderRelayUsage(host, force);
+      else this.#renderLocalUsage(host);
     };
-    render();
-    const body = el('div', {}, host, el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: render })));
-    return section('usage', '이번 달 사용량', 'coins', '번역·요약·채팅에 쓴 AI 사용량과 예상 비용입니다.', body);
+    this.#renderUsage();
+    const body = el('div', {}, host, el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: () => this.#renderUsage(true) })));
+    return section('usage', '사용량', 'coins', '번역·요약·채팅에 쓴 AI 사용량과 비용입니다.', body);
+  }
+
+  /** Invite-code users: the relay's own count for today (KST), not this browser's estimates. */
+  async #renderRelayUsage(host, force) {
+    const relay = this.#deps.relay;
+    if (!relay) { host.replaceChildren(el('p', { class: 'field-hint' }, '초대 코드 모듈을 불러오지 못했습니다.')); return; }
+    if (!settings.isAiReady()) { host.replaceChildren(el('p', { class: 'field-hint' }, '초대 코드를 입력하면 오늘 사용량이 표시됩니다.')); return; }
+    const busy = el('div', {});
+    setResult(busy, 'busy', '초대 코드 서버에서 오늘 사용량을 불러오는 중…');
+    host.replaceChildren(busy);
+    const promise = this.#loadMe(force);
+    let me;
+    try {
+      me = await promise;
+    } catch (err) {
+      if (this.#mePromise !== null && this.#mePromise !== promise) return; // a newer request owns the panel
+      const failed = el('div', {});
+      setResult(failed, 'error', err?.message || '사용량을 불러오지 못했습니다.');
+      host.replaceChildren(failed);
+      return;
+    }
+    if (this.#mePromise !== promise || !host.isConnected) return;
+    const ratio = me.dailyLimitUsd > 0 ? me.todayUsd / me.dailyLimitUsd : me.todayUsd > 0 ? 1 : 0;
+    host.replaceChildren(
+      el('div', { class: 'usage-stats' },
+        stat('기간', '오늘 (한국 시간)'),
+        stat('사용 / 하루 한도', `${formatUsd(me.todayUsd)} / ${formatUsd(me.dailyLimitUsd)}`),
+        stat('AI 호출', `${fmtInt(me.todayRequests)}회`)),
+      el('div', { class: 'relay-meter' },
+        progressBar(ratio, { label: '하루 한도 대비 오늘 사용량' }).el,
+        el('span', { class: 'field-hint' }, `${me.name ? `${me.name}님 · ` : ''}${resetText(me.resetsAt)}`)),
+      note('info', '초대 코드 서버가 집계한 금액입니다. 하루 한도는 초대한 분이 정하며, 다 쓰면 그날은 번역·요약·채팅이 멈춥니다.'));
+  }
+
+  #renderLocalUsage(host) {
+    const summary = this.#deps.usage?.usageSummary ? safeCall(() => this.#deps.usage.usageSummary()) : null;
+    if (!summary) {
+      host.replaceChildren(el('p', { class: 'field-hint' }, this.#deps.usage ? '아직 사용 기록이 없습니다.' : '사용량 모듈을 불러오지 못했습니다.'));
+      return;
+    }
+    const isPriced = typeof this.#deps.usage?.isPriced === 'function' ? this.#deps.usage.isPriced : () => true;
+    let unpriced = false;
+    const rows = Object.entries(summary.byModel || {}).map(([model, v]) => {
+      const info = typeof v === 'number' ? { usd: v } : (v || {});
+      const priced = isPriced(model);
+      if (!priced) unpriced = true;
+      return el('tr', {},
+        el('td', {}, modelName(model)),
+        el('td', { class: 'num' }, fmtInt(info.calls)),
+        el('td', { class: 'num' }, fmtInt(info.inputTokens)),
+        el('td', { class: 'num' }, fmtInt(info.outputTokens)),
+        el('td', { class: 'num', title: priced ? null : '이 모델은 요금 정보가 없어 비용을 계산하지 않습니다.' },
+          priced ? formatUsd(info.usd ?? info.costUsd ?? 0) : '비용 미집계'));
+    });
+    host.replaceChildren(...[
+      el('div', { class: 'usage-stats' },
+        stat('기간', formatMonth(summary.month)),
+        stat('예상 비용', `${formatUsd(summary.usd || 0)}${unpriced ? ' + Gemini' : ''}`),
+        stat('AI 호출', `${fmtInt(summary.calls || 0)}회`)),
+      rows.length ? el('div', { class: 'md-table-wrap' }, el('table', { class: 'data-table' },
+        el('thead', {}, el('tr', {}, el('th', {}, '모델'), el('th', { class: 'num' }, '호출'), el('th', { class: 'num' }, '입력 토큰'), el('th', { class: 'num' }, '출력 토큰'), el('th', { class: 'num' }, '비용'))),
+        el('tbody', {}, rows))) : null,
+      unpriced ? note('info', 'Gemini 사용 비용은 요금 정보가 없어 예상 비용에 포함되지 않습니다. Google AI Studio의 결제 화면에서 확인하세요.') : null,
+      note('info', '토큰 수와 공개 요금표로 계산한 추정치이며 이 브라우저에서 쓴 양만 집계됩니다. 실제 청구액은 각 AI 서비스 콘솔에서 확인하세요.'),
+    ].filter(Boolean));
   }
 
   // ----------------------------------------------------------------- data
@@ -689,9 +851,9 @@ class SettingsView {
       el('div', { class: 'subsection' },
         el('h3', { class: 'subsection-title' }, icon('shield', { size: 16 }), '저장 위치'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
-          'API 키와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
+          'API 키·초대 코드와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
-          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic 또는 Google) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
+          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic 또는 Google, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
         shared ? note('alert-triangle', shared) : null,
         persisted,
         el('div', { class: 'btn-row' }, clearBtn, wipeBtn),
@@ -718,14 +880,336 @@ class SettingsView {
   }
 
   async #clearSecrets() {
-    const ok = await confirmDialog('이 기기에 저장된 Claude·Gemini·Semantic Scholar API 키와 GitHub 토큰을 모두 지울까요?\n라이브러리와 번역 데이터는 지워지지 않습니다.',
+    const ok = await confirmDialog('이 기기에 저장된 Claude·Gemini·Semantic Scholar API 키, 초대 코드·관리자 토큰과 GitHub 토큰을 모두 지울까요?\n라이브러리와 번역 데이터는 지워지지 않습니다.',
       { okLabel: '지우기', danger: true, title: '키·토큰 지우기' });
     if (!ok) return;
-    settings.set({ claude: { apiKey: '' }, gemini: { apiKey: '' }, github: { token: '' }, semanticScholar: { apiKey: '' } });
+    settings.set({
+      claude: { apiKey: '' }, gemini: { apiKey: '' }, github: { token: '' }, semanticScholar: { apiKey: '' },
+      relay: { code: '', adminToken: '', name: '', allowedModels: [], translateModel: '', assistModel: '' },
+    });
+    this.#mePromise = null;
     try { await this.#deps.library?.reconfigureSync?.(); } catch (err) { console.warn('[settings-view] reconfigureSync', err); }
     toast('이 기기에서 키와 토큰을 지웠습니다.', { kind: 'success' });
     this.#render();
   }
+
+  // -------------------------------------------------------------- invites
+
+  /** 초대 코드 관리 (owner): collapsed; loads nothing until opened with an admin token saved. */
+  #invitesSection() {
+    const body = el('div', { class: 'relay-admin-body' });
+    const summary = el('summary', {}, '관리 화면 열기');
+    const panel = el('details', { class: 'relay-admin' }, summary, body);
+    panel.addEventListener('toggle', () => {
+      summary.textContent = panel.open ? '관리 화면 닫기' : '관리 화면 열기';
+      if (panel.open) this.#renderAdmin(body);
+    });
+    return section('invites', '초대 코드 관리 (관리자)', 'key',
+      '동료에게 나눠 줄 초대 코드를 만들고 사용량을 봅니다. 초대 코드 서버의 관리자 토큰이 있어야 쓸 수 있습니다.', panel);
+  }
+
+  #renderAdmin(host) {
+    const relay = this.#deps.relay;
+    if (!relay) {
+      host.replaceChildren(note('alert-triangle', '초대 코드 모듈을 불러오지 못해 관리 화면을 쓸 수 없습니다.', 'is-warning'));
+      return;
+    }
+    if (!settings.get().relay?.adminToken) {
+      host.replaceChildren(this.#adminTokenForm(host),
+        el('p', { class: 'field-hint' }, '관리자 토큰은 초대 코드 서버(Cloudflare Worker)를 배포할 때 ADMIN_TOKEN 비밀 값으로 정한 문자열입니다.'));
+      return;
+    }
+    const list = el('div', { class: 'relay-codes', 'aria-live': 'polite' });
+    const created = el('div', {});
+    host.replaceChildren(
+      this.#adminTokenSaved(host),
+      this.#adminCreateForm(list, created),
+      created,
+      el('div', { class: 'subsection' }, el('h3', { class: 'subsection-title' }, icon('list', { size: 16 }), '초대 코드 목록'), list),
+      this.#adminUsage());
+    this.#loadCodes(list);
+  }
+
+  /** The token is checked against the server before it is saved, and never shown again. */
+  #adminTokenForm(host) {
+    const relay = this.#deps.relay;
+    const input = el('input', {
+      class: 'input', type: 'password', placeholder: '관리자 토큰', autocomplete: 'off', spellcheck: 'false',
+      autocapitalize: 'off', 'aria-label': '관리자 토큰',
+    });
+    const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const save = button('확인하고 저장', { icon: 'check-circle', kind: 'primary', onClick: async () => {
+      const token = input.value.trim();
+      if (!token) { setResult(result, 'error', '관리자 토큰을 입력하세요.'); return; }
+      save.disabled = true;
+      setResult(result, 'busy', '관리자 토큰을 확인하는 중…');
+      try {
+        await relay.listCodes({ token });
+        input.value = '';
+        settings.set({ relay: { adminToken: token } });
+        toast('관리자 토큰을 저장했습니다.', { kind: 'success' });
+        this.#renderAdmin(host);
+      } catch (err) {
+        setResult(result, 'error', err?.message || '관리자 토큰을 확인하지 못했습니다.');
+      } finally {
+        save.disabled = false;
+      }
+    } });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save.click(); } });
+    return el('div', { class: 'field' },
+      el('span', { class: 'field-label' }, '관리자 토큰'),
+      el('div', { class: 'input-group' }, input, save),
+      el('span', { class: 'field-hint' }, '저장한 토큰은 다시 표시되지 않습니다. 내 기기에만 저장하고, 공용 PC에는 저장하지 마세요.'),
+      result);
+  }
+
+  #adminTokenSaved(host) {
+    return el('div', { class: 'relay-token' },
+      el('span', { class: 'badge is-ok' }, icon('check', { size: 12 }), '관리자 토큰 저장됨'),
+      el('span', { class: 'field-hint' }, '이 기기에만 저장되어 있으며 다시 표시되지 않습니다.'),
+      button('지우기', { icon: 'trash', size: 'sm', kind: 'ghost', onClick: () => {
+        settings.set({ relay: { adminToken: '' } });
+        toast('이 기기에서 관리자 토큰을 지웠습니다.', { kind: 'success' });
+        this.#renderAdmin(host);
+      } }));
+  }
+
+  #adminCreateForm(list, created) {
+    const relay = this.#deps.relay;
+    const name = el('input', { class: 'input', type: 'text', maxlength: String(relay.NAME_MAX), placeholder: '예: 김간호', 'aria-label': '이름', autocomplete: 'off' });
+    const limit = el('input', { class: 'input', type: 'number', min: '0', max: String(relay.DAILY_LIMIT_MAX), step: '0.1', value: '0.5', 'aria-label': '하루 한도 (달러)' });
+    const pick = modelSetPicker(relay, relay.MODEL_SETS[0].models);
+    const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const submit = button('코드 만들기', { icon: 'plus', kind: 'primary', onClick: async () => {
+      submit.disabled = true;
+      setResult(result, 'busy', '초대 코드를 만드는 중…');
+      try {
+        const v = limit.value.trim();
+        const code = await relay.createCode({ name: name.value, dailyLimitUsd: v === '' ? undefined : Number(v), allowedModels: pick.value() });
+        clearResult(result);
+        name.value = '';
+        this.#showCreated(created, code);
+        await this.#loadCodes(list);
+      } catch (err) {
+        setResult(result, 'error', err?.message || '초대 코드를 만들지 못했습니다.');
+      } finally {
+        submit.disabled = false;
+      }
+    } });
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit.click(); } });
+    const ratio = Math.round(PRICES['claude-sonnet-5-5'].input / PRICES['claude-haiku-5-5'].input);
+    return el('div', { class: 'subsection' },
+      el('h3', { class: 'subsection-title' }, icon('plus', { size: 16 }), '새 초대 코드'),
+      el('div', { class: 'relay-create' },
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '이름'), name),
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '하루 한도 ($)'), limit),
+        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '모델'), pick.el)),
+      el('p', { class: 'field-hint' }, `하루 한도는 $0~$${relay.DAILY_LIMIT_MAX}이며 한국 시간 0시에 초기화됩니다. Sonnet은 요금이 Haiku의 약 ${ratio}배라 한도가 빨리 찹니다.`),
+      el('div', { class: 'btn-row' }, submit),
+      result);
+  }
+
+  #showCreated(host, c) {
+    const relay = this.#deps.relay;
+    host.replaceChildren(el('div', { class: 'note is-success relay-created', role: 'status' },
+      icon('check-circle', { size: 16 }),
+      el('div', {},
+        el('div', {}, `${c.name}님의 초대 코드를 만들었습니다: `, el('code', {}, c.code)),
+        el('div', { class: 'btn-row' },
+          copyButton('초대 메시지 복사', () => relay.inviteMessage(c), '초대 메시지를 복사했습니다. 메신저에 붙여 넣어 보내세요.', 'primary'),
+          copyButton('코드 복사', () => c.code, '초대 코드를 복사했습니다.')))));
+  }
+
+  async #loadCodes(list) {
+    const relay = this.#deps.relay;
+    const busy = el('div', {});
+    setResult(busy, 'busy', '초대 코드 목록을 불러오는 중…');
+    list.replaceChildren(busy);
+    let data;
+    try {
+      data = await relay.listCodes();
+    } catch (err) {
+      const failed = el('div', {});
+      setResult(failed, 'error', err?.message || '초대 코드 목록을 불러오지 못했습니다.');
+      list.replaceChildren(failed, el('div', { class: 'btn-row' }, button('다시 불러오기', { icon: 'refresh', size: 'sm', onClick: () => this.#loadCodes(list) })));
+      return;
+    }
+    const codes = [...data.codes].sort((a, b) => Number(b.active) - Number(a.active) || b.createdAt - a.createdAt);
+    const active = codes.filter((c) => c.active).length;
+    list.replaceChildren(
+      el('div', { class: 'usage-stats' },
+        stat('오늘 전체', `${formatUsd(data.todayTotalUsd)} / ${formatUsd(data.globalDailyLimitUsd)}`),
+        stat('이번 달 전체', formatUsd(data.monthTotalUsd)),
+        stat('사용 중인 코드', `${active} / ${codes.length}개`)),
+      codes.length
+        ? el('ul', { class: 'relay-code-list' }, codes.map((c) => this.#codeItem(c, list)))
+        : el('p', { class: 'field-hint' }, '아직 만든 초대 코드가 없습니다. 위에서 이름과 하루 한도를 정해 만들어 보세요.'),
+      el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: () => this.#loadCodes(list) })));
+  }
+
+  #codeItem(c, list) {
+    const relay = this.#deps.relay;
+    return el('li', { class: `relay-code${c.active ? '' : ' is-inactive'}`, dataset: { code: c.code } },
+      el('div', { class: 'relay-code-head' },
+        el('span', { class: 'relay-code-name' }, c.name || '(이름 없음)'),
+        el('code', { class: 'relay-code-value' }, c.code),
+        el('span', { class: `badge ${c.active ? 'is-ok' : 'is-error'}` }, c.active ? '사용 중' : '중지됨')),
+      el('div', { class: 'relay-code-meta' },
+        el('span', {}, `모델 ${relay.modelSetLabel(c.allowedModels)}`),
+        el('span', {}, `하루 한도 ${formatUsd(c.dailyLimitUsd)}`),
+        el('span', {}, `오늘 ${formatUsd(c.todayUsd)}`),
+        el('span', {}, `이번 달 ${formatUsd(c.monthUsd)}`),
+        el('span', {}, `누적 ${formatUsd(c.totalUsd)} · ${fmtInt(c.totalRequests)}회`),
+        el('span', {}, c.lastUsedAt ? `마지막 사용 ${formatKst(c.lastUsedAt)}` : '아직 사용하지 않음')),
+      el('div', { class: 'relay-code-actions' },
+        copyButton('초대 메시지 복사', () => relay.inviteMessage(c), '초대 메시지를 복사했습니다. 메신저에 붙여 넣어 보내세요.'),
+        copyButton('코드 복사', () => c.code, '초대 코드를 복사했습니다.'),
+        button('한도·모델 수정', { icon: 'pencil', size: 'sm', kind: 'ghost', onClick: () => this.#editCode(c, list) }),
+        button(c.active ? '중지' : '다시 사용', { icon: c.active ? 'stop' : 'play', size: 'sm', kind: 'ghost', onClick: () => this.#toggleCode(c, list) })));
+  }
+
+  #editCode(c, list) {
+    const relay = this.#deps.relay;
+    const name = el('input', { class: 'input', type: 'text', value: c.name, maxlength: String(relay.NAME_MAX), 'aria-label': '이름', autocomplete: 'off' });
+    const limit = el('input', { class: 'input', type: 'number', min: '0', max: String(relay.DAILY_LIMIT_MAX), step: '0.1', value: String(c.dailyLimitUsd), 'aria-label': '하루 한도 (달러)' });
+    const pick = modelSetPicker(relay, c.allowedModels);
+    modal({
+      title: '초대 코드 수정',
+      size: 'sm',
+      body: el('div', { class: 'relay-edit' },
+        el('p', { class: 'field-hint', style: { marginTop: 0 } }, el('code', {}, c.code), ' · 바꾼 내용은 바로 적용됩니다.'),
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '이름'), name),
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, '하루 한도 ($)'), limit),
+        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '모델'), pick.el)),
+      actions: [
+        { label: '취소' },
+        { label: '저장', kind: 'primary', onClick: async () => {
+          const patch = {};
+          if (name.value.trim() !== c.name) patch.name = name.value;
+          const v = limit.value.trim();
+          if (v === '' || Number(v) !== c.dailyLimitUsd) patch.dailyLimitUsd = v === '' ? NaN : Number(v);
+          const models = pick.value();
+          if (models.join(',') !== c.allowedModels.join(',')) patch.allowedModels = models;
+          if (!Object.keys(patch).length) return true;
+          await relay.updateCode(c.code, patch); // a Korean validation/server error keeps the dialog open (toast)
+          toast('초대 코드를 수정했습니다.', { kind: 'success' });
+          this.#loadCodes(list);
+          return true;
+        } },
+      ],
+    });
+  }
+
+  async #toggleCode(c, list) {
+    const relay = this.#deps.relay;
+    if (c.active) {
+      const ok = await confirmDialog(`${c.name}님의 초대 코드(${c.code})를 중지할까요?\n중지하면 이 코드로는 바로 번역·요약·채팅을 쓸 수 없습니다. ‘다시 사용’으로 되돌릴 수 있습니다.`,
+        { okLabel: '중지', danger: true, title: '초대 코드 중지' });
+      if (!ok) return;
+    }
+    try {
+      await relay.updateCode(c.code, { active: !c.active });
+      toast(c.active ? '초대 코드를 중지했습니다.' : '초대 코드를 다시 쓸 수 있게 했습니다.', { kind: 'success' });
+    } catch (err) {
+      toast(err?.message || '초대 코드를 바꾸지 못했습니다.', { kind: 'error' });
+    }
+    await this.#loadCodes(list);
+  }
+
+  /** Daily totals, loaded when opened. */
+  #adminUsage() {
+    const relay = this.#deps.relay;
+    const body = el('div', {});
+    const details = el('details', { class: 'howto' }, el('summary', {}, '날짜별 사용량 (최근 30일)'), body);
+    details.addEventListener('toggle', async () => {
+      if (!details.open) return;
+      setResult(body, 'busy', '사용량을 불러오는 중…');
+      try {
+        const { days } = await relay.usage({ days: 30 });
+        const rows = days.filter((d) => d.requests || d.usd).sort((a, b) => b.day.localeCompare(a.day));
+        body.className = '';
+        body.replaceChildren(rows.length
+          ? el('div', { class: 'md-table-wrap' }, el('table', { class: 'data-table' },
+            el('thead', {}, el('tr', {}, el('th', {}, '날짜'), el('th', { class: 'num' }, '요청'), el('th', { class: 'num' }, '금액'), el('th', {}, '모델별'))),
+            el('tbody', {}, rows.map((d) => el('tr', {},
+              el('td', {}, d.day),
+              el('td', { class: 'num' }, fmtInt(d.requests)),
+              el('td', { class: 'num' }, formatUsd(d.usd)),
+              el('td', {}, byModelText(relay, d.byModel)))))))
+          : el('p', { class: 'field-hint' }, '최근 30일 동안 사용 기록이 없습니다.'));
+      } catch (err) {
+        setResult(body, 'error', err?.message || '사용량을 불러오지 못했습니다.');
+      }
+    });
+    return details;
+  }
+}
+
+// ------------------------------------------------------------------- join
+
+/**
+ * #/join/<CODE>: check the invite code, switch this browser to it, welcome the person by name. The code is taken
+ * out of the address bar once registered; an invalid code leaves the settings as they were.
+ * @param {HTMLElement} container
+ * @param {{ code: string, deps: object, navigate: (hash: string) => void }} opts
+ * @returns {{ destroy: () => void }}
+ */
+export function mountJoinView(container, { code, deps, navigate }) {
+  document.title = '초대 코드 · 논문 리더';
+  const controller = new AbortController();
+  let alive = true;
+  const show = (node) => { if (alive) container.replaceChildren(node); };
+  const toLibrary = { label: '라이브러리로', icon: 'arrow-left', onClick: () => navigate('#/') };
+  const toSettings = { label: '코드 직접 입력', icon: 'key', onClick: () => navigate('#/settings/ai') };
+  const run = async () => {
+    show(el('div', { class: 'boot' }, el('div', { class: 'boot-inner' }, spinner(18), '초대 코드를 확인하는 중…')));
+    const relay = deps.relay;
+    if (!relay) {
+      show(messageScreen({
+        title: '초대 코드 기능을 불러오지 못했습니다',
+        message: '페이지를 새로 고친 뒤 다시 시도해 주세요. 계속되면 초대해 준 분에게 알려 주세요.',
+        actions: [{ label: '새로 고침', kind: 'primary', icon: 'refresh', onClick: () => location.reload() }, toLibrary],
+      }));
+      return;
+    }
+    const normalized = relay.normalizeInviteCode(code);
+    if (!relay.isInviteCode(normalized)) {
+      show(messageScreen({
+        title: '초대 링크가 올바르지 않습니다',
+        message: `링크에 들어 있는 코드(${code || '없음'})가 초대 코드 형식(PR-XXXX-XXXX)이 아닙니다.\n받은 링크 전체가 복사되었는지 확인하거나, 설정에서 코드를 직접 입력해 주세요.`,
+        actions: [{ ...toSettings, kind: 'primary' }, toLibrary],
+      }));
+      return;
+    }
+    const s = settings.get();
+    const hadKey = Boolean(s.claude?.apiKey || s.gemini?.apiKey);
+    try {
+      const me = await relay.registerInviteCode(normalized, { signal: controller.signal });
+      if (!alive) return;
+      history.replaceState(null, '', '#/');
+      const who = me.name ? `${me.name}님, ` : '';
+      const models = me.allowedModels.map(relay.modelShortName).join(', ') || '-';
+      show(messageScreen({
+        iconName: 'check-circle', tone: 'success',
+        title: me.name ? `환영합니다, ${me.name}님` : '환영합니다',
+        message: [
+          `${who}초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다.`,
+          `하루 한도 ${formatUsd(me.dailyLimitUsd)} · 모델: ${models} · 한도는 매일 0시(한국 시간)에 초기화됩니다.`,
+          hadKey ? '원래 쓰던 API 키는 그대로 있어 설정 → AI 번역에서 언제든 다시 고를 수 있습니다.' : '',
+        ].filter(Boolean).join('\n'),
+        actions: [{ label: '논문 읽으러 가기', kind: 'primary', icon: 'arrow-right', onClick: () => navigate('#/') }],
+      }));
+    } catch (err) {
+      if (!alive || err?.code === 'aborted') return;
+      show(messageScreen({
+        title: '초대 코드를 확인하지 못했습니다',
+        message: `${err?.message || '초대 코드를 확인하지 못했습니다.'}\n코드: ${normalized}`,
+        actions: [{ label: '다시 시도', kind: 'primary', icon: 'refresh', onClick: run }, toSettings, toLibrary],
+      }));
+    }
+  };
+  run();
+  return { destroy: () => { alive = false; controller.abort(); } };
 }
 
 // ------------------------------------------------------------------ helpers
@@ -760,8 +1244,8 @@ function switchRow(title, desc, checked, onChange) {
     input);
 }
 
-function note(iconName, text) {
-  return el('div', { class: 'note' }, icon(iconName, { size: 16 }), el('div', {}, text));
+function note(iconName, text, kind = '') {
+  return el('div', { class: kind ? `note ${kind}` : 'note' }, icon(iconName, { size: 16 }), el('div', {}, text));
 }
 
 function stat(label, value) {
@@ -776,6 +1260,83 @@ function setResult(node, kind, text) {
   node.className = `test-result is-${kind}`;
   const glyph = kind === 'busy' ? spinner(14) : icon(kind === 'ok' ? 'check-circle' : kind === 'error' ? 'alert-circle' : 'info', { size: 16 });
   node.replaceChildren(glyph, el('span', {}, text));
+}
+
+function clearResult(node) {
+  node.className = 'test-result';
+  node.replaceChildren();
+}
+
+/** Segmented 'Haiku만' / 'Haiku + Sonnet'; a code with another set keeps it until a button is pressed. */
+function modelSetPicker(relay, initial) {
+  let models = [...(initial || [])];
+  const group = el('div', { class: 'segmented', role: 'group', 'aria-label': '모델' });
+  const buttons = relay.MODEL_SETS.map((set) => button(set.label, {
+    size: 'sm',
+    pressed: set.models.length === models.length && set.models.every((m) => models.includes(m)),
+    onClick: () => {
+      models = [...set.models];
+      buttons.forEach((b, i) => b.setAttribute('aria-pressed', String(relay.MODEL_SETS[i] === set)));
+    },
+  }));
+  group.append(...buttons);
+  return { el: group, value: () => [...models] };
+}
+
+/** A small button that copies `text()`; when the clipboard is unavailable the text is shown to copy by hand. */
+function copyButton(label, text, done, kind = 'ghost') {
+  return button(label, { icon: 'copy', size: 'sm', kind, onClick: async () => {
+    const value = text();
+    if (await copyToClipboard(value)) { toast(done, { kind: 'success' }); return; }
+    const area = el('textarea', { class: 'textarea', rows: String(Math.min(8, value.split('\n').length + 1)), readonly: true, 'aria-label': label });
+    area.value = value;
+    modal({
+      title: '직접 복사해 주세요',
+      size: 'sm',
+      body: el('div', {}, el('p', { class: 'field-hint', style: { marginTop: 0 } }, '브라우저가 클립보드 복사를 막았습니다. 아래 내용을 선택해 복사하세요(Ctrl+C).'), area),
+      actions: [{ label: '닫기', kind: 'primary' }],
+    });
+    area.select();
+  } });
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall back below */ }
+  const ta = el('textarea', { readonly: true, style: { position: 'fixed', left: '-9999px', opacity: '0' } });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+const KST = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/** '10월 18일 14:05' in Korea time. */
+function formatKst(ms) {
+  try { return KST.format(new Date(ms)); } catch { return '-'; }
+}
+
+function resetText(resetsAt) {
+  const t = Date.parse(resetsAt || '');
+  return Number.isFinite(t) ? `한도는 ${formatKst(t)}(한국 시간)에 초기화됩니다.` : '한도는 매일 0시(한국 시간)에 초기화됩니다.';
+}
+
+function byModelText(relay, byModel) {
+  return Object.entries(byModel || {}).map(([model, v]) => {
+    const usd = typeof v === 'number' ? v : Number(v?.usd);
+    return `${relay.modelShortName(model)} ${Number.isFinite(usd) ? formatUsd(usd) : ''}`.trim();
+  }).join(' · ') || '-';
+}
+
+/** 'Claude Haiku 5.5 (빠름·저렴)' for a known Claude model id; other ids as they are. */
+function modelLabel(id) {
+  return CLAUDE_MODELS.find((m) => m.id === id)?.label || id;
 }
 
 let savedTimer = null;

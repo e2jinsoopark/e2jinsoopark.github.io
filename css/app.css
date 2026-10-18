@@ -343,7 +343,7 @@ kbd {
 .message-icon { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); margin-bottom: 14px; }
 .tone-error .message-icon { background: var(--danger-soft); color: var(--danger); }
 .message-title { margin: 0 0 8px; font-size: 20px; font-weight: 700; }
-.message-text { margin: 0 auto; max-width: 440px; color: var(--text-2); line-height: 1.7; white-space: pre-line; }
+.message-text { margin: 0 auto; max-width: 440px; color: var(--text-2); line-height: 1.7; white-space: pre-line; word-break: keep-all; overflow-wrap: anywhere; }
 .message-details { margin-top: 18px; text-align: left; }
 .message-details summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
 .message-details pre, .message-details-pre {
@@ -731,6 +731,43 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .data-table th { color: var(--text-3); font-weight: 600; font-size: 12px; }
 .data-table td.num, .data-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .settings-footer { text-align: center; font-size: 12px; color: var(--text-3); margin-top: 24px; }
+
+/* invite-code relay: usage meter, 초대 코드 관리 (admin), join screen */
+.note.is-success { background: var(--success-soft); }
+.note.is-success > .icon { color: var(--success); }
+.note .btn-row { margin-top: 8px; }
+.note .btn .icon { color: inherit; margin-top: 0; }
+.note code, .relay-code-value, .relay-edit code {
+  font-family: var(--font-mono); font-size: 0.92em; padding: 1px 6px; border-radius: 5px;
+  background: var(--surface-3); color: var(--text); letter-spacing: 0.02em;
+}
+.relay-meter { display: grid; gap: 6px; margin-top: 12px; }
+.relay-admin > summary {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: var(--surface); font-size: 13.5px; font-weight: 600; color: var(--text);
+}
+.relay-admin > summary:hover { background: var(--hover-bg); }
+.relay-admin > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.relay-admin[open] > summary { margin-bottom: 14px; }
+.relay-token { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.relay-token .badge { gap: 4px; }
+.relay-create { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) auto; gap: 14px; align-items: end; }
+.relay-create .field + .field { margin-top: 0; }
+.relay-create .segmented, .relay-edit .segmented { align-self: start; }
+.relay-edit .field + .field { margin-top: 12px; }
+.relay-created { align-items: flex-start; }
+.relay-codes .usage-stats { margin-bottom: 12px; }
+.relay-code-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.relay-code { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); min-width: 0; }
+.relay-code.is-inactive { opacity: 0.72; }
+.relay-code-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.relay-code-name { font-weight: 700; overflow-wrap: anywhere; }
+.relay-code-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.relay-code-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.tone-success .message-icon { background: var(--success-soft); color: var(--success); }
+@media (max-width: 860px) {
+  .relay-create { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ============================================================ RESPONSIVE */
 @media (max-width: 1366px) {

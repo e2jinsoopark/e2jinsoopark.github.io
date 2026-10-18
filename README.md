@@ -29,6 +29,11 @@ API 키와 GitHub 토큰은 **그 브라우저에만** 저장됩니다. 다른 �
 
 ### 1. AI 번역 키
 
+**초대 코드 (키 없이 쓰기)**
+초대받았다면 받은 링크(`https://e2jinsoopark.github.io/#/join/PR-…`)를 열면 끝입니다. 코드만 받았다면
+**설정 → AI 번역 → 키 없이 쓰기**에 넣고 **테스트**를 누르세요. 하루 사용 한도는 초대한 분이 정하며 한국 시간 0시에
+다시 열립니다. (초대 코드 서버를 운영하는 방법: `relay/README.md`, `docs/notes/relay.md`)
+
 **Claude (권장)**
 1. <https://platform.claude.com> 에 로그인 → **API Keys** → **Create Key**
 2. 만든 키를 앱의 **설정 → AI** 에 붙여넣고 **테스트**를 누릅니다.

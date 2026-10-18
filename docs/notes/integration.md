@@ -72,3 +72,9 @@ max_tokens salvage + scaled caps, refusal bisection, fidelity, first mention, ha
 `tests/pdf/viewer.test.mjs` regressions (rotated pages via `harness.html?rotate=1:90,2:180`, page cleanup + pixel
 budget, render-failure backoff), `tests/shell/run.mjs` (sanitizer classes, 연결 테스트 saves, onboarding deep link),
 `tests/shell/run-real.mjs` (bad key → one toast with 설정 열기), `tests/features/run.mjs` (no auto summary, S2 consent).
+
+## Invite-code relay (2026-10-18)
+
+Colleagues without an API key use the owner's Cloudflare Worker (`relay/`) through invite codes. Architecture, the
+test hook for a local Worker (staged site copy, production CSP untouched), the end-to-end test
+(`node tests/relay-e2e/run.mjs`) and the deploy checklist: [`relay.md`](relay.md). App side: [`relay-client.md`](relay-client.md).

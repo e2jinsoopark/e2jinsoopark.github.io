@@ -1,0 +1,24 @@
+// Cloudflare Worker config for the invite-code relay (docs/RELAY.md). Deploy steps: README.md.
+{
+  "name": "paper-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "paper-relay",
+      // Placeholder: replace with the database_id printed by `npx wrangler d1 create paper-relay`.
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  // Secrets (not here): ANTHROPIC_API_KEY, ADMIN_TOKEN — set with `npx wrangler secret put <NAME>`.
+  "vars": {
+    "ALLOWED_ORIGINS": "https://e2jinsoopark.github.io,http://localhost:*,http://127.0.0.1:*",
+    "UPSTREAM_URL": "https://api.anthropic.com",
+    "DEFAULT_MODELS": "claude-haiku-5-5",
+    "DEFAULT_DAILY_LIMIT_USD": "0.5",
+    "GLOBAL_DAILY_LIMIT_USD": "5",
+    "MAX_TOKENS_CAP": "32000"
+  }
+}
