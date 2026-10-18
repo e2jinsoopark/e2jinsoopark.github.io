@@ -73,13 +73,25 @@ export class SyncEngine extends EventTarget {
   #uploaded = new Map(); // `${target}\n${path}\n${wid}` → blob sha (skip re-uploads on retry)
   #channel = null;
   #listeners = [];
+  #lockName;
+  #channelName;
+  #describeCommit;
+  #texts;
 
   /**
-   * @param {{ db?: typeof defaultDb, getConfig: () => ({ owner, repo, branch?, token, apiBase? } | null),
+   * @param {{ db?: typeof defaultDb, getConfig: () => ({ owner, repo, branch?, token, apiBase?, proxy? } | null),
    *           createClient?: (cfg) => GitHubClient, pushDelayMs?: number, pushMaxDelayMs?: number,
-   *           pullIntervalMs?: number, retryDelaysMs?: number[] }} opts
+   *           pullIntervalMs?: number, retryDelaysMs?: number[], scope?: string, addReadme?: boolean,
+   *           describeCommit?: (changes: { path: string, delete: boolean }[]) => string | null,
+   *           texts?: { noClient?: string, targetChanged?: string } }} opts
+   *   scope: '' for 내 서재 (Web Lock / BroadcastChannel 'paper-reader-sync', as before); another library uses
+   *     its own name (e.g. its IndexedDB name), so two engines in one page never lock or notify each other.
+   *   addReadme: add README.md to a commit when the repo has none (false for the shared library, whose
+   *     proxy accepts only data paths; an empty repo is still bootstrapped through the contents API).
+   *   describeCommit: the commit message for a batch (null → the default file list), e.g. 최근 활동 text.
+   *   texts: user-facing messages that differ per library.
    */
-  constructor({ db = defaultDb, getConfig, createClient = (cfg) => new GitHubClient(cfg), ...opts } = {}) {
+  constructor({ db = defaultDb, getConfig, createClient = (cfg) => new GitHubClient(cfg), scope = '', addReadme = true, describeCommit = null, texts = {}, ...opts } = {}) {
     super();
     this.#db = db;
     this.#getConfig = getConfig || (() => null);
@@ -89,6 +101,16 @@ export class SyncEngine extends EventTarget {
       pushMaxDelayMs: opts.pushMaxDelayMs ?? PUSH_MAX_DELAY_MS,
       pullIntervalMs: opts.pullIntervalMs ?? PULL_INTERVAL_MS,
       retryDelaysMs: opts.retryDelaysMs ?? RETRY_DELAYS_MS,
+      addReadme: addReadme !== false,
+    };
+    const suffix = scope ? `:${scope}` : '';
+    this.#lockName = `${LOCK_NAME}${suffix}`;
+    this.#channelName = `${CHANNEL_NAME}${suffix}`;
+    this.#describeCommit = typeof describeCommit === 'function' ? describeCommit : null;
+    this.#texts = {
+      noClient: '이 파일은 아직 이 기기에 없습니다. 설정에서 GitHub 동기화를 켜면 내려받을 수 있습니다.',
+      targetChanged: '동기화할 GitHub 저장소가 바뀌었습니다. 이 기기의 논문·메모를 새 저장소에 올릴지 설정 → GitHub 동기화에서 정한 뒤 다시 저장하세요.',
+      ...texts,
     };
   }
 
@@ -266,6 +288,27 @@ export class SyncEngine extends EventTarget {
     return [...new Set([...local, ...remote])].sort();
   }
 
+  /** Can `readFile(path)` return content: a local copy that is not a pending delete, or a known remote blob. */
+  async exists(path) {
+    const rec = await this.#db.get('files', path);
+    if (rec) return !rec.deleted;
+    return Boolean((await this.#currentMeta())?.tree?.[path]);
+  }
+
+  /**
+   * The git blob sha of the content `readFile(path)` would return, without downloading it: the sync base of
+   * a clean local copy, the hash of a local edit, or the remote tree's entry. Null when unknown.
+   */
+  async blobSha(path) {
+    const rec = await this.#db.get('files', path);
+    if (rec) {
+      if (rec.deleted || rec.data == null) return null;
+      if (!rec.dirty && rec.baseSha) return rec.baseSha;
+      return gitBlobSha(typeof rec.data === 'string' ? utf8Encode(rec.data) : rec.data);
+    }
+    return (await this.#currentMeta())?.tree?.[path]?.sha ?? null;
+  }
+
   // ------------------------------------------------------------- scheduling
 
   async #afterLocalWrite(paths) {
@@ -375,7 +418,7 @@ export class SyncEngine extends EventTarget {
     };
     // One tab syncs at a time; background pulls skip when another tab is already syncing.
     const opportunistic = reason === 'interval' || reason === 'focus';
-    await withLock(run, { wait: !opportunistic });
+    await withLock(this.#lockName, run, { wait: !opportunistic });
     if (this.#client && this.#status.pending && this.#status.state === 'idle' && !this.#pushTimer) this.#schedulePush();
   }
 
@@ -639,8 +682,8 @@ ${rec.wid}`;
     let next = meta;
     if (changes.length) {
       const files = changes.map((it) => (it.delete ? { path: it.path, delete: true } : { path: it.path, sha: it.sha }));
-      if (!meta.tree[README_PATH]) files.push({ path: README_PATH, text: README_TEXT }); // "created if missing"
-      const res = await client.commit(files, commitMessage(changes), { parent: meta.commitSha, baseTree: meta.treeSha, signal });
+      if (this.#opts.addReadme && !meta.tree[README_PATH]) files.push({ path: README_PATH, text: README_TEXT }); // "created if missing"
+      const res = await client.commit(files, this.#messageFor(changes), { parent: meta.commitSha, baseTree: meta.treeSha, signal });
       const tree = Object.fromEntries(
         [...(await client.listTree(res.treeSha, { signal }))].map(([p, v]) => [p, { sha: v.sha, size: v.size }]));
       next = await this.#updateMeta((m) => ({ ...m, commitSha: res.commitSha, treeSha: res.treeSha, tree }));
@@ -662,6 +705,19 @@ ${rec.wid}`;
     return next;
   }
 
+  /** Commit message: the library's description of the batch when it has one, else the file list. */
+  #messageFor(changes) {
+    if (this.#describeCommit) {
+      try {
+        const text = this.#describeCommit(changes.map((c) => ({ path: c.path, delete: Boolean(c.delete) })));
+        if (typeof text === 'string' && text.trim()) return text.replace(/\s+/g, ' ').trim();
+      } catch (err) {
+        console.warn('[store] describing the commit failed', err);
+      }
+    }
+    return commitMessage(changes);
+  }
+
   // ------------------------------------------------------------ local state
 
   async #fetchRemote(path, sha) {
@@ -674,9 +730,7 @@ ${rec.wid}`;
         if (cached) return cached;
       }
       const client = this.#client;
-      if (!client) {
-        throw new Error('이 파일은 아직 이 기기에 없습니다. 설정에서 GitHub 동기화를 켜면 내려받을 수 있습니다.');
-      }
+      if (!client) throw new Error(this.#texts.noClient);
       const bytes = await client.readBlob(sha);
       if (!isTextPath(path)) {
         try {
@@ -728,7 +782,7 @@ ${rec.wid}`;
       // Data that came from another repository is uploaded to the new one only with the user's consent
       // (settings.github.carryOver, set by the settings screen after asking).
       if (meta.target && this.#getConfig()?.carryOver !== target && (await this.#db.count('files'))) {
-        throw new GitHubError('동기화할 GitHub 저장소가 바뀌었습니다. 이 기기의 논문·메모를 새 저장소에 올릴지 설정 → GitHub 동기화에서 정한 뒤 다시 저장하세요.', { code: 'target_changed' });
+        throw new GitHubError(this.#texts.targetChanged, { code: 'target_changed' });
       }
       console.warn('[store] sync target changed; re-pushing local data to', target);
       await this.#rebaseAllLocal(meta.tree);
@@ -791,7 +845,7 @@ ${rec.wid}`;
 
   #openChannel() {
     if (this.#channel || typeof BroadcastChannel === 'undefined') return;
-    this.#channel = new BroadcastChannel(CHANNEL_NAME);
+    this.#channel = new BroadcastChannel(this.#channelName);
     this.#channel.onmessage = (e) => {
       const msg = e.data;
       if (!msg || msg.from === this.#id) return;
@@ -815,10 +869,13 @@ ${rec.wid}`;
 
 // ---------------------------------------------------------------- merging
 
-/** Merge rule per data file; null = not mergeable (local wins, e.g. the immutable paper.pdf). */
+/**
+ * Merge rule per data file; null = not mergeable (local wins, e.g. the immutable paper.pdf). A shared
+ * library keeps each person's files under `people/<personId>/papers/…` — same rules.
+ */
 export function mergerFor(path) {
   if (path === LIBRARY_PATH) return mergeLibrary;
-  const m = /^papers\/[^/]+\/(annotations|translation|ai)\.json$/.exec(path);
+  const m = /^(?:people\/[^/]+\/)?papers\/[^/]+\/(annotations|translation|ai)\.json$/.exec(path);
   return m ? MERGERS[m[1]] : null;
 }
 
@@ -894,9 +951,9 @@ function commitMessage(changes) {
   return `논문 리더 동기화: ${names.slice(0, 3).join(', ')}${more}`;
 }
 
-async function withLock(fn, { wait }) {
+async function withLock(name, fn, { wait }) {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : null;
   if (!locks?.request) return fn();
-  if (wait) return locks.request(LOCK_NAME, () => fn());
-  return locks.request(LOCK_NAME, { ifAvailable: true }, (lock) => (lock ? fn() : undefined));
+  if (wait) return locks.request(name, () => fn());
+  return locks.request(name, { ifAvailable: true }, (lock) => (lock ? fn() : undefined));
 }

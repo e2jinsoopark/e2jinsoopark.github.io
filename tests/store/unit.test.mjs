@@ -4,11 +4,23 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { startFakeGitHub } from './fake-github.mjs';
 import { GitHubClient, GitHubConflictError, gitBlobSha } from '../../js/store/github.js';
-import { deepEqual, mergeAi, mergeAnnotations, mergeLibrary, mergeRecords, mergeTranslation } from '../../js/store/sync.js';
+import { deepEqual, mergeAi, mergeAnnotations, mergeLibrary, mergeRecords, mergeTranslation, mergerFor } from '../../js/store/sync.js';
+import { dataPath, paperPath } from '../../js/store/library.js';
 
 const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/store';
 mkdirSync(OUT, { recursive: true });
 const results = [];
+// Nothing may leave the machine: any non-loopback request fails here (and is recorded) before it is sent.
+const external = [];
+const realFetch = globalThis.fetch;
+globalThis.fetch = (url, init) => {
+  const href = String(url?.url ?? url);
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(href)) {
+    external.push(href);
+    return Promise.reject(new TypeError(`blocked non-loopback request in tests: ${href}`));
+  }
+  return realFetch(url, init);
+};
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 async function test(name, fn) {
@@ -125,6 +137,30 @@ await test('regression stale-ai-snapshot-overwrites: mergeAi unions chat/explana
     { version: 1, updatedAt: 10_000_000, summary: { markdown: 'A', createdAt: 9_000_000 } }, null);
   assert(s.summary.markdown === 'B', JSON.stringify(s));
   return `union=${m.chat.map((x) => x.id)}; cleared=${cleared.chat.length}`;
+});
+
+await test('paths: personal prefix only moves annotations/ai; mergerFor gives people/<id>/… files the same merge rules', () => {
+  const pre = 'people/0123456789abcdef/';
+  assert(dataPath('p_1', 'translation', pre) === 'papers/p_1/translation.json' && paperPath('p_1', 'paper.pdf') === 'papers/p_1/paper.pdf', 'shared files');
+  assert(dataPath('p_1', 'annotations', pre) === `${pre}papers/p_1/annotations.json` && dataPath('p_1', 'ai', pre) === `${pre}papers/p_1/ai.json`, 'personal files');
+  assert(dataPath('p_1', 'annotations') === 'papers/p_1/annotations.json', '내 서재 unchanged');
+  let threw = false;
+  try { dataPath('p_1', 'notes'); } catch { threw = true; }
+  assert(threw, 'unknown kind');
+  const rules = {
+    'library.json': mergeLibrary,
+    'papers/p_1/annotations.json': mergeAnnotations,
+    'papers/p_1/translation.json': mergeTranslation,
+    'papers/p_1/ai.json': mergeAi,
+    [`${pre}papers/p_1/annotations.json`]: mergeAnnotations,
+    [`${pre}papers/p_1/ai.json`]: mergeAi,
+    'papers/p_1/paper.pdf': null,
+    [`${pre}papers/p_1/paper.pdf`]: null,
+    'people/x/library.json': null,
+    'README.md': null,
+  };
+  for (const [path, rule] of Object.entries(rules)) assert(mergerFor(path) === rule, `mergerFor(${path})`);
+  return `${Object.keys(rules).length} paths mapped to the expected merge rule`;
 });
 
 // ------------------------------------------------------- GitHub client
@@ -262,6 +298,45 @@ try {
     return `waited ${waited} ms; then: ${caught.message}`;
   });
 
+  await test('proxy mode (공용 서재): relay\'s Korean messages shown as is, invite-code wording otherwise; a stale base (409/422 on trees/commits) is a conflict; an invalid address never falls back to api.github.com', async () => {
+    const proxy = (o = {}) => new GitHubClient({ owner: 'me', repo: 'lib', token: 'good', apiBase: fake.url, rateLimitMaxWaitMs: 5000, proxy: true, ...o });
+    const own = await proxy({ token: 'nope' }).checkAccess({ quick: true });
+    assert(!own.ok && own.code === 'auth' && /초대 코드가 올바르지 않거나/.test(own.message), JSON.stringify(own));
+    fake.failNext({ method: 'GET', path: /\/repos\/me\/lib$/, status: 401, body: { message: '초대 코드가 올바르지 않거나 사용이 중지되었습니다.' } });
+    const relayMsg = await proxy().checkAccess({ quick: true });
+    assert(relayMsg.message === '초대 코드가 올바르지 않거나 사용이 중지되었습니다.', relayMsg.message);
+    fake.failNext({ method: 'POST', path: /\/git\/blobs$/, status: 403, body: { message: '공용 서재에 둘 수 없는 경로입니다: x' } });
+    let caught = null;
+    try { await proxy().createBlob(new Uint8Array([1])); } catch (err) { caught = err; }
+    assert(caught?.code === 'forbidden' && caught.message === '공용 서재에 둘 수 없는 경로입니다: x', String(caught));
+
+    const head = await proxy().getHead();
+    const conflicts = [];
+    for (const [path, status] of [[/\/git\/trees$/, 409], [/\/git\/commits$/, 409], [/\/git\/commits$/, 422]]) {
+      fake.failNext({ method: 'POST', path, status, body: { message: 'stale' } });
+      let err = null;
+      try { await proxy().commit([{ path: 'z.txt', text: 'z' }], 'm', { parent: head.commitSha, baseTree: head.treeSha }); } catch (e) { err = e; }
+      assert(err instanceof GitHubConflictError, `${status} on ${path}: ${err}`);
+      conflicts.push(`${status} ${path.source.replace(/\\/g, '')}`);
+    }
+    fake.failNext({ method: 'POST', path: /\/git\/trees$/, status: 409, body: { message: 'Git Repository is empty.' } });
+    let plain = null;
+    try { await client().commit([{ path: 'z.txt', text: 'z' }], 'm', { parent: head.commitSha, baseTree: head.treeSha }); } catch (e) { plain = e; }
+    assert(plain && !(plain instanceof GitHubConflictError) && plain.code === 'empty', `GitHub mode keeps its meaning: ${plain}`);
+
+    const before = fake.log.length;
+    const badBase = proxy({ apiBase: 'https://user:pw@relay.example/x' });
+    const bad = await badBase.checkAccess({ quick: true });
+    assert(badBase.apiBase === '' && !bad.ok && /서버 주소가 올바르지 않습니다/.test(bad.message) && fake.log.length === before, JSON.stringify(bad));
+    for (const apiBase of [undefined, '', 'https://api.github.com', 'https://uploads.github.com/x']) {
+      let cfgErr = null;
+      try { await proxy({ apiBase }).getHead(); } catch (e) { cfgErr = e; }
+      assert(cfgErr?.code === 'config', `proxy apiBase ${apiBase}: ${cfgErr}`);
+    }
+    assert(fake.log.length === before && external.length === 0, `requests: ${fake.log.length - before}, external ${external}`);
+    return `401 → “${own.message}”; conflicts: ${conflicts.join(', ')}; invalid / missing / GitHub address → config error, 0 requests`;
+  });
+
   await test('5xx is retried; server down → network error (Korean)', async () => {
     fake.failNext({ path: /\/git\/ref\//, status: 502, count: 1 });
     assert(await client().getHead(), 'should recover after one 502');
@@ -278,5 +353,5 @@ try {
 
 writeFileSync(`${OUT}/unit.results.json`, JSON.stringify(results, null, 2));
 const failed = results.filter((r) => r.result !== 'pass').length;
-console.log(`\nstore unit: ${results.length - failed}/${results.length} passed`);
-process.exitCode = failed ? 1 : 0;
+console.log(`\nstore unit: ${results.length - failed}/${results.length} passed · blocked external requests: ${external.length}${external.length ? ` (${external.join(', ')})` : ''}`);
+process.exitCode = failed || external.length ? 1 : 0;

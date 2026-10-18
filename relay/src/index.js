@@ -1,13 +1,17 @@
 // Invite-code relay ("초대 코드 서버") for the paper reader: colleagues call Claude with an invite code instead of
 // their own API key. The Worker checks the code, enforces per-code and global daily budgets (Asia/Seoul day),
 // forwards to Anthropic with the owner's key, streams the reply through unchanged and records usage in D1.
-// Contract: docs/RELAY.md §1.
+// The same codes open the shared team library (공용 서재) through a GitHub-compatible proxy (src/shared.js).
+// Contracts: docs/RELAY.md §1, docs/SHARED.md §2.
 import { generateCode, normalizeCode, validateCodeInput } from './codes.js';
 import { KNOWN_MODELS, MAX_ADMIN_BODY_BYTES, MAX_BODY_BYTES, MIN_ADMIN_TOKEN_LENGTH, MODEL_NAMES, readConfig } from './config.js';
 import { codesWithUsage, codeWithBudget, insertCode, parseModels, recordUsage, updateCode, usageByDay } from './db.js';
-import { apiError, isOriginAllowed, json, parseJson, preflight, readBody, withCors } from './http.js';
+import {
+  ALLOW_METHODS, apiError, bearer, isOriginAllowed, json, parseJson, preflight, readBody, SHARED_ALLOW_METHODS, withCors,
+} from './http.js';
 import { meterBody } from './meter.js';
 import { costUsd } from './pricing.js';
+import { handleShared, handleSharedAdmin } from './shared.js';
 import { kstDay, kstDaysBack, kstMonth, nextKstMidnight, requestNow } from './time.js';
 
 /** Upstream response headers the client may need (content type, ids, retry hints). */
@@ -43,9 +47,10 @@ export default {
     const allowedOrigin = origin && isOriginAllowed(origin, config.allowedOrigins) ? origin : null;
     if (origin && !allowedOrigin) return withCors(apiError(403, 'permission_error', MSG.badOrigin), null);
     if (request.method === 'OPTIONS') {
+      const methods = isSharedPath(new URL(request.url).pathname) ? SHARED_ALLOW_METHODS : ALLOW_METHODS;
       return allowedOrigin
-        ? preflight(request, allowedOrigin)
-        : withCors(new Response(null, { status: 204, headers: { allow: 'GET, POST, PATCH, OPTIONS' } }), null);
+        ? preflight(request, allowedOrigin, methods)
+        : withCors(new Response(null, { status: 204, headers: { allow: methods } }), null);
     }
     let response;
     try {
@@ -73,8 +78,11 @@ async function route(request, deps) {
   if (pathname === '/v1/models') return method === 'GET' ? handleModels(request, url, deps) : notAllowed(method);
   if (pathname === '/relay/me') return method === 'GET' ? handleMe(request, deps) : notAllowed(method);
   if (pathname === '/relay/admin' || pathname.startsWith('/relay/admin/')) return handleAdmin(request, url, deps);
+  if (isSharedPath(pathname)) return handleShared(request, url, deps);
   return apiError(404, 'not_found_error', `요청한 주소를 찾을 수 없습니다: ${method} ${pathname}`);
 }
+
+const isSharedPath = (pathname) => pathname === '/shared' || pathname.startsWith('/shared/');
 
 function notAllowed(method) {
   return apiError(405, 'invalid_request_error', `이 주소에서는 ${method} 요청을 쓸 수 없습니다.`);
@@ -257,6 +265,8 @@ async function handleAdmin(request, url, deps) {
   const one = /^\/codes\/([^/]+)$/.exec(path);
   if (one) return method === 'PATCH' ? patchCode(request, safeDecode(one[1]), deps) : notAllowed(method);
   if (path === '/usage') return method === 'GET' ? usageReport(url, deps) : notAllowed(method);
+  const shared = path.startsWith('/shared/') ? await handleSharedAdmin(request, path, deps) : null;
+  if (shared) return shared;
   return apiError(404, 'not_found_error', `요청한 관리자 주소를 찾을 수 없습니다: ${method} ${url.pathname}`);
 }
 
@@ -387,11 +397,6 @@ function safeDecode(text) {
   } catch {
     return text;
   }
-}
-
-function bearer(request) {
-  const m = /^Bearer\s+(.+)$/i.exec(request.headers.get('authorization') || '');
-  return m ? m[1].trim() : '';
 }
 
 /** Constant-time comparison: both sides are hashed first, so neither length nor content leaks through timing. */

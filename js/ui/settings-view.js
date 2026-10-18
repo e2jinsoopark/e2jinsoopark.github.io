@@ -1,12 +1,13 @@
-// Settings view (#/settings): AI provider & keys (incl. the invite-code relay), GitHub sync, translation options,
-// display, usage, secrets, invite-code admin. Also the invite join screen (#/join/<CODE>, mountJoinView).
+// Settings view (#/settings): AI provider & keys (incl. the invite-code relay), GitHub sync, 공용 서재 status,
+// translation options, display, usage, secrets, invite-code admin. Also the invite join screen (#/join/<CODE>, mountJoinView).
 // The relay helpers (js/ai/relay.js) arrive as deps.relay with the dynamically loaded AI modules.
 import { APP_VERSION, CLAUDE_MODELS, DEFAULT_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
 import { bus } from '../core/bus.js';
 import { settings } from '../core/settings.js';
-import { debounce, el, formatUsd, safeStorage } from '../core/util.js';
+import { debounce, el, formatBytes, formatUsd, safeStorage } from '../core/util.js';
 import { button, confirmDialog, iconButton, messageScreen, modal, progressBar, spinner, toast } from './components.js';
 import { icon } from './icons.js';
+import { sharedIcon } from './library-view.js';
 
 const SECTIONS = [
   { id: 'ai', label: 'AI 번역', icon: 'bot' },
@@ -90,6 +91,14 @@ class SettingsView {
       lib.addEventListener('syncstatus', onStatus);
       this.#cleanup.push(() => lib.removeEventListener('syncstatus', onStatus));
     }
+    // 공용 서재: connecting → ready, a library opened, its sync status.
+    const shared = deps.shared;
+    if (shared) {
+      const onShared = () => this.#renderShared();
+      shared.addEventListener('change', onShared);
+      this.#cleanup.push(() => shared.removeEventListener('change', onShared));
+      this.#cleanup.push(() => this.#unbindShared());
+    }
     // Another tab picked another provider: show it here too (a stale checked card could not be clicked back).
     this.#cleanup.push(bus.on('settings:change', ({ external } = {}) => {
       if (!external || settings.get().provider === this.#shownProvider) return;
@@ -101,6 +110,7 @@ class SettingsView {
 
   destroy() {
     for (const off of this.#cleanup) off();
+    this.#cleanup = [];
     if (this.#githubUnsaved()) toast('GitHub 동기화 설정은 저장되지 않았습니다. 다시 열어 ‘저장하고 동기화 시작’을 눌러야 적용됩니다.', { kind: 'warning', timeout: 7000 });
     this.#root.remove();
   }
@@ -135,15 +145,19 @@ class SettingsView {
     const header = el('header', { class: 'settings-header' },
       iconButton('arrow-left', '뒤로', () => this.#goBack()),
       el('h1', {}, '설정'));
-    const nav = el('nav', { class: 'settings-nav', 'aria-label': '설정 항목' },
-      SECTIONS.map((s) => button(s.label, {
-        icon: s.icon, kind: 'ghost', size: 'sm',
-        onClick: () => this.#root.querySelector(`#set-${s.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      })));
+    const jump = (id) => this.#root.querySelector(`#set-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const navButtons = SECTIONS.map((s) => button(s.label, { icon: s.icon, kind: 'ghost', size: 'sm', onClick: () => jump(s.id) }));
+    // 공용 서재 (only with an invite code), after GitHub 동기화.
+    this.#els.sharedNav = button('공용 서재', { kind: 'ghost', size: 'sm', className: 'settings-nav-shared', onClick: () => jump('shared') });
+    this.#els.sharedNav.prepend(sharedIcon(16));
+    navButtons.splice(2, 0, this.#els.sharedNav);
+    const nav = el('nav', { class: 'settings-nav', 'aria-label': '설정 항목' }, navButtons);
+    this.#els.sharedHost = el('div', { class: 'settings-shared-host' });
     const inner = el('div', { class: 'settings-inner' },
       nav,
       this.#aiSection(),
       this.#syncSection(),
+      this.#els.sharedHost,
       this.#translateSection(),
       this.#displaySection(),
       this.#usageSection(),
@@ -151,6 +165,7 @@ class SettingsView {
       this.#invitesSection(),
       el('p', { class: 'settings-footer' }, `논문 리더 ${APP_VERSION} · 모든 설정은 이 브라우저에만 저장됩니다.`));
     this.#root.replaceChildren(header, inner);
+    this.#renderShared();
   }
 
   // ------------------------------------------------------------------- AI
@@ -763,6 +778,135 @@ class SettingsView {
     this.#renderSyncStatus();
   }
 
+  // ------------------------------------------------------------ 공용 서재
+
+  #sharedBound = new Map(); // Library → unbind()
+  #sharedRows = new Map(); // library id → { status, syncNow, entry } of the rows shown
+
+  /** 공용 서재 status (docs/SHARED.md §3.2): the connected team libraries and this person's name. */
+  #renderShared() {
+    const host = this.#els.sharedHost;
+    if (!host) return;
+    const shared = this.#deps.shared;
+    const state = shared?.state || 'off';
+    this.#els.sharedNav.hidden = state === 'off';
+    this.#bindShared();
+    this.#sharedRows.clear();
+    if (state === 'off') { host.replaceChildren(); return; }
+    const body = el('div', { class: 'shared-status' });
+    if (state === 'loading') {
+      body.append(this.#sharedLine('busy', '공용 서재에 연결하는 중…'));
+    } else if (state === 'error') {
+      const retry = button('다시 시도', { icon: 'refresh', size: 'sm', onClick: () => shared.retry() });
+      body.append(el('div', { class: 'input-group shared-row' }, this.#sharedLine('error', shared.message || '공용 서재에 연결하지 못했습니다.'), retry));
+    } else if (state === 'unavailable') {
+      body.append(note('info', '이 초대 코드로 쓸 수 있는 공용 서재가 없습니다. 함께 쓰려면 초대해 준 분에게 문의해 주세요.'));
+    } else {
+      const who = shared.personName;
+      body.append(el('dl', { class: 'shared-facts-list' },
+        el('dt', {}, '내 이름'), el('dd', {}, who ? `${who} (초대 코드의 이름 · 최근 활동과 휴지통에 이렇게 표시됩니다)` : '초대 코드 확인 중…')));
+      for (const entry of shared.libraries) body.append(this.#sharedLibraryRow(entry));
+      const admin = this.#sharedAdmin(shared.libraries);
+      if (admin) body.append(admin);
+    }
+    body.append(note('info', '폴더·논문(PDF)·번역은 초대 코드를 받은 모든 사람과 공유되고, 하이라이트·메모·AI 요약·채팅은 나만 봅니다. 누구나 폴더와 논문을 추가·이동·삭제할 수 있으며, 삭제한 항목은 30일 동안 휴지통에서 복구할 수 있습니다. 내 서재(위의 GitHub 동기화)와는 따로 저장됩니다.'));
+    host.replaceChildren(section('shared', '공용 서재', 'library',
+      '초대 코드로 동료들과 함께 쓰는 서재입니다. 초대 코드 서버를 거쳐 팀 저장소에 저장되므로 GitHub 토큰이 필요 없습니다.', body));
+    host.querySelector('#set-shared .section-icon')?.replaceChildren(sharedIcon(18));
+  }
+
+  #sharedLine(kind, text) {
+    const node = el('div', { class: 'test-result' });
+    setResult(node, kind, text);
+    return node;
+  }
+
+  #sharedLibraryRow(entry) {
+    const lib = entry.library;
+    const status = el('div', { class: 'test-result' });
+    const syncNow = button('지금 동기화', { icon: 'refresh', size: 'sm', disabled: !lib, onClick: async () => {
+      try { await lib?.sync?.syncNow(); } catch (err) { toast(err?.message || '동기화하지 못했습니다.', { kind: 'error' }); }
+      this.#paintSharedStatus(status, entry);
+    } });
+    const open = button('열기', { icon: 'arrow-right', size: 'sm', kind: 'ghost', onClick: () => this.#navigate(`#/s/${encodeURIComponent(entry.id)}`) });
+    this.#paintSharedStatus(status, entry, syncNow);
+    const row = el('div', { class: 'shared-lib', 'data-lib': entry.id },
+      el('div', { class: 'shared-lib-head' }, sharedIcon(16), el('b', {}, entry.name), el('span', { class: 'badge' }, entry.id)),
+      el('div', { class: 'input-group shared-row' }, status, el('div', { class: 'btn-row-inline' }, syncNow, open)));
+    this.#sharedRows.set(entry.id, { status, syncNow, entry });
+    return row;
+  }
+
+  #paintSharedStatus(node, entry, syncNow = null) {
+    const lib = this.#deps.shared?.get?.(entry.id) || null;
+    if (!lib) {
+      if (entry.status === 'error') setResult(node, 'error', entry.error || '이 기기에 공용 서재를 열지 못했습니다.');
+      else setResult(node, 'busy', '여는 중…');
+      if (syncNow) syncNow.disabled = true;
+      return;
+    }
+    const st = lib.sync?.status || { state: 'disabled' };
+    const last = st.lastSyncAt ? ` · 마지막 동기화 ${new Date(st.lastSyncAt).toLocaleString('ko-KR')}` : '';
+    const pending = st.pending ? ` · 대기 ${st.pending}개` : '';
+    const papers = Array.isArray(lib.papers) ? ` · 논문 ${lib.papers.length}편` : '';
+    const map = {
+      disabled: ['off', '연결 안 됨 — 초대 코드를 확인해 주세요'],
+      idle: ['ok', `동기화 완료${papers}${last}${pending}`],
+      syncing: ['busy', `동기화 중…${pending}`],
+      error: ['error', `오류: ${st.message || '동기화하지 못했습니다'}${pending}`],
+      offline: ['off', `오프라인 — 연결되면 다시 동기화합니다${pending}`],
+    };
+    const [kind, text] = map[st.state] || map.disabled;
+    setResult(node, kind, text);
+    if (syncNow) syncNow.disabled = st.state === 'disabled' || st.state === 'syncing';
+  }
+
+  /** Owner only (admin token saved): the team libraries' size, on request (no admin call until asked). */
+  #sharedAdmin(libraries) {
+    const relay = this.#deps.relay;
+    if (!settings.get().relay?.adminToken || typeof relay?.sharedStats !== 'function' || !libraries.length) return null;
+    const out = el('div', { class: 'shared-admin-stats' });
+    const check = button('용량 확인', { icon: 'coins', size: 'sm', onClick: async () => {
+      check.disabled = true;
+      out.replaceChildren(spinner(14));
+      try {
+        const rows = await Promise.all(libraries.map(async (l) => ({ l, s: await relay.sharedStats(l.id) })));
+        out.replaceChildren(...rows.map(({ l, s }) => el('div', { class: 'usage-stats' },
+          stat(`${l.name} 용량`, s.maxBytes ? `${bigBytes(s.bytes)} / ${bigBytes(s.maxBytes)}` : bigBytes(s.bytes)),
+          stat('논문', `${s.papers}편`), stat('사람', `${s.people}명`))));
+      } catch (err) {
+        const r = el('div', { class: 'test-result' });
+        setResult(r, 'error', err?.message || '용량을 확인하지 못했습니다.');
+        out.replaceChildren(r);
+      } finally {
+        check.disabled = false;
+      }
+    } });
+    return el('div', { class: 'subsection' },
+      el('h3', { class: 'subsection-title' }, icon('key', { size: 16 }), '관리자'),
+      el('p', { class: 'field-hint', style: { margin: '0 0 10px' } }, '팀 저장소의 크기와 참여 인원입니다. 30일 지난 휴지통 항목은 서재의 휴지통 화면에서 비울 수 있습니다.'),
+      check, out);
+  }
+
+  /** Follow the team libraries' sync status while 설정 is open. */
+  #bindShared() {
+    const libs = new Set((this.#deps.shared?.libraries || []).map((e) => e.library).filter(Boolean));
+    for (const [lib, off] of this.#sharedBound) if (!libs.has(lib)) { off(); this.#sharedBound.delete(lib); }
+    for (const lib of libs) {
+      if (this.#sharedBound.has(lib)) continue;
+      const onStatus = () => {
+        for (const v of this.#sharedRows.values()) if (v.status.isConnected) this.#paintSharedStatus(v.status, v.entry, v.syncNow);
+      };
+      lib.addEventListener('syncstatus', onStatus);
+      this.#sharedBound.set(lib, () => lib.removeEventListener('syncstatus', onStatus));
+    }
+  }
+
+  #unbindShared() {
+    for (const off of this.#sharedBound.values()) off();
+    this.#sharedBound.clear();
+  }
+
   // ------------------------------------------------------------ translate
 
   #translateSection() {
@@ -982,7 +1126,7 @@ class SettingsView {
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
           'API 키·초대 코드와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
-          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic·OpenAI·Google 중 하나, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
+          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic·OpenAI·Google 중 하나, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · 공용 서재의 논문·번역과 내 메모 → 초대 코드 서버를 거쳐 팀 저장소(내 메모는 나만 읽을 수 있는 칸) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
         shared ? note('alert-triangle', shared) : null,
         persisted,
         el('div', { class: 'btn-row' }, clearBtn, wipeBtn),
@@ -996,6 +1140,7 @@ class SettingsView {
     if (!ok) return;
     try {
       await this.#deps.library?.wipeLocalData?.();
+      await this.#deps.shared?.wipeLocalData?.(); // 공용 서재 copies on this device (the team repo is untouched)
     } catch (err) {
       console.warn('[settings-view] wipeLocalData', err);
       toast(`일부 데이터를 지우지 못했습니다: ${err?.message || err}`, { kind: 'error' });
@@ -1376,6 +1521,11 @@ function switchRow(title, desc, checked, onChange) {
 
 function note(iconName, text, kind = '') {
   return el('div', { class: kind ? `note ${kind}` : 'note' }, icon(iconName, { size: 16 }), el('div', {}, text));
+}
+
+/** formatBytes(), with GB for the team library's size. */
+function bigBytes(n) {
+  return n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GB` : formatBytes(n);
 }
 
 function stat(label, value) {

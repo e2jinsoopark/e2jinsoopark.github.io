@@ -1070,7 +1070,7 @@ try {
     return `${claude.length} batches on Claude, then ${gpt.length} on GPT (gpt-6-luna, listed once); ${r.progress.done}/${r.progress.total} done, 0 errors`;
   });
 
-  await test('?mock=1 session with a saved invite code and keys: 설정 and the library send nothing to the relay or any AI API; the mock answers', async () => {
+  await test('?mock=1 session with a saved invite code and keys: 설정 and the library send nothing AI-related to the relay or any AI API (공용 서재 storage may ask GET /shared); the mock answers', async () => {
     const d = await device({
       seed: {
         provider: 'relay',
@@ -1086,13 +1086,17 @@ try {
     await booted(page);
     const answer = await page.evaluate(async () => (await (await import('/js/ai/tasks.js')).quickTranslate('Pressure injury.')).text);
     await sleep(300);
-    const sent = fakes.relay.calls.length + fakes.anthropic.calls.length + fakes.openai.calls.length + fakes.gemini.calls.length;
+    // 공용 서재 (docs/SHARED.md) is storage, like 내 서재's GitHub sync, which also runs in mock sessions: its GET /shared
+    // may reach the relay. Nothing AI-related may (no /relay/me, no /v1/*).
+    const relayAi = fakes.relay.calls.filter((c) => !c.path.startsWith('/shared'));
+    const sent = relayAi.length + fakes.anthropic.calls.length + fakes.openai.calls.length + fakes.gemini.calls.length;
     assertEqual(sent, 0, 'requests to the relay / AI APIs');
+    assert(fakes.relay.calls.every((c) => c.method === 'GET' && c.path === '/shared'), `relay calls: ${fakes.relay.calls.map((c) => `${c.method} ${c.path}`)}`);
     assert(answer.startsWith('〔번역〕') || /번역/.test(answer), `mock answer: ${answer}`);
     const s = await stored(page);
     assertEqual([s.provider, s.relay.code], ['relay', CODES.haiku], 'stored settings untouched (mock is session-only)');
     await d.done();
-    return `0 requests; mock answer “${answer.slice(0, 30)}”; stored provider still ${s.provider}`;
+    return `0 AI requests (relay storage calls: ${fakes.relay.calls.map((c) => `${c.method} ${c.path}`).join(', ') || 'none'}); mock answer “${answer.slice(0, 30)}”; stored provider still ${s.provider}`;
   });
   await test('two tabs: 설정 open in one tab follows a provider picked in the other, and its cards still switch back', async () => {
     const d = await device({ seed: { provider: 'claude', claude: { apiKey: CLAUDE_KEY }, openai: { apiKey: OPENAI_KEY } } });

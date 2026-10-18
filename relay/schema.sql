@@ -27,3 +27,15 @@ CREATE TABLE IF NOT EXISTS usage (
 
 -- Today's total across all codes is read on every request; without this it would scan the whole history.
 CREATE INDEX IF NOT EXISTS usage_by_day ON usage (day);
+
+-- Shared library ("공용 서재", docs/SHARED.md §2): trees created through the GitHub proxy, with the base tree they were
+-- built on. POST git/commits accepts a tree only on top of its own base (so a commit cannot revert other people's
+-- files), and only for the person who created it. Rows older than an hour are pruned on every insert.
+CREATE TABLE IF NOT EXISTS shared_trees (
+  lib TEXT NOT NULL,                   -- SHARED_LIBRARIES id, e.g. "team"
+  tree TEXT NOT NULL,                  -- tree sha GitHub returned
+  base TEXT NOT NULL,                  -- its base_tree sha ('' when the branch did not exist yet)
+  person TEXT NOT NULL,                -- personId of the invite code that created it
+  created_at INTEGER NOT NULL,         -- epoch ms
+  PRIMARY KEY (lib, tree, base, person)
+);

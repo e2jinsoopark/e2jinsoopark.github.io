@@ -84,4 +84,56 @@ window.__blobKeys = async () => {
   return db.keys('blobs');
 };
 
+// ---------------------------------------------------------------- several libraries in one page (SHARED.md §3.1)
+
+/** Extra libraries by key (e.g. 'team'); 'mine' is window.__lib from __boot. Events per key. */
+window.__libs = {};
+window.__eventsBy = {};
+window.__L = (key = 'mine') => (key === 'mine' ? window.__lib : window.__libs[key]);
+
+/** Open 공용 서재 through the (fake) relay with openSharedLibrary(). */
+window.__openShared = async ({ key = 'team', relayUrl, code, name, syncOptions } = {}) => {
+  const { openSharedLibrary } = await import('/js/store/library.js');
+  const lib = await openSharedLibrary({ relayUrl, code, name, syncOptions });
+  const ev = { status: [], change: [], remote: [], errors: [] };
+  lib.addEventListener('syncstatus', (e) => ev.status.push({ at: Date.now(), ...e.detail }));
+  lib.addEventListener('change', (e) => ev.change.push({ at: Date.now(), ...e.detail }));
+  lib.addEventListener('error', (e) => ev.errors.push(e.detail.message));
+  lib.sync.addEventListener('remotechange', (e) => ev.remote.push({ at: Date.now(), ...e.detail }));
+  window.__libs[key] = lib;
+  window.__eventsBy[key] = ev;
+  return { id: lib.id, label: lib.label, prefix: lib.personalPrefix, status: lib.sync.status };
+};
+
+window.__waitLib = async (key, { state = 'idle', pending = 0, timeout = 20000 } = {}) => {
+  const lib = window.__L(key);
+  await lib.whenSaved();
+  const t0 = Date.now();
+  for (;;) {
+    const st = lib.sync.status;
+    if (st.state === state && (pending == null || st.pending === pending)) return st;
+    if (Date.now() - t0 > timeout) throw new Error(`timeout waiting for ${key} ${state}/${pending}: ${JSON.stringify(st)}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
+
+window.__dumpLib = (key) => {
+  const lib = window.__L(key);
+  return {
+    folders: lib.folders.map((f) => ({ id: f.id, name: f.name, parentId: f.parentId })),
+    papers: lib.papers.map((p) => ({ id: p.id, title: p.title, folderId: p.folderId, addedBy: p.addedBy ?? null })),
+    trash: lib.trash().map((t) => ({ kind: t.kind, id: t.id, name: t.name, deletedBy: t.deletedBy, deletedAt: t.deletedAt })),
+    status: lib.sync.status,
+  };
+};
+
+/** IndexedDB database names on this origin. */
+window.__idbNames = async () => (await indexedDB.databases()).map((d) => d.name).sort();
+
+/** Keys of the 'files' store of IndexedDB database `name`. */
+window.__filesOf = async (name) => {
+  const { openDatabase } = await import('/js/store/db.js');
+  return openDatabase(name).keys('files');
+};
+
 window.__harnessReady = true;

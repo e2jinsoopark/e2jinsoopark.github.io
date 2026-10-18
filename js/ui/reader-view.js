@@ -1,4 +1,5 @@
-// Reader view (#/paper/<id>): toolbar, PDF viewer (left) ↔ tabs (right), translation controls, feature host.
+// Reader view (#/paper/<id> · 공용 서재 #/s/<lib>/paper/<id>): toolbar, PDF viewer (left) ↔ tabs (right), translation
+// controls, feature host. ctx.library is the library the paper belongs to (내 서재 or a team library).
 import { bus } from '../core/bus.js';
 import { CLAUDE_MODELS } from '../core/config.js';
 import { settings } from '../core/settings.js';
@@ -7,6 +8,7 @@ import {
   button, contextMenu, hasOpenLayer, iconButton, messageScreen, modal, progressBar, spinner, toast, uiState,
 } from './components.js';
 import { icon, resolveIcon } from './icons.js';
+import { rememberSharedOpen, sharedIcon } from './library-view.js';
 import { TranslationPane, isTranslatableSentence } from './translation-pane.js';
 
 const VIEW_MODES = [
@@ -28,17 +30,19 @@ const CHECK_TITLE = '번역에서 숫자나 내용이 빠졌을 수 있습니다
 
 /**
  * @param {HTMLElement} container
- * @param {{ paperId: string, deps: object, navigate: (hash: string) => void }} opts
+ * @param {{ paperId: string, lib?: string|null, deps: object, navigate: (hash: string) => void }} opts
+ *   lib: id of the 공용 서재 the paper is in (null = 내 서재)
  * @returns {{ destroy: () => void }}
  */
-export function mountReaderView(container, { paperId, deps, navigate }) {
-  const view = new ReaderView(container, { paperId, deps, navigate });
+export function mountReaderView(container, { paperId, lib = null, deps, navigate }) {
+  const view = new ReaderView(container, { paperId, lib, deps, navigate });
   return { destroy: () => view.destroy() };
 }
 
 class ReaderView {
   #deps;
   #lib;
+  #libId; // 공용 서재 id, or null for 내 서재
   #navigate;
   #paperId;
   #root;
@@ -87,9 +91,10 @@ class ReaderView {
   #refreshOverlaySoon = debounce(() => this.#refreshOverlay(), 400);
   #rememberPageSoon = debounce((page) => this.#rememberPage(page), 800);
 
-  constructor(container, { paperId, deps, navigate }) {
+  constructor(container, { paperId, lib = null, deps, navigate }) {
     this.#deps = deps;
-    this.#lib = deps.library;
+    this.#libId = lib || null;
+    this.#lib = this.#libId ? null : deps.library; // a team library is opened in #open()
     this.#navigate = navigate;
     this.#paperId = paperId;
     this.#els.toolbar = el('header', { class: 'reader-toolbar', role: 'toolbar', 'aria-label': '논문 도구 모음' });
@@ -127,7 +132,15 @@ class ReaderView {
   // ------------------------------------------------------------------ open
 
   async #open() {
-    const paper = this.#lib.getPaper(this.#paperId);
+    if (this.#libId) {
+      this.#showLoading('공용 서재를 여는 중…');
+      this.#lib = (await this.#deps.shared?.open?.(this.#libId)) || null;
+      if (this.#destroyed) return;
+      if (!this.#lib) { this.#showNoSharedLibrary(); return; }
+      this.#renderToolbarSkeleton();
+    }
+    const paper = this.#lib.getPaper(this.#paperId) || (await this.#awaitFirstSync());
+    if (this.#destroyed) return;
     if (!paper) { this.#showNotFound(); return; }
     this.#setTitle(paper);
 
@@ -160,6 +173,40 @@ class ReaderView {
     // A failed download is not "no data": what other devices translated is merged in once it can be read
     // (saves meanwhile only add sentences; the sync engine merges them with the remote copy before pushing).
     if (cached.error) this.#retryTranslationLoad(0);
+  }
+
+  /**
+   * A link to a paper on a device that has not finished its first sync (e.g. a 공용 서재 link opened by a colleague
+   * for the first time): wait for the library list instead of saying "not found" at once.
+   * @returns {Promise<object|null>} the paper, or null when the sync ends without it
+   */
+  #awaitFirstSync(timeoutMs = 30_000) {
+    const lib = this.#lib;
+    const pending = () => {
+      const st = lib.sync?.status;
+      return st?.state === 'syncing' || (st?.state === 'idle' && !st.lastSyncAt);
+    };
+    if (!pending()) return Promise.resolve(null);
+    this.#showLoading(this.#libId ? '공용 서재에서 논문을 받는 중…' : '동기화 중인 논문을 기다리는 중…');
+    return new Promise((resolve) => {
+      let settle = null;
+      const finish = (paper) => {
+        clearTimeout(timer);
+        clearTimeout(settle);
+        lib.removeEventListener('change', check);
+        lib.removeEventListener('syncstatus', check);
+        resolve(paper);
+      };
+      const check = () => {
+        const paper = lib.getPaper(this.#paperId);
+        if (paper || this.#destroyed) { finish(paper || null); return; }
+        // The list is read right after the pull: give it a moment once the sync has ended.
+        if (!pending() && !settle) settle = setTimeout(() => finish(lib.getPaper(this.#paperId) || null), 1500);
+      };
+      const timer = setTimeout(() => finish(lib.getPaper(this.#paperId) || null), timeoutMs);
+      lib.addEventListener('change', check);
+      lib.addEventListener('syncstatus', check);
+    });
   }
 
   /** @returns {Promise<{ value: object|null, error: Error|null }>} */
@@ -247,7 +294,13 @@ class ReaderView {
     this.#installFeatures();
     this.#buildTabs();
     this.#refreshProgress();
-    this.#flushCounts({ lastOpenedAt: Date.now() });
+    // 공용 서재: 최근 읽음 is each person's own (the shared record would show everyone's opens).
+    if (this.#libId) {
+      rememberSharedOpen(this.#libId, this.#paperId);
+      this.#flushCounts();
+    } else {
+      this.#flushCounts({ lastOpenedAt: Date.now() });
+    }
   }
 
   #createTranslator(cached) {
@@ -346,13 +399,27 @@ class ReaderView {
   #renderToolbarSkeleton() {
     const els = this.#els;
     els.title = el('div', { class: 'tb-title' }, '');
-    els.toolbar.replaceChildren(this.#backButton(), els.title);
+    els.toolbar.replaceChildren(...[this.#backButton(), this.#sharedBadge(), els.title].filter(Boolean));
   }
 
   #backButton() {
-    const b = button('라이브러리', { icon: 'arrow-left', kind: 'ghost', title: '라이브러리로 돌아가기', className: 'tb-back', onClick: () => this.#navigate('#/') });
+    const b = button('라이브러리', { icon: 'arrow-left', kind: 'ghost', title: '라이브러리로 돌아가기', className: 'tb-back', onClick: () => this.#navigate(this.#libraryHref()) });
     b.setAttribute('aria-label', '라이브러리로 돌아가기');
     return b;
+  }
+
+  /** The library this paper is listed in. */
+  #libraryHref() {
+    return this.#libId ? `#/s/${encodeURIComponent(this.#libId)}` : '#/';
+  }
+
+  /** 공용 서재: what the others see of this paper. */
+  #sharedBadge() {
+    if (!this.#libId) return null;
+    const name = this.#deps.shared?.entry?.(this.#libId)?.name || '공용 서재';
+    const text = `${name} · 번역은 모두와 공유, 메모는 나만`;
+    return el('span', { class: 'tb-shared', title: `${text}\n(하이라이트·메모·AI 요약·채팅은 다른 사람에게 보이지 않습니다)`, role: 'note', 'aria-label': text },
+      sharedIcon(14), el('span', { class: 'tb-shared-name' }, name), el('span', { class: 'tb-shared-note' }, ' · 번역은 모두와 공유, 메모는 나만'));
   }
 
   #setTitle(paper) {
@@ -394,10 +461,10 @@ class ReaderView {
     }
 
     els.features = el('div', { class: 'tb-features' });
-    els.toolbar.replaceChildren(
-      this.#backButton(), els.title, pageGroup, el('span', { class: 'tb-sep' }), zoomGroup, el('span', { class: 'tb-sep' }),
+    els.toolbar.replaceChildren(...[
+      this.#backButton(), this.#sharedBadge(), els.title, pageGroup, el('span', { class: 'tb-sep' }), zoomGroup, el('span', { class: 'tb-sep' }),
       modes, el('span', { class: 'tb-sep' }), this.#buildTranslateControl(), els.features,
-      iconButton('settings', '설정', () => this.#navigate('#/settings')));
+      iconButton('settings', '설정', () => this.#navigate('#/settings'))].filter(Boolean));
   }
 
   #buildTranslateControl() {
@@ -887,14 +954,16 @@ class ReaderView {
       else if (!this.#paperDeleted) this.#onPaperDeleted();
     });
     // Sentences translated, chat or summaries made on another device (or tab) while this paper is open.
+    // In 공용 서재 translation.json is shared and ai.json lives under this person's own folder (people/<id>/).
     const sync = this.#lib.sync;
     if (sync?.addEventListener) {
       const path = `papers/${this.#paperId}/translation.json`;
       const aiPath = `papers/${this.#paperId}/ai.json`;
+      const isAi = (p) => p === aiPath || Boolean(this.#libId && /^people\/[^/]+\//.test(p) && p.endsWith(`/${aiPath}`));
       this.#on(sync, 'remotechange', (e) => {
         const paths = e.detail?.paths || [];
         if (paths.includes(path)) this.#mergeRemoteTranslations();
-        if (paths.includes(aiPath) && e.detail?.origin !== 'merge') this.#reloadAi();
+        if (paths.some(isAi) && e.detail?.origin !== 'merge') this.#reloadAi();
       });
     }
     // Closing the tab, F5 or the laptop going to sleep: save what was translated (already paid for) right away.
@@ -1143,9 +1212,13 @@ class ReaderView {
     this.#pendingTranslation = null;
     this.#saveTranslationSoon.cancel();
     this.#refreshProgress();
-    toast('다른 기기에서 이 논문을 삭제했습니다. 번역과 메모는 더 저장되지 않습니다.', {
+    toast(this.#libId
+      ? '다른 사람이 이 논문을 공용 서재의 휴지통으로 옮겼습니다. 번역과 메모는 더 저장되지 않습니다(휴지통에서 복구할 수 있습니다).'
+      : '다른 기기에서 이 논문을 삭제했습니다. 번역과 메모는 더 저장되지 않습니다.', {
       kind: 'warning', timeout: 0,
-      action: { label: '라이브러리로', onClick: () => this.#navigate('#/') },
+      action: this.#libId
+        ? { label: '휴지통 보기', onClick: () => this.#navigate(`${this.#libraryHref()}/trash`) }
+        : { label: '라이브러리로', onClick: () => this.#navigate('#/') },
     });
   }
 
@@ -1241,10 +1314,36 @@ class ReaderView {
 
   #showNotFound() {
     document.title = '논문을 찾을 수 없음 · 논문 리더';
+    const toLibrary = { label: '라이브러리로', kind: 'primary', icon: 'arrow-left', onClick: () => this.#navigate(this.#libraryHref()) };
     this.#els.body.replaceChildren(messageScreen({
       iconName: 'file', tone: 'info', title: '논문을 찾을 수 없습니다',
-      message: '삭제되었거나 아직 이 기기로 동기화되지 않은 논문입니다.',
-      actions: [{ label: '라이브러리로', kind: 'primary', icon: 'arrow-left', onClick: () => this.#navigate('#/') }],
+      message: this.#libId
+        ? '휴지통으로 옮겨졌거나 아직 이 기기로 동기화되지 않은 논문입니다.'
+        : '삭제되었거나 아직 이 기기로 동기화되지 않은 논문입니다.',
+      actions: this.#libId
+        ? [toLibrary, { label: '휴지통 보기', icon: 'trash', onClick: () => this.#navigate(`${this.#libraryHref()}/trash`) }]
+        : [toLibrary],
+    }));
+  }
+
+  /** #/s/<lib>/paper/<id> without that team library (no invite code, not offered to this code, or it failed to open). */
+  #showNoSharedLibrary() {
+    document.title = '공용 서재 · 논문 리더';
+    const shared = this.#deps.shared;
+    const failed = shared?.entry?.(this.#libId)?.error || (shared?.state === 'error' ? shared.message : '');
+    const off = !shared || shared.state === 'off';
+    this.#els.body.replaceChildren(messageScreen({
+      iconName: 'alert-circle', tone: failed ? 'error' : 'info',
+      title: failed ? '공용 서재를 열지 못했습니다' : '공용 서재에 연결되어 있지 않습니다',
+      message: failed || (off
+        ? '초대 코드를 등록하면 동료들과 공용 서재를 함께 쓸 수 있습니다.'
+        : '이 초대 코드로는 쓸 수 없거나 없어진 공용 서재입니다.'),
+      actions: [
+        { label: '라이브러리로', kind: 'primary', icon: 'arrow-left', onClick: () => this.#navigate('#/') },
+        failed
+          ? { label: '다시 시도', icon: 'refresh', onClick: () => location.reload() }
+          : { label: '설정 열기', icon: 'settings', onClick: () => this.#navigate(off ? '#/settings/ai' : '#/settings/shared') },
+      ],
     }));
   }
 
@@ -1259,7 +1358,7 @@ class ReaderView {
       message: korean ? raw : 'PDF를 여는 중 문제가 발생했습니다. 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.',
       details,
       actions: [
-        { label: '라이브러리로', icon: 'arrow-left', onClick: () => this.#navigate('#/') },
+        { label: '라이브러리로', icon: 'arrow-left', onClick: () => this.#navigate(this.#libraryHref()) },
         { label: '다시 시도', kind: 'primary', icon: 'refresh', onClick: () => location.reload() },
       ],
     }));

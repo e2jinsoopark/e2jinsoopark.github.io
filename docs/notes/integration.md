@@ -109,3 +109,15 @@ already compatible); then the model choice was attacked on purpose and these roo
 Colleagues without an API key use the owner's Cloudflare Worker (`relay/`) through invite codes. Architecture, the
 test hook for a local Worker (staged site copy, production CSP untouched), the end-to-end test
 (`node tests/relay-e2e/run.mjs`) and the deploy checklist: [`relay.md`](relay.md). App side: [`relay-client.md`](relay-client.md).
+
+## 공용 서재 — shared team library (2026-10-19)
+
+One team library for everyone with an invite code, through the relay's GitHub-compatible proxy (contract
+[`docs/SHARED.md`](../SHARED.md), as built §5). Architecture, reconciliation of relay / store / UI, deploy steps,
+adding a second library and the end-to-end test (`node tests/shared-e2e/run.mjs`, real app + real Worker + fake
+GitHub with the personal and the team repo): [`shared.md`](shared.md).
+
+| Area | Change at integration |
+|---|---|
+| `ui/library-view.js` | 최근 활동 hides commits that are no action on the shared library: `내 메모·AI 결과 동기화` (a person's own `people/<id>/` files) and `논문 정보 갱신` (progress counts only) — `QUIET_ACTIVITY`. |
+| `tests/shared-e2e/run.mjs` (new) | Owner + 김간호사 + 이간호사 (two devices) against the real Worker; repo checks for personal papers, invite codes and `people/` isolation. |

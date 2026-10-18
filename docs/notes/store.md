@@ -111,11 +111,14 @@ Nothing outside these was touched.
 ## How to test
 
 ```
-node tests/store/unit.test.mjs   # 18 checks: merges + GitHubClient vs fake (Node)
-node tests/store/run.mjs         # 16 browser scenarios in Edge (python -m http.server 8102, fake on 8112)
+node tests/store/unit.test.mjs     # 26 checks: merges, paths, GitHubClient (incl. proxy mode) vs fake (Node)
+node tests/store/library.test.mjs  # 17 checks: several Library instances, 휴지통, copy; fake relay + fake GitHub (Node)
+node tests/store/run.mjs           # 20 browser scenarios in Edge (python -m http.server 8102, fake on 8112)
+node tests/store/run-shared.mjs    # 6 browser scenarios: 내 서재 + 공용 서재 in one page, invitees A/B, copy, activity (8193)
 ```
-Results go to `C:/Users/dindoo/Projects/pr-tools/out/store/` (`unit.results.json`, `results.json`, `app-*.png`).
-Fixture PDFs are served by route interception and never copied into the repo. Every non-loopback request is aborted and recorded.
+Results go to `C:/Users/dindoo/Projects/pr-tools/out/store/` (`unit.results.json`, `library.results.json`, `results.json`,
+`shared-results.json`, `app-*.png`). Fixture PDFs are served by route interception and never copied into the repo. Every
+non-loopback request is aborted and recorded (browser: Playwright routes; Node suites: a `fetch` guard).
 
 ## Findings for the integrator / other builders
 
@@ -131,3 +134,67 @@ Fixture PDFs are served by route interception and never copied into the repo. Ev
 - After switching repos, files this device never downloaded (PDFs/data of papers never opened here) stay only in the old repo.
 - Tombstones are never purged. `library.json` grows by one small record per deleted folder or paper.
 - An upload interrupted by a page reload starts over: uploaded-blob shas are remembered only per session, though big backlogs are committed in ~48 MB steps.
+
+## Several libraries: 내 서재 + 공용 서재 (docs/SHARED.md §3.1, 2026-10-19)
+
+내 서재 is unchanged: `Library.open({ settings })` → id `'mine'`, IndexedDB `paper-reader`, Web Lock / BroadcastChannel
+`paper-reader-sync`, journal `pr.store.libraryJournal.v1`, repo paths as before, deletes remove the paper's files.
+The 20 original browser scenarios run unchanged.
+
+**API**
+- `db.js`: `openDatabase(name)` (same API as `db`; one shared wrapper per name), `DEFAULT_DB_NAME`, `db.name`.
+- `Library.open({ …, id, label, dbName, getConfig, personalPrefix, retainPdfOnDelete, shared, personName })`.
+  Getters `id`, `label`, `shared`, `personalPrefix`, `retainPdfOnDelete`, `personName`; `dataPath(paperId, kind)`.
+  Any database other than `paper-reader` gets its own lock, channel and journal names (`…:<dbName>`), so two libraries
+  in one page never lock, notify or journal for each other.
+- `shared: true` hardening: the engine never falls back to `settings.github`, and its client always runs in **proxy
+  mode** (even when `getConfig` omits `proxy`); no README.md is added to commits (the proxy allows only data paths).
+- `openSharedLibrary({ relayUrl, code, lib = 'team', personId?, personName | name, label })` → apiBase
+  `<relay>/shared/<lib>/gh`, owner `team`, repo `library`, token = normalised code, prefix `people/<personId>/`,
+  `retainPdfOnDelete`, IndexedDB `sharedDbName(lib, personId)` = `paper-reader-shared-<lib>-<personId>` (one per person:
+  switching codes on a device never mixes two people's notes or pushes one person's files with the other's code),
+  `carryOver` = its own target (a changed relay address carries the data over without asking). It also accepts the
+  app's `Library.open`-style call (`getConfig`, `dbName`, `personName`; `name` then is the library name and ignored for
+  deletedBy). `personIdFor(code)` / `normalizeInviteCode(code)` repeat relay/src/codes.js (cross-checked in a test).
+- `trash()` (sync) → frozen items `{ ...record, kind: 'folder'|'paper', name, deletedAt, deletedBy, expiresAt, expired }`,
+  newest first. Folders: 30 days. Papers: only where deletes keep files (공용 서재), also after 30 days (`expired`) until the
+  purge removes their PDF (then hidden; detected after each pull). 내 서재 lists folders only (its papers' files are gone).
+- `async restore(id)` un-tombstones the item and every deleted folder above it; Korean errors for unknown ids, 내 서재
+  papers and purged papers.
+- `copyPaperTo(target, id, { folderId })` → `{ paper, copied, existing, moved, restored, translationAdded }`;
+  `copyFolderTo(target, id, { parentId, onProgress, signal })` → `{ folder, folders: { created, reused }, papers: { total,
+  copied, existing, moved, restored, failed[] } }`.
+
+**Decisions**
+- Paths: `annotations`/`ai` at `${personalPrefix}papers/<id>/<kind>.json`; `paper.pdf`, `translation.json` shared.
+  `mergerFor` accepts the `people/<id>/` prefix (same rules; merge.js untouched).
+- `retainPdfOnDelete`: deletePaper/deleteFolder only tombstone. A deleted folder's contents keep pointing at it (shown in
+  the parent through the existing nearest-live-ancestor rule), so restoring the folder brings them back; a deleted item
+  stores the place it was shown (`folderId`/`parentId` resolved at deletion), so restore puts it back there.
+- Tombstones carry `deletedAt` and `deletedBy` (`personName`; '나' in 내 서재). 공용 서재 papers carry `addedBy`.
+  `addedBy`, `deletedAt`, `deletedBy`, `sha256` are protected from `updatePaper`.
+- New papers carry `sha256` (copy dedupe). Records from before have none: they match by size + git blob sha.
+- Copy: PDF + translation + title/authors/year/pages/fileName/s2PaperId/counts; never annotations, ai, `starred`,
+  `lastOpenedAt`. Same PDF already in the target → that paper is moved into `folderId` (when given; restored first if it is
+  in the target's 휴지통) and sentences it lacks are added to its translation (union, target wins). `copyFolderTo` reuses a
+  same-named folder in the same place (copying again is idempotent) and never moves a paper it placed itself in this run.
+- 최근 활동: the shared engine's commit messages describe the batch — e.g. `폴더 만듦 ‘섬망 연구’ · 논문 추가 ‘Lu 2025’ ·
+  번역 ‘Lu 2025’`, `논문 삭제 ‘…’`, `복구 ‘…’`, `폴더 복사 ‘ICU’ (내 서재에서, 논문 2편)`, `내 메모·AI 결과 동기화`
+  (personal files only) — ≤ 170 characters, never paths, person ids or codes. The relay prefixes `[name] `. 내 서재 keeps
+  its file-list messages.
+- GitHubClient `proxy: true`: the relay's Korean messages are shown as they are (401 fallback: "초대 코드가 올바르지
+  않거나…"); 409/422 on `POST git/trees` or `git/commits` is a `GitHubConflictError` (re-pull, merge, retry); an invalid,
+  missing or `*.github.com` apiBase is a config error with **no request** (the code can never reach api.github.com).
+
+**For the relay builder / integrator**
+1. The client treats **409 or 422** on `POST …/git/trees` (stale base_tree) and `POST …/git/commits` (parents ≠ head) as
+   "someone pushed first" and retries; a 403 there is fatal (shown to the user, no retry) — keep 403 for real allowlist
+   violations only. Korean `message` texts in GitHub's error shape are shown verbatim.
+2. The bootstrap `PUT contents/README.md` message is `논문 리더 데이터 저장소 시작` (the fake relay lists it with `who: null`).
+3. `tests/store/fake-relay.mjs` emulates §2.1–§2.2 (allowlist, people/ filtering, base/parents → 409, force, README only
+   when empty, `[name] ` rewrite, `GET /shared`, `/activity`) for store tests; the real Worker remains the reference.
+4. 공용 서재 writes `translatedCount`/`sentenceCount` to the shared library.json; a commit with only such fields reads
+   `논문 정보 갱신` in 최근 활동.
+5. **Test incident (fixed):** one run of the new proxy-mode unit test, before the fix, sent one `GET /repos/me/lib` with the
+   fake token `good` to the real api.github.com (`apiBase: undefined` fell back to the constructor default). The default
+   is gone in proxy mode, GitHub hosts are refused as a proxy, and both Node suites now block every non-loopback request.

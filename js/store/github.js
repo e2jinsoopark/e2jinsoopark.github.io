@@ -18,7 +18,7 @@ const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 
 export const README_PATH = 'README.md';
 /** Root entries a data repo may contain without looking like someone else's project. */
-const APP_ROOT_ENTRIES = new Set(['library.json', 'papers', 'README.md', '.gitattributes', '.gitignore', 'LICENSE', '.github']);
+const APP_ROOT_ENTRIES = new Set(['library.json', 'papers', 'people', 'README.md', '.gitattributes', '.gitignore', 'LICENSE', '.github']);
 export const README_TEXT = `# 논문 리더 데이터 저장소
 
 이 저장소는 **논문 리더** 앱이 자동으로 관리하는 데이터 저장소입니다.
@@ -67,6 +67,7 @@ export class GitHubClient {
   #apiBase;
   #fetch;
   #rateLimitMaxWaitMs;
+  #proxy;
   #refCache = null; // { etag, commitSha } — conditional GETs (304s) do not count against the rate limit
   #treeOfCommit = new Map();
 
@@ -75,13 +76,19 @@ export class GitHubClient {
    *           fetch?: typeof fetch, rateLimitMaxWaitMs?: number }} opts
    *   apiBase: test hook (fake server); defaults to https://api.github.com.
    *   rateLimitMaxWaitMs: rate-limit waits up to this long are slept through; longer ones throw.
+   *   proxy: `apiBase` is the relay's GitHub-compatible proxy for the shared library (공용 서재, docs/SHARED.md
+   *     §2.1) and `token` is an invite code. Korean messages from the proxy are shown as they are, a stale
+   *     base_tree/parent (409/422 on POST trees/commits) is a conflict (re-pull, merge, retry), and an invalid
+   *     apiBase is a configuration error — never a fallback to api.github.com (the code must not go there).
    */
-  constructor({ owner, repo, branch = 'main', token, apiBase = DEFAULT_API_BASE, fetch: fetchImpl, rateLimitMaxWaitMs = 60_000 } = {}) {
+  constructor({ owner, repo, branch = 'main', token, apiBase, fetch: fetchImpl, rateLimitMaxWaitMs = 60_000, proxy = false } = {}) {
     this.#owner = String(owner ?? '').trim();
     this.#repo = String(repo ?? '').trim().replace(/\.git$/i, '');
     this.#branch = String(branch || 'main').trim() || 'main';
     this.#token = String(token ?? '').trim();
-    this.#apiBase = normalizeApiBase(apiBase);
+    this.#proxy = Boolean(proxy);
+    // No default in proxy mode: a missing relay address must never become api.github.com.
+    this.#apiBase = this.#proxy ? normalizeProxyBase(apiBase) : normalizeApiBase(apiBase ?? DEFAULT_API_BASE);
     this.#fetch = fetchImpl || ((...args) => globalThis.fetch(...args));
     this.#rateLimitMaxWaitMs = rateLimitMaxWaitMs;
   }
@@ -90,6 +97,8 @@ export class GitHubClient {
   get repo() { return this.#repo; }
   get branch() { return this.#branch; }
   get apiBase() { return this.#apiBase; }
+  /** True for the shared library's relay proxy (the token is an invite code). */
+  get proxy() { return this.#proxy; }
   /** Stable identity of the remote ("same repo?") — never includes the token. */
   get target() { return `${this.#apiBase}/${this.#owner}/${this.#repo}#${this.#branch}`; }
 
@@ -278,10 +287,16 @@ export class GitHubClient {
       path: f.path, mode: '100644', type: 'blob', sha: f.delete ? null : blobs[f.path],
     }));
     const treeBody = baseTree ? { base_tree: baseTree, tree: entries } : { tree: entries.filter((e) => e.sha) };
-    const { data: tree } = await this.#request('POST', this.#repoPath('/git/trees'), { body: treeBody, signal });
+    // The relay proxy accepts trees only on the current head and commits only whose parent is the head: when
+    // someone else pushed meanwhile it answers 409/422 here, which (like a non-fast-forward) means re-pull.
+    const staleBase = (err) => {
+      if (this.#proxy && (err.status === 409 || err.status === 422)) throw new GitHubConflictError(undefined, { cause: err });
+      throw err;
+    };
+    const { data: tree } = await this.#request('POST', this.#repoPath('/git/trees'), { body: treeBody, signal }).catch(staleBase);
     const { data: commit } = await this.#request('POST', this.#repoPath('/git/commits'), {
       body: { message, tree: tree.sha, parents: parent ? [parent] : [] }, signal,
-    });
+    }).catch(staleBase);
 
     try {
       if (createRef) {
@@ -308,6 +323,8 @@ export class GitHubClient {
   // -------------------------------------------------------------- internals
 
   #configProblem() {
+    if (this.#proxy && !this.#apiBase) return '공용 서재 서버 주소가 올바르지 않습니다. 설정 → 초대 코드에서 서버 주소를 확인하세요.';
+    if (this.#proxy && !this.#token) return '초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.';
     if (!this.#owner || !this.#repo || !this.#token) return '소유자, 저장소 이름, 토큰을 모두 입력하세요.';
     if (!OWNER_RE.test(this.#owner)) return `소유자 이름이 올바르지 않습니다: ‘${this.#owner}’ (영문·숫자·하이픈만 쓸 수 있습니다)`;
     if (!REPO_RE.test(this.#repo) || this.#repo === '.' || this.#repo === '..') return `저장소 이름이 올바르지 않습니다: ‘${this.#repo}’`;
@@ -471,6 +488,7 @@ export class GitHubClient {
       const at = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
       return new GitHubError(`GitHub 요청 한도를 넘었습니다. ${at} 이후에 자동으로 다시 동기화합니다.`, { code: 'rate_limit', status, retryAt: rate.retryAt });
     }
+    if (this.#proxy) return this.#proxyError(status, ghMessage, method, path);
     switch (status) {
       case 401:
         return new GitHubError('GitHub 토큰이 올바르지 않거나 만료되었습니다. 설정에서 새 토큰을 입력하세요.', { code: 'auth', status });
@@ -491,6 +509,30 @@ export class GitHubClient {
       default:
         if (status >= 500) return new GitHubError('GitHub 서버에 일시적인 문제가 있습니다. 잠시 후 자동으로 다시 시도합니다.', { code: 'server', status });
         return new GitHubError(`GitHub 요청에 실패했습니다 (${status}).`, { code: 'unknown', status });
+    }
+  }
+
+  /** Errors from the relay proxy (공용 서재): its Korean messages are shown as they are. */
+  #proxyError(status, ghMessage, method, path) {
+    const korean = /[가-힣]/.test(ghMessage) ? ghMessage : '';
+    const make = (fallback, code) => new GitHubError(korean || fallback, { code, status });
+    switch (status) {
+      case 401:
+        return make('초대 코드가 올바르지 않거나 사용이 중지되었습니다. 설정에서 초대 코드를 확인하세요.', 'auth');
+      case 403:
+        return make(method === 'GET' ? '이 초대 코드로는 공용 서재를 열 수 없습니다.' : '공용 서재에 이 변경을 저장할 수 없습니다 (403).', 'forbidden');
+      case 404:
+        if (/\/git\/ref\//.test(path) && method === 'GET') return make(`공용 서재의 ‘${this.#branch}’ 브랜치를 찾을 수 없습니다.`, 'not_found');
+        return make('공용 서재를 찾을 수 없습니다. 초대 코드 서버가 공용 서재를 지원하는지 확인하세요.', 'not_found');
+      case 409:
+        return make('공용 서재 저장소가 비어 있습니다.', 'empty');
+      case 413:
+        return make('파일이 너무 커서 공용 서재에 올릴 수 없습니다.', 'too_large');
+      case 422:
+        return make(`공용 서재 서버가 요청을 거부했습니다: ${ghMessage || '처리할 수 없는 요청'}`, 'invalid');
+      default:
+        if (status >= 500) return make('공용 서재 서버에 일시적인 문제가 있습니다. 잠시 후 자동으로 다시 시도합니다.', 'server');
+        return make(`공용 서재 요청에 실패했습니다 (${status}).`, 'unknown');
     }
   }
 }
@@ -531,6 +573,22 @@ function parseBlobEnvelope(bytes) {
 /** Keep the slashes of a branch like "feature/x" but escape everything else. */
 function encodeBranch(branch) {
   return branch.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * The relay proxy base (e.g. https://relay.example/shared/team/gh): https or loopback http, no query, fragment
+ * or credentials; '' when invalid (a configuration error — never replaced by api.github.com).
+ */
+function normalizeProxyBase(apiBase) {
+  const raw = String(apiBase || '').trim().replace(/\/+$/, '');
+  try {
+    const u = new URL(raw);
+    const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+    const github = /(^|\.)github\.com$/i.test(u.hostname); // the relay, never GitHub itself
+    if (!github && (u.protocol === 'https:' || (u.protocol === 'http:' && loopback)) && !u.search && !u.hash && !u.username && !u.password) return raw;
+  } catch { /* fall through */ }
+  console.warn('[store] invalid shared-library proxy address', raw);
+  return '';
 }
 
 /** https only, except loopback (local fake server in tests). */

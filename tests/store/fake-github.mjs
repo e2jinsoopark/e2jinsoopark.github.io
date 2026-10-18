@@ -1,6 +1,7 @@
 // In-memory fake of the GitHub REST endpoints used by js/store/github.js, for tests only.
 // Real git object hashing (blob/tree/commit SHA-1), CORS, 409 on empty repos, 422 on non-fast-forward,
-// ETag/304 on refs, rate-limit and outage simulation. Never talks to the real GitHub.
+// ETag/304 on refs, rate-limit and outage simulation, the commit list (GET /repos/:o/:r/commits) and truncated
+// recursive tree listings on request. Never talks to the real GitHub.
 //
 //   import { startFakeGitHub } from './fake-github.mjs';
 //   const fake = await startFakeGitHub({ port: 8112 });
@@ -135,7 +136,7 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
   const log = [];
   const faults = []; // { method, re, status, headers, body, count }
   const pauses = []; // { method, re, release: Promise, resolveHit }
-  const state = { down: false, latencyMs, rateRemaining: 5000 };
+  const state = { down: false, latencyMs, rateRemaining: 5000, truncateRecursive: 0 };
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch((err) => {
@@ -156,6 +157,9 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
     if (state.latencyMs) await new Promise((r) => setTimeout(r, state.latencyMs));
     const token = /^(?:Bearer|token) (.+)$/i.exec(req.headers.authorization || '')?.[1]?.trim() ?? null;
     const entry = { method: req.method, path, query: url.search, status: 0, at: Date.now(), bytesIn: body.length, token };
+    // Raw request headers and body for leak checks (not enumerable, so JSON dumps of the log stay small).
+    Object.defineProperty(entry, 'headers', { value: { ...req.headers }, enumerable: false });
+    Object.defineProperty(entry, 'body', { value: body, enumerable: false });
     log.push(entry);
 
     for (const p of pauses) {
@@ -267,7 +271,35 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
     if ((mm = /^\/git\/commits\/([0-9a-f]{40})$/.exec(rest)) && method === 'GET') {
       const c = repo.get(mm[1], 'commit');
       if (!c) throw new HttpError(404, 'Not Found');
-      return { status: 200, json: { sha: mm[1], tree: { sha: c.tree }, parents: c.parents.map((sha) => ({ sha })), message: c.message } };
+      return { status: 200, json: { sha: mm[1], tree: { sha: c.tree }, parents: c.parents.map((sha) => ({ sha })), message: c.message, ...signature(c) } };
+    }
+
+    if (rest === '/commits' && method === 'GET') {
+      requireNonEmpty(repo);
+      const ref = url.searchParams.get('sha') || 'main';
+      let sha = /^[0-9a-f]{40}$/.test(ref) ? ref : repo.refs.get(`heads/${ref}`);
+      if (!sha || !repo.get(sha, 'commit')) throw new HttpError(404, 'Not Found');
+      const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+      // GitHub filters by committer date: `until` = at or before, `since` = after. Commits are newest first.
+      const until = url.searchParams.get('until');
+      const since = url.searchParams.get('since');
+      const untilMs = until ? Date.parse(until) : null;
+      const sinceMs = since ? Date.parse(since) : null;
+      const list = [];
+      while (sha && list.length < perPage) {
+        const c = repo.get(sha, 'commit');
+        const ms = c.time * 1000;
+        const keep = (untilMs === null || ms <= untilMs) && (sinceMs === null || ms > sinceMs);
+        if (keep) {
+          list.push({
+            sha, commit: { message: c.message, tree: { sha: c.tree }, ...signature(c) },
+            author: { login: 'fake-owner', id: 1 }, committer: { login: 'fake-owner', id: 1 },
+            parents: c.parents.map((p) => ({ sha: p })),
+          });
+        }
+        sha = c.parents[0];
+      }
+      return { status: 200, json: list };
     }
 
     if ((mm = /^\/git\/trees\/([0-9a-f]{40})$/.exec(rest)) && method === 'GET') {
@@ -287,6 +319,9 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
         }
       };
       walk(mm[1], '');
+      if (recursive && state.truncateRecursive && tree.length > state.truncateRecursive) {
+        return { status: 200, json: { sha: mm[1], tree: tree.slice(0, state.truncateRecursive), truncated: true } };
+      }
       return { status: 200, json: { sha: mm[1], tree, truncated: false } };
     }
 
@@ -338,7 +373,7 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
       if (!repo.get(tree, 'tree')) throw new HttpError(422, 'Tree SHA does not exist');
       for (const p of parents) if (!repo.get(p, 'commit')) throw new HttpError(422, 'Parent SHA does not exist or is not a commit object');
       const sha = repo.putCommit({ tree, parents, message });
-      return { status: 201, json: { sha, tree: { sha: tree }, parents: parents.map((s) => ({ sha: s })), message } };
+      return { status: 201, json: { sha, tree: { sha: tree }, parents: parents.map((s) => ({ sha: s })), message, ...signature(repo.get(sha, 'commit')) } };
     }
 
     if ((mm = /^\/git\/refs\/heads\/(.+)$/.exec(rest)) && method === 'PATCH') {
@@ -401,8 +436,9 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
       return repo;
     },
     repo(owner, name) { return repos.get(`${owner}/${name}`.toLowerCase()); },
-    /** Server-side commit (simulates another client). files: { path: string|Buffer|null } */
-    commitFiles(owner, name, files, { branch = 'main', message = 'server commit' } = {}) {
+    /** Server-side commit (simulates another client). files: { path: string|Buffer|null }. `time` (epoch ms) sets the
+     * committer date, so tests can place a commit in the past. */
+    commitFiles(owner, name, files, { branch = 'main', message = 'server commit', time } = {}) {
       const repo = api.repo(owner, name);
       const ref = `heads/${branch}`;
       const head = repo.refs.get(ref);
@@ -411,7 +447,9 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
         if (v === null) flat.delete(path);
         else flat.set(path, { mode: '100644', sha: repo.putBlob(Buffer.isBuffer(v) ? v : Buffer.from(v)) });
       }
-      const commit = repo.putCommit({ tree: repo.buildTree(flat), parents: head ? [head] : [], message });
+      const opts = { tree: repo.buildTree(flat), parents: head ? [head] : [], message };
+      if (time !== undefined) opts.time = Math.floor(time / 1000);
+      const commit = repo.putCommit(opts);
       repo.refs.set(ref, commit);
       return commit;
     },
@@ -425,7 +463,7 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
         const now = repo.flatten(c.tree);
         const before = c.parents[0] ? repo.flatten(repo.get(c.parents[0], 'commit').tree) : new Map();
         const changed = [...new Set([...now.keys(), ...before.keys()])].filter((p) => now.get(p)?.sha !== before.get(p)?.sha).sort();
-        out.push({ sha, message: c.message, parents: c.parents, changed, deleted: changed.filter((p) => !now.has(p)) });
+        out.push({ sha, message: c.message, parents: c.parents, changed, deleted: changed.filter((p) => !now.has(p)), time: c.time * 1000 });
         sha = c.parents[0];
       }
       return out;
@@ -456,6 +494,8 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
       if (down) for (const s of sockets) s.destroy();
     },
     setLatency(ms) { state.latencyMs = ms; },
+    /** Recursive tree listings longer than `n` entries come back truncated (0 = never), like GitHub's huge trees. */
+    setTruncateRecursive(n) { state.truncateRecursive = n; },
     clearLog() { log.length = 0; },
     close() {
       for (const s of sockets) s.destroy();
@@ -463,6 +503,12 @@ export async function startFakeGitHub({ port = 0, host = '127.0.0.1', latencyMs 
     },
   };
   return api;
+}
+
+/** Author/committer as GitHub reports them (name, e-mail, ISO date). */
+function signature(c) {
+  const who = { name: 'Fake Owner', email: 'fake@example.test', date: new Date(c.time * 1000).toISOString() };
+  return { author: { ...who }, committer: { ...who } };
 }
 
 function readBody(req) {

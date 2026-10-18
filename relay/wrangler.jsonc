@@ -14,13 +14,20 @@
       "database_id": "bae6be74-ea88-4d24-93c7-756c69b2dcb5"
     }
   ],
-  // Secrets (not here): ANTHROPIC_API_KEY, ADMIN_TOKEN — set with `npx wrangler secret put <NAME>`.
+  // Secrets (not here): ANTHROPIC_API_KEY, ADMIN_TOKEN, TEAM_GITHUB_TOKEN, PERSON_ID_SECRET — set with `npx wrangler secret put <NAME>`.
   "vars": {
     "ALLOWED_ORIGINS": "https://e2jinsoopark.github.io,http://localhost:*,http://127.0.0.1:*",
     "UPSTREAM_URL": "https://api.anthropic.com",
     "DEFAULT_MODELS": "claude-haiku-5-5",
     "DEFAULT_DAILY_LIMIT_USD": "0.5",
     "GLOBAL_DAILY_LIMIT_USD": "5",
-    "MAX_TOKENS_CAP": "32000"
+    "MAX_TOKENS_CAP": "32000",
+    // Shared team library (공용 서재, docs/SHARED.md): every active invite code may use these private repos through
+    // /shared/<id>/gh with the Worker's TEAM_GITHUB_TOKEN. maxBytes = size cap (sum of the files in the repo);
+    // maxFiles = cap on the number of files (stops filling the repo cheaply with countless tiny files; default 50000).
+    "GITHUB_API_BASE": "https://api.github.com",
+    "SHARED_LIBRARIES": [
+      { "id": "team", "name": "공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000, "maxFiles": 50000 }
+    ]
   }
 }

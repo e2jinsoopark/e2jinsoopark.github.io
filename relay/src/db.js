@@ -112,3 +112,41 @@ export function parseModels(text) {
   } catch { /* comma list */ }
   return String(text || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
+
+/**
+ * One code by its canonical form (no usage sums: the shared library only needs who it is). Null when unknown.
+ * @returns {Promise<CodeRow | null>}
+ */
+export function findCode(db, code) {
+  return db.prepare('SELECT * FROM codes WHERE code = ?1').bind(code).first();
+}
+
+/** How long a tree created through the shared-library proxy may be committed (and how long rows are kept). */
+const SHARED_TREE_KEEP_MS = 60 * 60 * 1000;
+
+/**
+ * Remember that `person` created `tree` on top of `base` ('' = no base: the branch did not exist yet) through the
+ * proxy, so POST git/commits can check that a commit's tree descends from its parent's tree. Old rows are pruned
+ * in the same batch.
+ */
+export async function insertSharedTree(db, { lib, tree, base, person, now }) {
+  await db.batch([
+    db.prepare(`
+      INSERT INTO shared_trees (lib, tree, base, person, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
+      ON CONFLICT (lib, tree, base, person) DO UPDATE SET created_at = excluded.created_at`)
+      .bind(lib, tree, base, person, now),
+    db.prepare('DELETE FROM shared_trees WHERE created_at < ?1').bind(now - SHARED_TREE_KEEP_MS),
+  ]);
+}
+
+/**
+ * Whether `person` created `tree` through the proxy since `since` (epoch ms) — on top of `base` when given.
+ * @returns {Promise<boolean>}
+ */
+export async function hasSharedTree(db, { lib, tree, base = null, person, since }) {
+  const row = await db.prepare(`
+    SELECT 1 AS ok FROM shared_trees
+    WHERE lib = ?1 AND tree = ?2 AND person = ?3 AND created_at >= ?4 AND (?5 IS NULL OR base = ?5) LIMIT 1`)
+    .bind(lib, tree, person, since, base).first();
+  return Boolean(row);
+}

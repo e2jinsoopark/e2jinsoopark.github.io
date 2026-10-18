@@ -1,8 +1,15 @@
 # Copy to .dev.vars for `npx wrangler dev` (local only; never commit .dev.vars).
-# In production these are secrets: npx wrangler secret put ANTHROPIC_API_KEY / ADMIN_TOKEN
+# In production these are secrets: npx wrangler secret put ANTHROPIC_API_KEY / ADMIN_TOKEN / TEAM_GITHUB_TOKEN / PERSON_ID_SECRET
 ANTHROPIC_API_KEY=sk-ant-...
 # 16+ random characters, e.g. node -e "console.log(crypto.randomUUID())"
 ADMIN_TOKEN=change-me-to-a-long-random-string
+# Shared team library (공용 서재): a fine-grained GitHub token for the team repo only
+# (Repository access: only dindoopark/paper-team-library; Permissions: Contents = Read and write).
+TEAM_GITHUB_TOKEN=github_pat_...
 # Optional local overrides of wrangler.jsonc vars:
 # UPSTREAM_URL=http://127.0.0.1:8788
+# GITHUB_API_BASE=http://127.0.0.1:8792   # e.g. node tests/store/fake-github.mjs --port 8792
+# SHARED_LIBRARIES=[{"id":"team","name":"공용 서재","repo":"me/paper-team-library","branch":"main","maxBytes":4000000000}]
 # TEST_MODE=1   # honours the x-relay-test-now header (tests only; never set in production)
+# Random string; makes personIds keyed so they cannot be traced back to invite codes. Never change it once people use 공용 서재 (it would move everyone's notes).
+PERSON_ID_SECRET=change-me-random-32-chars

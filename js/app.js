@@ -1,10 +1,11 @@
 // App bootstrap: theme, module loading with graceful degradation, Library, hash router.
-// Routes: #/ (library) · #/paper/<id> (reader) · #/settings[/<section>] · #/join/<CODE> (invite link)
+// Routes: #/ (내 서재) · #/trash (내 서재 휴지통) · #/paper/<id> (reader) · #/settings[/<section>] · #/join/<CODE> (invite link)
+//         #/s/<lib> (공용 서재) · #/s/<lib>/trash · #/s/<lib>/activity · #/s/<lib>/paper/<id>   (docs/SHARED.md)
 import { bus } from './core/bus.js';
-import { APP_VERSION } from './core/config.js';
+import { APP_VERSION, STORAGE_KEYS } from './core/config.js';
 import { settings } from './core/settings.js';
-import { clamp, el } from './core/util.js';
-import { button, closeAllLayers, iconButton, messageScreen, modal, spinner, toast } from './ui/components.js';
+import { clamp, el, safeStorage } from './core/util.js';
+import { button, closeAllLayers, iconButton, messageScreen, modal, spinner, toast, uiState } from './ui/components.js';
 import { icon } from './ui/icons.js';
 import { mountLibraryView } from './ui/library-view.js';
 import { mountReaderView } from './ui/reader-view.js';
@@ -22,6 +23,13 @@ const MODULES = [
   { key: 'usage', path: './ai/usage.js', exports: ['usageSummary'], label: '사용량 집계' },
   { key: 'features', path: './features/index.js', exports: ['panels', 'installReaderFeatures'], label: '부가 기능(요약·채팅·메모·관련 논문)' },
 ];
+
+/** Last GET /shared answer, so 공용 서재 opens from this device's copy at once (offline too). */
+const SHARED_CACHE_KEY = 'pr.shared.v1';
+/** IndexedDB name prefix of the team libraries (one database per library and person). */
+const SHARED_DB_PREFIX = 'paper-reader-shared-';
+/** First visit of an invitee without a remembered library list: wait this long for GET /shared before routing. */
+const INVITEE_FIRST_WAIT_MS = 2500;
 
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
@@ -91,9 +99,24 @@ async function boot() {
   // A configured model that no longer exists was replaced (js/ai/models.js): say so once.
   bus.on('ai:model-change', ({ message } = {}) => { if (message) toast(message, { kind: 'warning', timeout: 8000 }); });
 
-  const deps = buildDeps(modules, library, failures);
+  const shared = new SharedLibraries({ store: modules.library, relay: modules.providers?.relay ?? null });
+  const deps = buildDeps(modules, library, failures, shared);
   if (failures.length) showBanner(bannerHost, failures);
   refreshRelayIdentity(deps);
+
+  // 공용 서재 follows the saved invite code and server (a join link, 설정, 키·토큰 지우기, another tab).
+  let sharedKey = shared.settingsKey();
+  bus.on('settings:change', () => {
+    const now = shared.settingsKey();
+    if (now === sharedKey) return;
+    sharedKey = now;
+    shared.start().catch((err) => console.warn('[app] shared libraries', err));
+  });
+  // Resolves once the remembered list is applied (at once), or after the first GET /shared when there is none.
+  const started = shared.start().catch((err) => console.warn('[app] shared libraries', err));
+  // An invitee's library home is 공용 서재: know it before the first route. A first visit (no remembered list)
+  // gives GET /shared a moment, so they do not first see an empty 내 서재.
+  if (shared.isInvitee()) await Promise.race([started, new Promise((r) => setTimeout(r, INVITEE_FIRST_WAIT_MS))]);
   startRouter(viewEl, deps);
 }
 
@@ -130,9 +153,10 @@ async function loadModules() {
   return { modules, failures };
 }
 
-function buildDeps(m, library, failures) {
+function buildDeps(m, library, failures, shared) {
   return {
     library,
+    shared, // 공용 서재 (team libraries behind the relay); shared.enabled is false without an invite code
     loadPdf: m.pdfjs?.loadPdf ?? null,
     extractDocument: m.extract?.extractDocument ?? null,
     quickMeta: m.extract?.quickMeta ?? null,
@@ -151,13 +175,322 @@ function buildDeps(m, library, failures) {
   };
 }
 
+// ------------------------------------------------------- 공용 서재 (shared)
+
+/**
+ * The team libraries ("공용 서재", docs/SHARED.md) the saved invite code may use, each a Library of its own
+ * (separate IndexedDB, synced through the relay's GitHub-compatible proxy with the code as the token).
+ * Local-first like 내 서재: the last GET /shared answer is remembered, so the libraries open from this device's copy
+ * at once (offline too) while the list is re-read in the background. Views get it as `deps.shared`.
+ *
+ * state: 'off' (no code) · 'loading' (first GET /shared) · 'ready' · 'error' (no list and GET /shared failed) ·
+ *        'unavailable' (the server offers no team library to this code)
+ * events: 'change' (state, list, a library opened or failed)
+ */
+class SharedLibraries extends EventTarget {
+  #store;
+  #relay;
+  #state = 'off';
+  #message = '';
+  #info = null; // { libraries: [{ id, name }], personId, name }
+  #entries = new Map(); // id → { id, name, library, status: 'opening'|'ready'|'error', error, promise }
+  #run = 0; // bumped by every (re)start; late answers of an older run are dropped
+  #starting = Promise.resolve();
+
+  constructor({ store, relay }) {
+    super();
+    this.#store = store;
+    this.#relay = relay;
+  }
+
+  get state() { return this.#state; }
+  /** Korean reason for 'error'. */
+  get message() { return this.#message; }
+  /** True when the sidebar shows a 공용 서재 section (also while connecting or after an error). */
+  get enabled() { return this.#state === 'loading' || this.#state === 'ready' || this.#state === 'error'; }
+  get personId() { return this.#info?.personId || ''; }
+  /** The invite code's name (the relay's), shown in 설정 and as "who" of this person's changes. */
+  get personName() { return this.#info?.name || settings.get().relay?.name || ''; }
+  /** [{ id, name, library, status, error }] in the server's order. */
+  get libraries() {
+    return [...this.#entries.values()].map(({ id, name, library, status, error }) => ({ id, name, library, status, error }));
+  }
+
+  /** The opened Library of team library `id`, or null (unknown, still opening, failed). */
+  get(id) { return this.#entries.get(id)?.library ?? null; }
+  entry(id) {
+    const e = this.#entries.get(id);
+    return e ? { id: e.id, name: e.name, library: e.library, status: e.status, error: e.error } : null;
+  }
+
+  /** Wait until team library `id` is open (null when it is unknown or failed to open). */
+  async open(id) {
+    await this.#starting;
+    const e = this.#entries.get(id);
+    return e ? e.promise : null;
+  }
+
+  /** Changes when the code or the server changes (app.js restarts then). */
+  settingsKey() {
+    return `${settings.relayUrl()}\n${this.#code()}`;
+  }
+
+  /**
+   * An invitee: has an invite code, no GitHub sync of their own and uses the code for AI. Their library home is
+   * 공용 서재 until they pick 내 서재 themselves. (`?mock=1` overrides the provider in memory only: read the saved one.)
+   */
+  isInvitee() {
+    const s = settings.get();
+    if (!this.#code() || settings.isSyncReady()) return false;
+    const provider = settings.isMockSession ? safeStorage.get(STORAGE_KEYS.settings, {})?.provider : s.provider;
+    return provider === 'relay';
+  }
+
+  /** Where #/ goes: '#/s/<lib>' for an invitee who has not chosen 내 서재, else null (내 서재). */
+  homeHash() {
+    if (!this.isInvitee() || this.#state !== 'ready') return null;
+    const pref = uiState.get('libraryHome', '');
+    if (pref === 'mine') return null;
+    const ids = [...this.#entries.keys()];
+    const id = typeof pref === 'string' && pref.startsWith('shared:') && ids.includes(pref.slice(7)) ? pref.slice(7) : ids[0];
+    return id ? `#/s/${encodeURIComponent(id)}` : null;
+  }
+
+  /** (Re)open for the saved code and server: from the remembered list at once, then GET /shared. */
+  start() {
+    const run = ++this.#run;
+    this.#starting = this.#start(run);
+    return this.#starting;
+  }
+
+  /** 다시 시도 after an error. */
+  retry() { return this.start(); }
+
+  async #start(run) {
+    await this.#closeAll();
+    const code = this.#code();
+    const url = settings.relayUrl();
+    if (!code || !url) {
+      this.#info = null;
+      this.#set('off');
+      return;
+    }
+    const fp = await fingerprint(`${url}\n${code}`);
+    if (run !== this.#run) return;
+    const cached = readSharedCache(fp);
+    if (cached) {
+      this.#apply(cached, run);
+      this.#set('ready');
+    } else {
+      this.#info = null;
+      this.#set('loading');
+    }
+    const fresh = this.#refresh(run, fp, Boolean(cached));
+    if (!cached) await fresh;
+  }
+
+  async #refresh(run, fp, hadCache) {
+    if (!this.#relay?.fetchShared) {
+      if (!hadCache) this.#set('error', '초대 코드 모듈을 불러오지 못해 공용 서재에 연결할 수 없습니다. 페이지를 새로 고쳐 보세요.');
+      return;
+    }
+    let info;
+    try {
+      info = await this.#relay.fetchShared({ code: this.#code() });
+    } catch (err) {
+      if (run !== this.#run) return;
+      console.warn('[app] GET /shared', err?.code || '', err?.message || err);
+      // A server without team libraries (no /shared route): nothing to show. Otherwise keep what this device has.
+      if (err?.code === 'not_found' && !hadCache) this.#set('unavailable');
+      else if (!hadCache) this.#set('error', err?.message || '공용 서재에 연결하지 못했습니다.');
+      return;
+    }
+    if (run !== this.#run) return;
+    if (!info.libraries.length || !info.personId) {
+      safeStorage.remove(SHARED_CACHE_KEY);
+      await this.#closeAll();
+      if (run !== this.#run) return;
+      this.#info = null;
+      this.#set('unavailable');
+      return;
+    }
+    safeStorage.set(SHARED_CACHE_KEY, { fp, libraries: info.libraries, personId: info.personId, name: info.name, at: Date.now() });
+    this.#apply(info, run);
+    this.#set('ready');
+  }
+
+  /** Open libraries that are new, drop those that are gone, take over names. */
+  #apply(info, run) {
+    if (this.#info?.personId && this.#info.personId !== info.personId) {
+      for (const e of this.#entries.values()) e.library?.close?.().catch(() => {});
+      this.#entries.clear();
+    }
+    this.#info = { libraries: info.libraries, personId: info.personId, name: info.name || '' };
+    const wanted = new Map(info.libraries.map((l) => [l.id, l]));
+    for (const [id, e] of this.#entries) {
+      if (wanted.has(id)) continue;
+      this.#entries.delete(id);
+      e.library?.close?.().catch(() => {});
+    }
+    for (const lib of info.libraries) {
+      const e = this.#entries.get(lib.id);
+      if (e) e.name = lib.name;
+      else this.#openEntry(lib, run);
+    }
+    this.#emit();
+  }
+
+  #openEntry(lib, run) {
+    const entry = { id: lib.id, name: lib.name, library: null, status: 'opening', error: '', promise: null };
+    this.#entries.set(lib.id, entry);
+    entry.promise = (async () => {
+      try {
+        const library = await this.#openLibrary(lib);
+        if (run !== this.#run || this.#entries.get(lib.id) !== entry) {
+          library?.close?.().catch(() => {});
+          return null;
+        }
+        library.addEventListener('error', (e) => {
+          toast(`${entry.name}: ${e.detail?.message || '변경 내용을 이 기기에 저장하지 못했습니다.'}`, { kind: 'error', timeout: 8000 });
+        });
+        entry.library = library;
+        entry.status = 'ready';
+        return library;
+      } catch (err) {
+        console.warn('[app] open shared library', lib.id, err);
+        entry.status = 'error';
+        entry.error = /[가-힣]/.test(err?.message || '') ? err.message : '이 기기에 공용 서재를 열지 못했습니다(브라우저 저장소 오류).';
+        return null;
+      } finally {
+        if (this.#entries.get(lib.id) === entry) this.#emit();
+      }
+    })();
+  }
+
+  /**
+   * docs/SHARED.md §3.1: a Library with its own database (one per library and person), synced through the relay's
+   * proxy. The store's openSharedLibrary() builds exactly that; Library.open() with the contract's options is the
+   * fallback for a store without it.
+   */
+  #openLibrary(lib) {
+    const personId = this.#info.personId;
+    const personName = () => this.personName; // tombstones' deletedBy (휴지통: who deleted it)
+    if (typeof this.#store.openSharedLibrary === 'function') {
+      return this.#store.openSharedLibrary({
+        relayUrl: settings.relayUrl(), code: this.#code(), lib: lib.id, personId, name: personName, label: lib.name,
+      });
+    }
+    return this.#store.Library.open({
+      settings,
+      id: `shared:${lib.id}`,
+      label: lib.name,
+      dbName: `${SHARED_DB_PREFIX}${lib.id}-${personId}`,
+      getConfig: () => this.#syncConfig(lib.id),
+      personalPrefix: `people/${personId}/`,
+      retainPdfOnDelete: true,
+      shared: true,
+      personName,
+    });
+  }
+
+  /**
+   * GitHub settings of a team library: the relay's GitHub-compatible proxy, the invite code as the token. The
+   * repository behind it stays the same when the server address changes, so its data always carries over.
+   */
+  #syncConfig(libId) {
+    const code = this.#code();
+    const url = settings.relayUrl();
+    if (!code || !url) return null;
+    const apiBase = this.#relay?.sharedApiBase?.(libId, url) || `${url}/shared/${encodeURIComponent(libId)}/gh`;
+    return { owner: 'team', repo: 'library', branch: 'main', token: code, apiBase, carryOver: `${apiBase}/team/library#main` };
+  }
+
+  #code() {
+    const raw = String(settings.get().relay?.code || '').trim();
+    if (!raw) return '';
+    return this.#relay?.normalizeInviteCode ? this.#relay.normalizeInviteCode(raw) : raw.toUpperCase();
+  }
+
+  async #closeAll() {
+    const libs = [...this.#entries.values()].map((e) => e.library).filter(Boolean);
+    this.#entries.clear();
+    await Promise.all(libs.map((lib) => Promise.resolve(lib.close?.()).catch((err) => console.warn('[app] close shared library', err))));
+  }
+
+  /**
+   * 설정 → 이 기기의 데이터 모두 지우기: every team library database on this device (also other people's who used
+   * this browser), and the remembered list. Nothing is deleted on the server.
+   */
+  async wipeLocalData() {
+    this.#run++;
+    const libs = [...this.#entries.values()].map((e) => e.library).filter(Boolean);
+    this.#entries.clear();
+    for (const lib of libs) {
+      try {
+        if (lib.wipeLocalData) await lib.wipeLocalData();
+        else await lib.close?.();
+      } catch (err) { console.warn('[app] wipe shared library', err); }
+    }
+    safeStorage.remove(SHARED_CACHE_KEY);
+    try {
+      const dbs = (await indexedDB.databases?.()) || [];
+      for (const { name } of dbs) {
+        if (!name?.startsWith(SHARED_DB_PREFIX)) continue;
+        await new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase(name);
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        });
+      }
+    } catch (err) { console.warn('[app] delete shared databases', err); }
+    this.#info = null;
+    this.#set('off');
+  }
+
+  #set(state, message = '') {
+    this.#state = state;
+    this.#message = message;
+    this.#emit();
+  }
+
+  #emit() { this.dispatchEvent(new CustomEvent('change', { detail: { state: this.#state } })); }
+}
+
+/** Remembered GET /shared answer, if it belongs to this code and server. */
+function readSharedCache(fp) {
+  const c = safeStorage.get(SHARED_CACHE_KEY, null);
+  if (!c || c.fp !== fp || !Array.isArray(c.libraries) || !c.libraries.length || typeof c.personId !== 'string' || !c.personId) return null;
+  const libraries = c.libraries.filter((l) => l && typeof l.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(l.id))
+    .map((l) => ({ id: l.id, name: typeof l.name === 'string' && l.name ? l.name : '공용 서재' }));
+  return libraries.length ? { libraries, personId: c.personId, name: typeof c.name === 'string' ? c.name : '' } : null;
+}
+
+/** A short one-way fingerprint (the code itself is never stored twice). */
+async function fingerprint(text) {
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`pr-shared\n${text}`));
+    return [...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '';
+  }
+}
+
 // ------------------------------------------------------------------- router
 
-/** @returns {{ name: 'library'|'paper'|'settings'|'join', id?: string, section?: string, code?: string }} */
+/**
+ * @returns {{ name: 'library'|'paper'|'settings'|'join', id?: string, lib?: string, page?: 'trash'|'activity',
+ *             section?: string, code?: string }}
+ */
 export function parseRoute(hash) {
   const parts = String(hash || '').replace(/^#\/?/, '').split('/').filter(Boolean);
   const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  if (parts[0] === 's' && parts[1]) {
+    const lib = decode(parts[1]);
+    if (parts[2] === 'paper' && parts[3]) return { name: 'paper', id: decode(parts[3]), lib };
+    if (parts[2] === 'trash' || parts[2] === 'activity') return { name: 'library', lib, page: parts[2] };
+    return { name: 'library', lib };
+  }
   if (parts[0] === 'paper' && parts[1]) return { name: 'paper', id: decode(parts[1]) };
+  if (parts[0] === 'trash') return { name: 'library', page: 'trash' };
   if (parts[0] === 'join') return { name: 'join', code: parts[1] ? decode(parts[1]) : '' };
   if (parts[0] === 'settings') return parts[1] ? { name: 'settings', section: parts[1] } : { name: 'settings' };
   return { name: 'library' };
@@ -166,26 +499,50 @@ export function parseRoute(hash) {
 function startRouter(viewEl, deps) {
   let current = null;
   let previousHash = '#/';
-  const navigate = (hash) => {
-    if (location.hash === hash) route();
+  /** `replace`: change the address without a history entry (and without leaving the library view). */
+  const navigate = (hash, { replace = false } = {}) => {
+    if (replace) {
+      if (location.hash !== hash) history.replaceState(null, '', hash);
+      route();
+    } else if (location.hash === hash) route();
     else location.hash = hash;
   };
   const route = () => {
-    const r = parseRoute(location.hash);
+    let r = parseRoute(location.hash);
+    // #/ of an invitee: 공용 서재 (until they choose 내 서재 in the sidebar).
+    if (r.name === 'library' && !r.lib && !r.page) {
+      const home = deps.shared?.homeHash?.();
+      if (home) {
+        history.replaceState(null, '', home);
+        r = parseRoute(home);
+      } else {
+        r = { ...r, home: true };
+      }
+    }
     closeAllLayers();
+    // Moving inside the library (내 서재 ↔ 공용 서재, 휴지통, 최근 활동) keeps the view: no flicker, no lost scroll.
+    if (r.name === 'library' && current?.kind === 'library' && current.update) {
+      try {
+        current.update(r);
+        previousHash = location.hash || '#/';
+        return;
+      } catch (err) {
+        console.warn('[app] library update', err);
+      }
+    }
     try { current?.destroy(); } catch (err) { console.warn('[app] view destroy', err); }
     current = null;
     viewEl.replaceChildren();
     try {
       if (r.name === 'paper') {
-        current = mountReaderView(viewEl, { paperId: r.id, deps, navigate });
+        current = mountReaderView(viewEl, { paperId: r.id, lib: r.lib || null, deps, navigate });
       } else if (r.name === 'settings') {
         current = mountSettingsView(viewEl, { deps, navigate, backHref: previousHash, section: r.section });
       } else if (r.name === 'join') {
         current = mountJoinView(viewEl, { code: r.code, deps, navigate });
       } else {
         document.title = '논문 리더';
-        current = mountLibraryView(viewEl, { deps, navigate });
+        current = mountLibraryView(viewEl, { deps, navigate, route: r });
       }
     } catch (err) {
       console.warn('[app] view mount', err);
@@ -199,7 +556,7 @@ function startRouter(viewEl, deps) {
     // The join link holds the code: never come back to it with 뒤로.
     if (r.name !== 'settings') previousHash = r.name === 'join' ? '#/' : location.hash || '#/';
   };
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', () => route());
   route();
 }
 

@@ -103,3 +103,57 @@ paths, trash/restore, copy; browser e2e: owner (personal fake repo + shared), in
 A creates folders, uploads, translates (mock / fake Anthropic), annotates; B sees folders/papers/translation instantly reused
 (0 translate calls) but NOT A's notes; B deletes a paper → A sees it in 휴지통 with B's name → A restores; owner copies a folder
 from 내 서재 into 공용 서재; activity lists the actions with names.
+
+## 5. As built (integration, 2026-10-19)
+
+Verified end to end with the real Worker (`tests/shared-e2e/run.mjs`; details in `docs/notes/shared.md`). Precisions on
+top of §1–§4:
+- **One library for all codes.** Every active code opens the same library (`team`); `GET /shared` lists libraries only
+  while `TEAM_GITHUB_TOKEN` is set. Restricting libraries per code is local to `librariesFor()` in `relay/src/shared.js`.
+- **Conflict vs refusal.** A stale or unknown `base_tree` and a single parent that is not the head → **409** (the client
+  re-pulls, merges and retries, like a 422 on the ref). Rule violations → **403** (missing `base_tree`, wrong parent
+  count, paths, other people's files, PDF changes, deletions outside `people/<me>/`, `force`, unknown body keys).
+  "A tree the client got in the last 10 min" = the tree of a commit that was the head within 10 min (first parents
+  walked back, ≤ 20 commits).
+- **Commits** must use a tree this person created through the proxy on top of that head's tree (D1 table
+  `shared_trees`, so the deploy re-runs `schema.sql`); otherwise a stale tree could revert other people's files.
+  `POST git/refs` likewise needs a parentless commit of a tree this person built without a base.
+- **Allowlist is exact:** `README.md` only through the empty-repo bootstrap (`PUT contents/README.md`), never in a tree;
+  an existing `paper.pdf` cannot get different bytes; only files (mode `100644`, blob) — no inline content, symlinks
+  or subtrees.
+- **Size cap:** blobs that look like a PDF, or are over 8 MB, are refused with 413 (Korean) when they would push the
+  head tree past `maxBytes` (size ≈ Content-Length × 3/4); JSON always saves. `POST git/blobs` without
+  Content-Length → 411; bodies over 100 MB → 413; refused bodies are read before answering.
+- **File-count cap (security):** a library also has `maxFiles` (default 50 000) checked on `POST git/trees` from the
+  base tree's file count plus this batch's net additions → 403 (Korean) when exceeded, so one code cannot fill the repo
+  (and GitHub's tree) cheaply with countless tiny per-paper JSON files.
+- **Blob reads are authorised (security):** `GET git/blobs/<sha>` serves a blob only when it sits at a path visible to
+  the caller in the current (or a last-10-min) head tree, was listed to them level-by-level in the last 10 min, or was
+  uploaded by them; otherwise 404, and GitHub is not asked for it. Other people's `people/<other>/` blob shas are never
+  listed anyway — this closes the gap of a sha learned some other way.
+- **library.json integrity (security):** `POST git/trees` parses the new `library.json` (and the base's) as the client
+  does; a record (folder or paper) present in the base may not vanish from the new file → 403 (Korean). Deletes must be
+  tombstones (휴지통, restorable 30 days); nothing is wiped without a recoverable trail. A corrupt `library.json`
+  (unparseable, not the list shape, or ≥ 32 MB) → 422.
+- **GET git/commits** returns only sha, tree, parents, the scrubbed message and dates (no names or e-mails).
+  Person ids (`people/<16 hex>`) and invite codes are scrubbed from every commit message and activity line.
+- **Errors from GitHub:** the team token refused (401, non-rate-limit 403) → 502 with a Korean message naming
+  `TEAM_GITHUB_TOKEN`; a repo that is not private, or no token → 503; rate limits pass through with their headers.
+- **Admin:** stats also return `maxBytes`; purge returns `{ purged: [paperId], files, freedBytes, commitSha }` and also
+  deletes everyone's `people/*/papers/<id>/*` of the purged papers (commit `[관리자] 휴지통 비우기: …`).
+- **Purge is history-proof (security):** a tombstone's `deletedAt`/`updatedAt` is client-written, so purge also reads
+  `library.json` as of the newest commit at least 30 days old (GitHub committer dates): a paper is purged only when it
+  was already tombstoned there with the same deletion time. A fresh tombstone with a back-dated `deletedAt`, or any
+  paper when no commit is yet 30 days old, is kept — so a client cannot rush the permanent deletion of a paper and
+  everyone's notes on it.
+- **Activity cannot be spoofed quiet (security):** the commit message becomes the 최근 활동 line, so a client may use a
+  summary the app hides (`내 메모·AI 결과 동기화`, `논문 정보 갱신`) only when the tree really is that quiet — no new/changed
+  translation or PDF, nothing outside the layout, any `library.json` change limited to progress counts (one's own
+  `people/<me>/` files are always hidden). A loud change labelled with a hidden summary gets the Worker's own visible
+  summary (`공용 서재 변경: …`). `who` is null for commits not made through the proxy. The same two strings are the app's
+  `QUIET_ACTIVITY` in `js/ui/library-view.js` — keep the two lists identical.
+- **Store:** the database is `paper-reader-shared-<lib>-<personId>` (per person). Papers also carry `sha256` (copy
+  dedupe) and, in 공용 서재, `addedBy`. A copied PDF the target already has is not uploaded again; that paper is moved
+  into the chosen folder and gains the sentences it lacks. Shared commit messages describe the batch in Korean.
+- **UI:** also `#/trash` (내 서재's 휴지통: folders only, since 내 서재 deletes a paper's files). 즐겨찾기 and 최근 읽음 in
+  공용 서재 are per person and per browser. Settings → 공용 서재 is `#set-shared` (`#/settings/shared`).

@@ -1,9 +1,13 @@
 // Responses, Anthropic-shaped errors and CORS.
 
-const ALLOW_METHODS = 'GET, POST, PATCH, OPTIONS';
+export const ALLOW_METHODS = 'GET, POST, PATCH, OPTIONS';
+/** The shared library's GitHub proxy also takes PUT (README bootstrap of an empty repo). */
+export const SHARED_ALLOW_METHODS = 'GET, POST, PATCH, PUT, OPTIONS';
 // The Anthropic SDK decides about retries from x-should-retry / retry-after*: a browser shows it those headers
-// only when they are exposed, so a quota 429 is not retried in the browser either.
-const EXPOSE_HEADERS = 'request-id, x-relay-today-usd, x-relay-limit-usd, x-should-retry, retry-after, retry-after-ms';
+// only when they are exposed, so a quota 429 is not retried in the browser either. The GitHub client of the shared
+// library needs the ref ETag (conditional GETs → 304) and GitHub's rate-limit headers.
+const EXPOSE_HEADERS = 'request-id, x-relay-today-usd, x-relay-limit-usd, x-should-retry, retry-after, retry-after-ms, '
+  + 'etag, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, x-ratelimit-used, x-ratelimit-resource';
 const DEFAULT_ALLOW_HEADERS = 'authorization, content-type, x-api-key, anthropic-version, anthropic-beta, '
   + 'anthropic-dangerous-direct-browser-access';
 
@@ -53,12 +57,12 @@ export function isOriginAllowed(origin, allowed) {
 }
 
 /** 204 answer to a CORS preflight from an allowed origin. */
-export function preflight(request, origin) {
+export function preflight(request, origin, methods = ALLOW_METHODS) {
   return new Response(null, {
     status: 204,
     headers: {
       'access-control-allow-origin': origin,
-      'access-control-allow-methods': ALLOW_METHODS,
+      'access-control-allow-methods': methods,
       'access-control-allow-headers': request.headers.get('access-control-request-headers') || DEFAULT_ALLOW_HEADERS,
       'access-control-max-age': '86400',
       vary: 'Origin',
@@ -115,6 +119,12 @@ export async function readBody(request, max) {
     offset += c.byteLength;
   }
   return { bytes };
+}
+
+/** The token of an `Authorization: Bearer <token>` header, or ''. */
+export function bearer(request) {
+  const m = /^Bearer\s+(.+)$/i.exec(request.headers.get('authorization') || '');
+  return m ? m[1].trim() : '';
 }
 
 /** Parse a JSON body; undefined when it is not valid JSON. */

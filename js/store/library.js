@@ -1,11 +1,17 @@
 // Library model (SPEC §2.3): folders, papers and per-paper data files on top of the sync engine.
 // Mutations are synchronous for the UI; library.json is written to IndexedDB right after each one
 // (coalesced) and pushed to GitHub by the SyncEngine. Deletions are tombstones so they sync.
+//
+// Several libraries can be open at once (docs/SHARED.md §3.1): 내 서재 (id 'mine', IndexedDB 'paper-reader',
+// the owner's GitHub repo — unchanged) and 공용 서재 (openSharedLibrary(): its own IndexedDB, the relay's
+// GitHub-compatible proxy, each person's notes and AI data under `people/<personId>/`, deletes that only
+// tombstone so the 휴지통 can restore them).
 import { emit } from '../core/bus.js';
 import { LIMITS } from '../core/config.js';
-import { formatBytes, safeStorage, uid } from '../core/util.js';
-import { db as defaultDb } from './db.js';
-import { SyncEngine, deepEqual, mergeLibrary, toMillis } from './sync.js';
+import { formatBytes, safeStorage, uid, utf8Encode } from '../core/util.js';
+import { db as defaultDb, DEFAULT_DB_NAME, openDatabase } from './db.js';
+import { gitBlobSha } from './github.js';
+import { SyncEngine, deepEqual, mergeLibrary, mergeTranslation, toMillis } from './sync.js';
 
 const LIBRARY_PATH = 'library.json';
 /** Synchronous last-resort copy of unsaved library changes, written when the page is hidden or closed. */
@@ -13,10 +19,35 @@ const JOURNAL_KEY = 'pr.store.libraryJournal.v1';
 const DATA_KINDS = new Set(['translation', 'annotations', 'ai']);
 const MAX_NAME_LENGTH = 200;
 /** Fields of a paper that only the library itself may change. */
-const PROTECTED_PAPER_FIELDS = new Set(['id', 'addedAt', 'updatedAt', 'deleted', 'size']);
+const PROTECTED_PAPER_FIELDS = new Set(['id', 'addedAt', 'addedBy', 'updatedAt', 'deleted', 'deletedAt', 'deletedBy', 'size', 'sha256']);
+/** Deleted items stay restorable this long (the shared library's purge removes older papers' files). */
+export const TRASH_RETENTION_DAYS = 30;
+const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const LIBRARY_ID_RE = /^(?:mine|shared:[A-Za-z0-9_-]{1,64})$/;
+const PERSONAL_PREFIX_RE = /^people\/[A-Za-z0-9_-]{1,64}\/$/;
+const SHARED_LIB_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const PERSON_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** First line of a commit message (the relay prefixes `[name] ` and keeps ≤ 200 characters). */
+const MAX_COMMIT_SUMMARY = 170;
+const MAX_ACTIONS = 100;
 
-/** Repo path of one of a paper's files ('paper.pdf', 'translation.json', …). */
+const SHARED_TEXTS = Object.freeze({
+  noClient: '이 파일은 아직 이 기기에 없습니다. 공용 서재에 연결되면 내려받을 수 있습니다.',
+  targetChanged: '공용 서재 서버가 바뀌어 동기화를 멈췄습니다. 설정 → 초대 코드를 확인하세요.',
+});
+
+/** Repo path of one of a paper's shared files ('paper.pdf', 'translation.json', …). */
 export const paperPath = (paperId, file) => `papers/${paperId}/${file}`;
+
+/**
+ * Repo path of a paper's data file: translation.json is shared; annotations.json and ai.json live under the
+ * library's personal prefix ('' in 내 서재, 'people/<personId>/' in 공용 서재).
+ * @param {'translation'|'annotations'|'ai'} kind
+ */
+export function dataPath(paperId, kind, personalPrefix = '') {
+  assertKind(kind);
+  return kind === 'translation' ? paperPath(paperId, 'translation.json') : `${personalPrefix}${paperPath(paperId, `${kind}.json`)}`;
+}
 
 export class Library extends EventTarget {
   #sync;
@@ -35,35 +66,105 @@ export class Library extends EventTarget {
   #journalWritten = false;
   #listening = new AbortController();
   #persisted = null;
+  #id;
+  #label;
+  #shared;
+  #prefix;
+  #retainPdf;
+  #personName;
+  #journalKey;
+  /** Shared library: what this device changed since the last push, for the commit message (최근 활동). */
+  #actions = [];
+  #muted = 0;
+  /** Shared library: tombstoned papers whose files are gone (purged after 30 days) — not restorable. */
+  #purged = new Set();
+  #purgeCheck = 0; // only the latest check's answer is applied
 
   /**
-   * Open the local library and resume sync when GitHub is configured (the first pull runs in the
-   * background; 'change' fires when remote data arrives).
-   * @param {{ settings?: { get(): any }, db?: object, sync?: SyncEngine, syncOptions?: object }} opts
+   * Open a library and resume sync when it is configured (the first pull runs in the background; 'change'
+   * fires when remote data arrives). Without options this is 내 서재, exactly as before.
+   * @param {{ settings?: { get(): any }, db?: object, sync?: SyncEngine, syncOptions?: object,
+   *           id?: string, label?: string, dbName?: string, getConfig?: () => object|null,
+   *           personalPrefix?: string, retainPdfOnDelete?: boolean, shared?: boolean,
+   *           personName?: string | (() => string) }} opts
+   *   id: 'mine' or 'shared:<lib>'. dbName: the IndexedDB database (default 'paper-reader').
+   *   getConfig: the GitHub config for the engine, incl. apiBase (내 서재 default: settings.github; a shared library
+   *     has no default and always uses it in proxy mode).
+   *   personalPrefix: '' or 'people/<personId>/' — where annotations.json and ai.json live.
+   *   retainPdfOnDelete: deletes only tombstone (files stay, 휴지통 can restore papers).
+   *   personName: who deletes (tombstones' deletedBy); default '나' for a personal library.
    */
-  static async open({ settings, db = defaultDb, sync, syncOptions } = {}) {
-    await db.ready?.();
-    const engine = sync || new SyncEngine({ db, getConfig: () => settings?.get?.().github ?? null, ...syncOptions });
-    const library = new Library(engine, db);
+  static async open({
+    settings, db, sync, syncOptions, id = 'mine', label, dbName, getConfig, personalPrefix = '',
+    retainPdfOnDelete = false, shared = false, personName,
+  } = {}) {
+    if (!LIBRARY_ID_RE.test(String(id))) throw new TypeError(`invalid library id: ${id}`);
+    if (personalPrefix && !PERSONAL_PREFIX_RE.test(personalPrefix)) throw new TypeError(`invalid personalPrefix: ${personalPrefix}`);
+    const database = db || (dbName ? openDatabase(dbName) : defaultDb);
+    const name = database.name || dbName || '';
+    // 내 서재 keeps the Web Lock, BroadcastChannel and journal names it always had; any other database has
+    // its own, so two libraries in one page never lock, notify or journal for each other.
+    const scope = name ? (name === DEFAULT_DB_NAME ? '' : name) : (id === 'mine' ? '' : id);
+    await database.ready?.();
+    let library = null;
+    // A shared library syncs only through the relay's proxy: never the personal settings.github, and always in
+    // proxy mode (the invite code must not be sent to api.github.com, stale bases are conflicts).
+    const sharedConfig = () => {
+      const c = getConfig?.();
+      return c ? { ...c, proxy: true } : null;
+    };
+    const engine = sync || new SyncEngine({
+      db: database,
+      getConfig: shared ? sharedConfig : getConfig || (() => settings?.get?.().github ?? null),
+      scope,
+      addReadme: !shared,
+      describeCommit: shared ? (changes) => library?.#describeCommit(changes) ?? null : null,
+      texts: shared ? SHARED_TEXTS : undefined,
+      ...syncOptions,
+    });
+    library = new Library(engine, database, {
+      id, label, shared, personalPrefix, retainPdfOnDelete, personName,
+      journalKey: scope ? `${JOURNAL_KEY}:${scope}` : JOURNAL_KEY,
+    });
     await library.#load();
     // Local-first data must not be evicted under storage pressure — on every device, not only the one that
     // added the PDFs (a reading-only device may hold unpushed notes and translations).
     library.#persisted = requestPersistentStorage();
     await engine.start();
+    await library.#refreshPurged().catch((err) => console.warn('[store] trash check', err));
     return library;
   }
 
   /** Use Library.open(). */
-  constructor(sync, db = defaultDb) {
+  constructor(sync, db = defaultDb, options = {}) {
     super();
     this.#sync = sync;
     this.#db = db;
     this.#data = normalizeLibrary(null);
+    const shared = Boolean(options.shared);
+    this.#id = options.id || 'mine';
+    this.#label = String(options.label || (shared ? '공용 서재' : '내 서재'));
+    this.#shared = shared;
+    this.#prefix = options.personalPrefix || '';
+    this.#retainPdf = Boolean(options.retainPdfOnDelete);
+    this.#personName = options.personName ?? (shared ? '' : '나');
+    this.#journalKey = options.journalKey || JOURNAL_KEY;
   }
 
   #db;
 
   // ------------------------------------------------------------------ reads
+
+  /** 'mine' or 'shared:<lib>'. */
+  get id() { return this.#id; }
+  /** Display name ('내 서재', '공용 서재'). */
+  get label() { return this.#label; }
+  get shared() { return this.#shared; }
+  /** '' or 'people/<personId>/' (where this person's annotations.json and ai.json live). */
+  get personalPrefix() { return this.#prefix; }
+  get retainPdfOnDelete() { return this.#retainPdf; }
+  /** Name written into tombstones' deletedBy (null when unknown). */
+  get personName() { return this.#who(); }
 
   /** Live folders (tombstones hidden). A parent that was deleted resolves to its nearest live ancestor. */
   get folders() { return this.#ensureView().folders; }
@@ -76,6 +177,9 @@ export class Library extends EventTarget {
 
   get sync() { return this.#sync; }
 
+  /** Repo path of this library's `kind` file for a paper (see dataPath). */
+  dataPath(paperId, kind) { return dataPath(paperId, kind, this.#prefix); }
+
   // ---------------------------------------------------------------- folders
 
   createFolder(name, parentId = null) {
@@ -85,6 +189,7 @@ export class Library extends EventTarget {
     const folder = { id: uid('f'), name: clean, parentId: parent, createdAt: now, updatedAt: now };
     this.#data.folders.push(folder);
     this.#changed('folder');
+    this.#note(`폴더 만듦 ${q(clean)}`);
     return this.getFolder(folder.id);
   }
 
@@ -92,9 +197,11 @@ export class Library extends EventTarget {
     const clean = cleanName(name, '폴더 이름');
     const folder = this.#rawFolder(id);
     if (folder.name === clean) return;
+    const old = folder.name;
     folder.name = clean;
     touch(folder);
     this.#changed('folder');
+    this.#note(`폴더 이름 변경 ${q(old)} → ${q(clean)}`);
   }
 
   moveFolder(id, parentId) {
@@ -107,22 +214,31 @@ export class Library extends EventTarget {
     folder.parentId = parent;
     touch(folder);
     this.#changed('folder');
+    this.#note(`폴더 이동 ${q(folder.name)} → ${parent ? q(this.getFolder(parent)?.name) : '최상위'}`);
   }
 
-  /** Tombstone the folder; its subfolders and papers move up to its parent. */
+  /**
+   * Tombstone the folder; its subfolders and papers show up in its parent. 내 서재 moves them there (as
+   * always); a library that retains deleted items leaves them pointing at the folder, so restore() brings
+   * the folder back with its contents.
+   */
   deleteFolder(id) {
     const folder = this.#rawFolder(id);
     const view = this.#ensureView();
     const newParent = view.folderById.get(id).parentId;
-    for (const f of this.#data.folders) {
-      if (!f.deleted && f.id !== id && view.folderById.get(f.id)?.parentId === id) { f.parentId = newParent; touch(f); }
+    if (!this.#retainPdf) {
+      for (const f of this.#data.folders) {
+        if (!f.deleted && f.id !== id && view.folderById.get(f.id)?.parentId === id) { f.parentId = newParent; touch(f); }
+      }
+      for (const p of this.#data.papers) {
+        if (!p.deleted && view.paperById.get(p.id)?.folderId === id) { p.folderId = newParent; touch(p); }
+      }
+    } else if ((folder.parentId ?? null) !== newParent) {
+      folder.parentId = newParent; // restore() puts it back where it was shown
     }
-    for (const p of this.#data.papers) {
-      if (!p.deleted && view.paperById.get(p.id)?.folderId === id) { p.folderId = newParent; touch(p); }
-    }
-    folder.deleted = true;
-    touch(folder);
+    this.#tombstone(folder);
     this.#changed('folder');
+    this.#note(`폴더 삭제 ${q(folder.name)}`);
   }
 
   // ----------------------------------------------------------------- papers
@@ -133,38 +249,19 @@ export class Library extends EventTarget {
    * @param {{ fileName?: string, folderId?: string|null, meta?: { title?, authors?, year?, pages? } }} opts
    */
   async addPaper(bytes, { fileName = '', folderId = null, meta = {} } = {}) {
-    const pdf = toBytes(bytes);
-    if (!pdf.byteLength) throw new Error('빈 파일은 추가할 수 없습니다.');
-    if (pdf.byteLength > LIMITS.maxPdfBytes) {
-      throw new Error(`파일이 너무 큽니다 (${formatBytes(pdf.byteLength)}). 최대 ${formatBytes(LIMITS.maxPdfBytes)}까지 추가할 수 있습니다.`);
-    }
-    if (!looksLikePdf(pdf)) throw new Error('PDF 파일이 아닙니다. 손상되었거나 다른 형식의 파일일 수 있습니다.');
+    const pdf = checkedPdf(bytes);
     if (folderId != null) this.#requireFolder(folderId);
-
-    const id = uid('p');
-    await this.#sync.writeFile(paperPath(id, 'paper.pdf'), pdf);
-    requestPersistentStorage();
-    const now = Date.now();
     const name = String(fileName || '').trim();
-    const paper = {
-      id,
+    const paper = await this.#insertPaper(pdf, {
       title: cleanText(meta?.title) || name.replace(/\.pdf$/i, '') || '제목 없음',
       authors: cleanText(meta?.authors),
       year: cleanYear(meta?.year),
-      fileName: name || `${id}.pdf`,
-      size: pdf.byteLength,
-      pages: Number.isInteger(meta?.pages) && meta.pages > 0 ? meta.pages : 0,
-      folderId: folderId != null && this.getFolder(folderId) ? folderId : null,
-      starred: false,
-      addedAt: now,
-      updatedAt: now,
-      lastOpenedAt: null,
-      translatedCount: 0,
-      sentenceCount: 0,
-    };
-    this.#data.papers.push(paper);
-    this.#changed('paper');
-    return this.getPaper(id);
+      fileName: name,
+      pages: meta?.pages,
+      folderId,
+    });
+    this.#note(`논문 추가 ${q(paper.title)}`);
+    return paper;
   }
 
   updatePaper(id, patch = {}) {
@@ -178,9 +275,14 @@ export class Library extends EventTarget {
       if (!deepEqual(paper[key], value)) changes[key] = value;
     }
     if (!Object.keys(changes).length) return this.getPaper(id);
+    const oldTitle = paper.title;
     Object.assign(paper, changes);
     touch(paper);
     this.#changed('paper');
+    if ('title' in changes) this.#note(`제목 변경 ${q(oldTitle)} → ${q(changes.title)}`);
+    if ('folderId' in changes) {
+      this.#note(`논문 이동 ${q(paper.title)} → ${changes.folderId ? q(this.getFolder(changes.folderId)?.name) : '최상위'}`);
+    }
     return this.getPaper(id);
   }
 
@@ -188,13 +290,20 @@ export class Library extends EventTarget {
     return this.updatePaper(id, { folderId: folderId ?? null });
   }
 
-  /** Tombstone the paper and delete its PDF, translation, annotations and AI data. */
+  /**
+   * Tombstone the paper. 내 서재 also deletes its PDF, translation, annotations and AI data; a library that
+   * retains deleted items keeps every file, so the paper can be restored from the 휴지통.
+   */
   deletePaper(id) {
     const paper = this.#rawPaper(id);
-    paper.deleted = true;
-    touch(paper);
+    if (this.#retainPdf) {
+      const shown = this.#ensureView().paperById.get(id)?.folderId ?? null;
+      if ((paper.folderId ?? null) !== shown) paper.folderId = shown; // restore() puts it back where it was shown
+    }
+    this.#tombstone(paper);
     this.#changed('paper');
-    this.#deletePaperFiles(id).catch((err) => console.warn('[store] delete paper files', id, err));
+    this.#note(`논문 삭제 ${q(paper.title || paper.fileName)}`);
+    if (!this.#retainPdf) this.#deletePaperFiles(id).catch((err) => console.warn('[store] delete paper files', id, err));
   }
 
   /** The PDF bytes: the local copy, or downloaded once from GitHub (then cached). */
@@ -215,8 +324,7 @@ export class Library extends EventTarget {
 
   /** @param {'translation'|'annotations'|'ai'} kind */
   async getPaperData(id, kind) {
-    assertKind(kind);
-    const value = await this.#sync.readFile(paperPath(id, `${kind}.json`), { as: 'json' });
+    const value = await this.#sync.readFile(this.dataPath(id, kind), { as: 'json' });
     return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
   }
 
@@ -232,7 +340,7 @@ export class Library extends EventTarget {
     this.#assertNotDeleted(id);
     obj.updatedAt = Math.max(Date.now(), toMillis(base?.updatedAt) + 1);
     obj.version ??= 1;
-    const stored = await this.#sync.writeFile(paperPath(id, `${kind}.json`), obj, { base });
+    const stored = await this.#sync.writeFile(this.dataPath(id, kind), obj, { base });
     emit(this, 'change', { reason: 'data', paperId: id, kind });
     return stored;
   }
@@ -248,7 +356,7 @@ export class Library extends EventTarget {
     const key = `${id}\n${kind}`;
     const prev = this.#dataChains.get(key) || Promise.resolve();
     const run = prev.catch(() => {}).then(async () => {
-      const current = await this.#sync.readFile(paperPath(id, `${kind}.json`), { as: 'json' });
+      const current = await this.#sync.readFile(this.dataPath(id, kind), { as: 'json' });
       const base = current && typeof current === 'object' && !Array.isArray(current) ? current : null;
       const next = mutate(structuredClone(base || { version: 1 }));
       if (next === undefined) return base;
@@ -260,6 +368,216 @@ export class Library extends EventTarget {
   }
 
   #dataChains = new Map();
+
+  // ------------------------------------------------------------------ trash
+
+  /**
+   * The 휴지통: deleted folders and papers that restore() can bring back, most recently deleted first.
+   * Each item is a frozen snapshot of the record plus `kind` ('folder'|'paper'), `name` (folder name or
+   * paper title), `deletedAt` (ms), `deletedBy` (name or null), `expiresAt` (deletedAt + 30 days) and
+   * `expired`. Folders are listed for 30 days. Papers are listed only where deletes keep the files (공용 서재)
+   * — also after 30 days, `expired`, until the purge removes their files. 내 서재 deletes a paper's files
+   * with it, so its papers cannot be restored and are not listed.
+   */
+  trash() {
+    const now = Date.now();
+    const items = [];
+    const when = (x) => toMillis(x.deletedAt) || toMillis(x.updatedAt);
+    for (const f of this.#data.folders) {
+      if (!f.deleted) continue;
+      const at = when(f);
+      if (now - at > TRASH_RETENTION_MS) continue;
+      items.push(trashItem('folder', f, f.name, at, false));
+    }
+    if (this.#retainPdf) {
+      for (const p of this.#data.papers) {
+        if (!p.deleted || this.#purged.has(p.id)) continue;
+        const at = when(p);
+        items.push(trashItem('paper', p, p.title || p.fileName || '제목 없음', at, now - at > TRASH_RETENTION_MS));
+      }
+    }
+    items.sort((a, b) => b.deletedAt - a.deletedAt || String(a.id).localeCompare(String(b.id)));
+    return Object.freeze(items);
+  }
+
+  /**
+   * Bring a deleted folder or paper back. A folder or paper whose folder was deleted too gets that folder
+   * (and its deleted ancestors) back as well. Throws a Korean error when the item cannot be restored
+   * (not in the 휴지통, or its files are gone).
+   * @returns {Promise<object>} the restored folder or paper (live snapshot)
+   */
+  async restore(id) {
+    let found = this.#tombstoned(id);
+    if (!found) {
+      const live = this.getPaper(id) || this.getFolder(id);
+      if (live) return live;
+      throw new Error('휴지통에서 찾을 수 없습니다. 이미 복구되었거나 휴지통을 비웠을 수 있습니다.');
+    }
+    if (found.kind === 'paper') {
+      if (!this.#retainPdf) throw new Error('이 논문은 파일까지 삭제되어 복구할 수 없습니다.');
+      if (!(await this.#sync.exists(paperPath(id, 'paper.pdf')))) {
+        this.#setPurged(new Set([...this.#purged, id]));
+        throw new Error('보관 기간이 지나 PDF가 비워진 논문이라 복구할 수 없습니다.');
+      }
+      found = this.#tombstoned(id); // memory may have changed while we looked
+      if (!found) {
+        const live = this.getPaper(id);
+        if (live) return live;
+        throw new Error('휴지통에서 찾을 수 없습니다. 이미 복구되었거나 휴지통을 비웠을 수 있습니다.');
+      }
+    }
+    this.#revive(found);
+    this.#changed('restore');
+    this.#note(`복구 ${q(found.kind === 'paper' ? found.item.title || found.item.fileName : found.item.name)}`);
+    return found.kind === 'paper' ? this.getPaper(id) : this.getFolder(id);
+  }
+
+  // ------------------------------------------------------------------- copy
+
+  /**
+   * Copy a paper into another library (e.g. 내 서재 → 공용 서재): the PDF and the shared translation, title and
+   * bibliographic fields — never this person's notes or AI data. When the target already has the same PDF
+   * (sha256), nothing is duplicated: that paper is put into `folderId` instead (restored first when it is
+   * in the target's 휴지통), and sentences translated here that it lacks are added to its translation.
+   * @param {Library} target
+   * @param {string} paperId
+   * @param {{ folderId?: string|null }} opts  folderId: a live folder of the target (null = top level)
+   * @returns {Promise<{ paper: object, copied: boolean, existing: boolean, moved: boolean, restored: boolean,
+   *                     translationAdded: number }>}
+   */
+  copyPaperTo(target, paperId, { folderId = null } = {}) {
+    return this.#copyPaper(target, paperId, { folderId });
+  }
+
+  /** copyPaperTo(); `placed`: target papers a running copyFolderTo() already put somewhere (not moved again). */
+  async #copyPaper(target, paperId, { folderId = null, placed = null } = {}) {
+    this.#assertTarget(target);
+    const src = this.getPaper(paperId);
+    if (!src) throw new Error('복사할 논문을 찾을 수 없습니다. 삭제되었을 수 있습니다.');
+    if (folderId != null) target.#requireFolder(folderId);
+    const title = src.title || src.fileName || '제목 없음';
+    const pdf = await this.getPdf(paperId);
+    const sha256 = await sha256Hex(pdf);
+    let translation;
+    try {
+      translation = await this.getPaperData(paperId, 'translation');
+    } catch (err) {
+      throw new Error(`‘${clip(title)}’의 번역을 읽지 못해 복사하지 않았습니다. ${err?.message || ''}`.trim(), { cause: err });
+    }
+
+    const existing = await target.#findPdf(sha256, pdf);
+    if (existing) {
+      const keep = placed?.has(existing.id) && !existing.deleted;
+      return target.#adoptCopy(existing, { folderId: keep ? null : folderId, translation, from: this.label });
+    }
+
+    const paper = await target.#insertPaper(pdf, {
+      title: src.title,
+      authors: src.authors,
+      year: src.year,
+      fileName: src.fileName,
+      pages: src.pages,
+      folderId,
+      translatedCount: translation ? src.translatedCount : 0,
+      sentenceCount: src.sentenceCount,
+      s2PaperId: src.s2PaperId,
+    }, { sha256 });
+    if (translation) await target.savePaperData(paper.id, 'translation', structuredClone(translation));
+    target.#note(`논문 추가 ${q(paper.title)} (${this.label}에서 복사)`);
+    return { paper: target.getPaper(paper.id), copied: true, existing: false, moved: false, restored: false, translationAdded: 0 };
+  }
+
+  /**
+   * Copy a folder with its subfolders and papers into another library, under `parentId` (null = top level).
+   * A target folder with the same name in the same place is reused, so copying again only adds what is new.
+   * Papers are copied one at a time as copyPaperTo() does (PDF + translation, deduplicated by sha256); a paper
+   * that fails is reported in `papers.failed` and the rest continue.
+   * @param {Library} target
+   * @param {{ parentId?: string|null, onProgress?: (p: { done: number, total: number, title: string }) => void,
+   *           signal?: AbortSignal }} opts
+   * @returns {Promise<{ folder: object, folders: { created: number, reused: number },
+   *                     papers: { total: number, copied: number, existing: number, moved: number, restored: number,
+   *                               failed: { id: string, title: string, message: string }[] } }>}
+   */
+  async copyFolderTo(target, folderId, { parentId = null, onProgress, signal } = {}) {
+    this.#assertTarget(target);
+    const root = this.getFolder(folderId);
+    if (!root) throw new Error('복사할 폴더를 찾을 수 없습니다. 삭제되었을 수 있습니다.');
+    if (parentId != null) target.#requireFolder(parentId);
+    signal?.throwIfAborted();
+
+    // Snapshot of the source subtree (live folders and papers), depth first.
+    const children = new Map();
+    for (const f of this.folders) {
+      if (!children.has(f.parentId)) children.set(f.parentId, []);
+      children.get(f.parentId).push(f);
+    }
+    const papersIn = new Map();
+    for (const p of this.papers) {
+      if (!papersIn.has(p.folderId)) papersIn.set(p.folderId, []);
+      papersIn.get(p.folderId).push(p);
+    }
+    const folders = [];
+    const papers = [];
+    const seen = new Set();
+    const walk = (f) => {
+      if (seen.has(f.id)) return;
+      seen.add(f.id);
+      folders.push(f);
+      papers.push(...[...(papersIn.get(f.id) || [])].sort((a, b) => toMillis(a.addedAt) - toMillis(b.addedAt)));
+      for (const c of [...(children.get(f.id) || [])].sort((a, b) => a.name.localeCompare(b.name, 'ko'))) walk(c);
+    };
+    walk(root);
+
+    const result = {
+      folder: null,
+      folders: { created: 0, reused: 0 },
+      papers: { total: papers.length, copied: 0, existing: 0, moved: 0, restored: 0, failed: [] },
+    };
+    const mapped = new Map(); // source folder id → target folder id
+    target.#muted++;
+    try {
+      for (const f of folders) {
+        const parent = f.id === root.id ? parentId ?? null : mapped.get(f.parentId) ?? null;
+        const same = target.folders.find((x) => (x.parentId ?? null) === parent && x.name === f.name);
+        if (same) {
+          mapped.set(f.id, same.id);
+          result.folders.reused++;
+        } else {
+          mapped.set(f.id, target.createFolder(f.name, parent).id);
+          result.folders.created++;
+        }
+      }
+      let done = 0;
+      const placed = new Set(); // a PDF twice in the subtree stays where its first copy went
+      onProgress?.({ done, total: papers.length, title: '' });
+      for (const p of papers) {
+        signal?.throwIfAborted();
+        try {
+          const r = await this.#copyPaper(target, p.id, { folderId: mapped.get(p.folderId) ?? null, placed });
+          if (r.paper) placed.add(r.paper.id);
+          if (r.copied) result.papers.copied++;
+          if (r.existing) result.papers.existing++;
+          if (r.moved) result.papers.moved++;
+          if (r.restored) result.papers.restored++;
+        } catch (err) {
+          if (err?.name === 'AbortError') throw err;
+          console.warn('[store] copy paper', p.id, err);
+          result.papers.failed.push({ id: p.id, title: p.title || p.fileName || '', message: err?.message || String(err) });
+        }
+        done++;
+        onProgress?.({ done, total: papers.length, title: p.title || p.fileName || '' });
+      }
+    } finally {
+      target.#muted--;
+      const placedCount = result.papers.copied + result.papers.existing;
+      if (mapped.size) target.#note(`폴더 복사 ${q(root.name)} (${this.label}에서, 논문 ${placedCount}편)`);
+    }
+    result.folder = target.getFolder(mapped.get(root.id));
+    return result;
+  }
+
+  // ------------------------------------------------------------------ misc
 
   /** Would `cfg` (settings.github) sync this device's data into a different repository? See SyncEngine. */
   async syncTargetChange(cfg) {
@@ -274,15 +592,15 @@ export class Library extends EventTarget {
   }
 
   /**
-   * Remove everything this device stores for the app: the library, PDFs, translations, notes, AI results and
-   * sync state (IndexedDB), and the unsaved-change journal. Nothing is deleted on GitHub. The page should be
-   * reloaded afterwards.
+   * Remove everything this device stores for this library: folders and papers, PDFs, translations, notes,
+   * AI results and sync state (its IndexedDB database), and the unsaved-change journal. Nothing is deleted
+   * on GitHub. The page should be reloaded afterwards.
    */
   async wipeLocalData() {
     this.#listening.abort();
     this.#sync.stop();
     await this.#writeChain.catch(() => {});
-    safeStorage.remove(JOURNAL_KEY);
+    safeStorage.remove(this.#journalKey);
     this.#data = normalizeLibrary(null);
     this.#base = null;
     this.#view = null;
@@ -329,7 +647,7 @@ export class Library extends EventTarget {
     }
     this.#data = normalizeLibrary(stored);
     this.#base = normalizeLibrary(stored);
-    const journal = safeStorage.get(JOURNAL_KEY, null);
+    const journal = safeStorage.get(this.#journalKey, null);
     if (journal?.data) {
       // The previous page closed before its last changes reached IndexedDB. The journal carries the stored
       // version those changes were made on, so the replay is a 3-way merge (it cannot revert newer fields).
@@ -337,10 +655,14 @@ export class Library extends EventTarget {
       this.#data = normalizeLibrary(mergeLibrary(normalizeLibrary(journal.data), this.#data, base));
       this.#rev++;
       await this.#persist();
-      if (this.#savedRev === this.#rev) safeStorage.remove(JOURNAL_KEY);
+      if (this.#savedRev === this.#rev) safeStorage.remove(this.#journalKey);
     }
     const { signal } = this.#listening;
-    this.#sync.addEventListener('status', (e) => emit(this, 'syncstatus', e.detail), { signal });
+    this.#sync.addEventListener('status', (e) => {
+      // Nothing pending: every action noted so far has been pushed (by this tab or another one).
+      if (e.detail?.pending === 0 && this.#actions.length) this.#actions = this.#actions.filter((a) => a.rev > this.#savedRev);
+      emit(this, 'syncstatus', e.detail);
+    }, { signal });
     this.#sync.addEventListener('remotechange', (e) => {
       this.#onRemoteChange(e.detail).catch((err) => console.warn('[store] remote change', err));
     }, { signal });
@@ -350,7 +672,7 @@ export class Library extends EventTarget {
       // is pending now instead of waiting for the debounce.
       const flush = () => {
         if (this.#rev !== this.#savedRev) {
-          safeStorage.set(JOURNAL_KEY, { at: Date.now(), rev: this.#rev, data: this.#data, base: this.#base });
+          safeStorage.set(this.#journalKey, { at: Date.now(), rev: this.#rev, data: this.#data, base: this.#base });
           this.#journalWritten = true;
         }
         this.flush().catch((err) => console.warn('[store] flush', err));
@@ -358,11 +680,16 @@ export class Library extends EventTarget {
       window.addEventListener('pagehide', flush, { signal });
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); }, { signal });
     }
-    this.#gcDeletedPapers().catch((err) => console.warn('[store] gc', err));
+    // (A library that keeps deleted files checks its 휴지통 in open(), once the engine knows the remote tree.)
+    if (!this.#retainPdf) this.#gcDeletedPapers().catch((err) => console.warn('[store] gc', err));
   }
 
   async #onRemoteChange({ paths = [], origin } = {}) {
-    if (!paths.includes(LIBRARY_PATH) || origin === 'merge') return;
+    if (!paths.includes(LIBRARY_PATH) || origin === 'merge') {
+      // e.g. the shared library's purge removed old papers' files (library.json unchanged)
+      if (this.#retainPdf && paths.some((p) => /^papers\/[^/]+\/paper\.pdf$/.test(p))) await this.#refreshPurged();
+      return;
+    }
     // Reads and writes of library.json go through one chain, so stored versions are absorbed in the order
     // IndexedDB holds them (an older write result can never overwrite a newer pulled version in memory).
     const step = this.#writeChain.then(async () => {
@@ -393,15 +720,19 @@ export class Library extends EventTarget {
 
   /** GitHub refused to store one file (e.g. a PDF over its size limit): say which paper, keep syncing the rest. */
   #onRejected({ path, code, message } = {}) {
-    const m = /^papers\/([^/]+)\/([^/]+)$/.exec(path || '');
+    const m = /^(?:people\/[^/]+\/)?papers\/([^/]+)\/([^/]+)$/.exec(path || '');
     const paper = m ? this.#data.papers.find((p) => p.id === m[1]) : null;
     const what = paper ? `‘${paper.title || paper.fileName}’의 ${m[2] === 'paper.pdf' ? 'PDF' : '데이터'}` : path;
-    const why = code === 'too_large' ? '파일이 너무 커서' : 'GitHub가 받아 주지 않아';
-    emit(this, 'error', {
-      message: `${what}를 ${why} GitHub에 올리지 못했습니다. 이 기기에는 그대로 남아 있고, 나머지는 계속 동기화됩니다.${paper ? ' 다른 기기에서도 보려면 더 작은 PDF로 다시 추가하세요.' : ''}`,
-      error: Object.assign(new Error(message || ''), { code }),
-      path,
-    });
+    let text;
+    if (this.#shared) {
+      const why = code === 'too_large' ? '파일이 너무 커서' : '서버가 받아 주지 않아';
+      const detail = /[가-힣]/.test(message || '') ? ` (${message})` : '';
+      text = `${what}를 ${why} ${this.#label}에 올리지 못했습니다${detail}. 이 기기에는 그대로 남아 있고, 나머지는 계속 동기화됩니다.`;
+    } else {
+      const why = code === 'too_large' ? '파일이 너무 커서' : 'GitHub가 받아 주지 않아';
+      text = `${what}를 ${why} GitHub에 올리지 못했습니다. 이 기기에는 그대로 남아 있고, 나머지는 계속 동기화됩니다.${paper ? ' 다른 기기에서도 보려면 더 작은 PDF로 다시 추가하세요.' : ''}`;
+    }
+    emit(this, 'error', { message: text, error: Object.assign(new Error(message || ''), { code }), path });
   }
 
   #changed(reason) {
@@ -430,7 +761,7 @@ export class Library extends EventTarget {
         else if (this.#base === base) this.#base = snapshot;
         if (this.#journalWritten && this.#savedRev === this.#rev) {
           // Everything the journal held is in IndexedDB now; a stale journal must not replay days later.
-          safeStorage.remove(JOURNAL_KEY);
+          safeStorage.remove(this.#journalKey);
           this.#journalWritten = false;
         }
       } catch (err) {
@@ -441,16 +772,221 @@ export class Library extends EventTarget {
     return this.#writeChain;
   }
 
+  /**
+   * Write the PDF, then add the paper record (fields already validated by the caller).
+   * @returns {Promise<object>} the new paper (snapshot)
+   */
+  async #insertPaper(pdf, fields, { sha256 = null } = {}) {
+    const id = uid('p');
+    const digest = sha256 || (await sha256Hex(pdf));
+    await this.#sync.writeFile(paperPath(id, 'paper.pdf'), pdf);
+    requestPersistentStorage();
+    const now = Date.now();
+    const folderId = fields.folderId != null && this.getFolder(fields.folderId) ? fields.folderId : null;
+    const paper = {
+      id,
+      title: fields.title || '제목 없음',
+      authors: cleanText(fields.authors),
+      year: cleanYear(fields.year),
+      fileName: String(fields.fileName || '').trim() || `${id}.pdf`,
+      size: pdf.byteLength,
+      pages: Number.isInteger(fields.pages) && fields.pages > 0 ? fields.pages : 0,
+      folderId,
+      starred: false,
+      addedAt: now,
+      updatedAt: now,
+      lastOpenedAt: null,
+      translatedCount: count(fields.translatedCount),
+      sentenceCount: count(fields.sentenceCount),
+      sha256: digest,
+    };
+    if (typeof fields.s2PaperId === 'string' && fields.s2PaperId) paper.s2PaperId = fields.s2PaperId;
+    const who = this.#shared ? this.#who() : null;
+    if (who) paper.addedBy = who; // 공용 서재 shows who added a paper
+    this.#data.papers.push(paper);
+    this.#changed('paper');
+    return this.getPaper(id);
+  }
+
+  /**
+   * A paper of this library with the same PDF (sha256; for records from before sha256 was stored: same size
+   * and git blob sha): a live one first, else one in the 휴지통 whose files are still there.
+   * @returns {Promise<{ id: string, deleted: boolean } | null>}
+   */
+  async #findPdf(sha256, pdf) {
+    const live = [];
+    const dead = [];
+    let gitSha = null;
+    for (const p of this.#data.papers) {
+      let same = p.sha256 === sha256;
+      if (!same && !p.sha256 && (!p.size || p.size === pdf.byteLength)) {
+        gitSha ??= await gitBlobSha(pdf);
+        same = (await this.#sync.blobSha(paperPath(p.id, 'paper.pdf'))) === gitSha;
+      }
+      if (same) (p.deleted ? dead : live).push(p);
+    }
+    if (live.length) {
+      live.sort((a, b) => toMillis(a.addedAt) - toMillis(b.addedAt));
+      return { id: live[0].id, deleted: false };
+    }
+    if (!this.#retainPdf) return null;
+    for (const p of dead) {
+      if (!this.#purged.has(p.id) && (await this.#sync.exists(paperPath(p.id, 'paper.pdf')))) return { id: p.id, deleted: true };
+    }
+    return null;
+  }
+
+  /** copyPaperTo() found the PDF here already: place that paper, and add the translated sentences it lacks. */
+  async #adoptCopy({ id, deleted }, { folderId, translation, from }) {
+    let restored = false;
+    let moved = false;
+    if (deleted) {
+      const found = this.#tombstoned(id);
+      if (found) {
+        this.#revive(found, { folderId });
+        this.#changed('restore');
+        this.#note(`복구 ${q(found.item.title)} (${from}에서 복사)`);
+        restored = true;
+      }
+    } else if (folderId != null && (this.getPaper(id)?.folderId ?? null) !== folderId) {
+      this.movePaper(id, folderId);
+      moved = true;
+    }
+    let translationAdded = 0;
+    if (translation?.items && typeof translation.items === 'object' && Object.keys(translation.items).length) {
+      try {
+        await this.updatePaperData(id, 'translation', (cur) => {
+          const merged = mergeTranslation(cur, translation);
+          const before = Object.keys(cur.items || {}).length;
+          translationAdded = Object.keys(merged.items || {}).length - before;
+          const termsAdded = Object.keys(merged.terms || {}).length - Object.keys(cur.terms || {}).length;
+          return translationAdded > 0 || termsAdded > 0 ? merged : undefined;
+        });
+      } catch (err) {
+        translationAdded = 0;
+        console.warn('[store] adding the translation to an existing paper failed', id, err);
+      }
+    }
+    return { paper: this.getPaper(id), copied: false, existing: true, moved, restored, translationAdded };
+  }
+
+  #assertTarget(target) {
+    if (!(target instanceof Library) || !(#data in target)) throw new TypeError('copy target must be a Library');
+    if (target === this) throw new Error('같은 서재 안으로는 복사할 수 없습니다. 옮기기를 사용하세요.');
+  }
+
+  /** Mark deleted, with when and by whom (for the 휴지통). */
+  #tombstone(item) {
+    item.deleted = true;
+    item.deletedAt = Date.now();
+    const who = this.#who();
+    if (who) item.deletedBy = who;
+    else delete item.deletedBy;
+    touch(item);
+  }
+
+  /** { kind, item } of a tombstoned folder or paper. */
+  #tombstoned(id) {
+    const f = this.#data.folders.find((x) => x.id === id && x.deleted);
+    if (f) return { kind: 'folder', item: f };
+    const p = this.#data.papers.find((x) => x.id === id && x.deleted);
+    return p ? { kind: 'paper', item: p } : null;
+  }
+
+  /**
+   * Un-tombstone `found.item` and the deleted folders above it. `folderId` (papers only, a live folder)
+   * places the paper there instead of where it was.
+   */
+  #revive({ kind, item }, { folderId = null } = {}) {
+    if (kind === 'paper' && folderId != null) {
+      item.folderId = folderId;
+    } else {
+      const seen = new Set([item.id]);
+      for (let cur = kind === 'paper' ? item.folderId : item.parentId; cur != null && !seen.has(cur);) {
+        seen.add(cur);
+        const f = this.#data.folders.find((x) => x.id === cur);
+        if (!f || !f.deleted) break;
+        untomb(f);
+        cur = f.parentId;
+      }
+    }
+    untomb(item);
+  }
+
+  #who() {
+    const v = typeof this.#personName === 'function' ? this.#personName() : this.#personName;
+    const s = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+    return s || null;
+  }
+
+  /** Shared library: remember what changed, for the next commit message (who did what, 최근 활동). */
+  #note(text) {
+    if (!this.#shared || this.#muted) return;
+    this.#actions.push({ text, rev: this.#rev });
+    if (this.#actions.length > MAX_ACTIONS) this.#actions.splice(0, this.#actions.length - MAX_ACTIONS);
+  }
+
+  /** The commit message for a batch of the shared library's changes (the relay prefixes `[name] `). */
+  #describeCommit(changes) {
+    const paths = changes.map((c) => c.path);
+    const parts = [];
+    if (paths.includes(LIBRARY_PATH)) {
+      for (const a of this.#actions) if (a.rev <= this.#savedRev) parts.push(a.text);
+    }
+    const translated = [];
+    let pdfs = 0;
+    let personal = 0;
+    for (const p of paths) {
+      const m = /^papers\/([^/]+)\/translation\.json$/.exec(p);
+      if (m) translated.push(m[1]);
+      else if (/^papers\/[^/]+\/paper\.pdf$/.test(p)) pdfs++;
+      else if (this.#prefix && p.startsWith(this.#prefix)) personal++;
+    }
+    for (const id of translated) {
+      const paper = this.#data.papers.find((x) => x.id === id);
+      parts.push(`번역 ${q(paper?.title || paper?.fileName || id)}`);
+    }
+    if (!parts.length) {
+      if (paths.includes(LIBRARY_PATH)) parts.push('논문 정보 갱신');
+      else if (pdfs) parts.push(`PDF ${pdfs}개 올림`);
+      else if (personal) parts.push('내 메모·AI 결과 동기화');
+      else return null;
+    }
+    return joinLimited([...new Set(parts)], MAX_COMMIT_SUMMARY);
+  }
+
+  /** Shared library: which deleted papers lost their files (not restorable, hidden from the 휴지통). */
+  async #refreshPurged() {
+    if (!this.#retainPdf) return;
+    const check = ++this.#purgeCheck;
+    const next = new Set();
+    for (const p of this.#data.papers) {
+      if (p.deleted && !(await this.#sync.exists(paperPath(p.id, 'paper.pdf')))) next.add(p.id);
+    }
+    if (check === this.#purgeCheck) this.#setPurged(next);
+  }
+
+  #setPurged(next) {
+    if (next.size === this.#purged.size && [...next].every((id) => this.#purged.has(id))) return;
+    this.#purged = next;
+    emit(this, 'change', { reason: 'trash' });
+  }
+
   /** Remove leftover files of tombstoned papers (e.g. edited on another device while being deleted). */
   async #gcDeletedPapers() {
+    if (this.#retainPdf) {
+      await this.#refreshPurged();
+      return;
+    }
     for (const paper of this.#data.papers) {
-      if (!paper.deleted) continue;
-      for (const path of await this.#sync.listPaths(`papers/${paper.id}/`)) await this.#sync.deleteFile(path);
+      if (paper.deleted) await this.#deletePaperFiles(paper.id);
     }
   }
 
   async #deletePaperFiles(id) {
-    for (const path of await this.#sync.listPaths(`papers/${id}/`)) await this.#sync.deleteFile(path);
+    for (const prefix of new Set([paperPath(id, ''), `${this.#prefix}${paperPath(id, '')}`])) {
+      for (const path of await this.#sync.listPaths(prefix)) await this.#sync.deleteFile(path);
+    }
   }
 
   #rawFolder(id) {
@@ -516,6 +1052,105 @@ export class Library extends EventTarget {
   }
 }
 
+// ------------------------------------------------------- shared library
+
+/**
+ * Canonical invite code ("pr abcd efgh" → "PR-ABCD-EFGH"), or '' when it cannot be one. Same rules as the
+ * relay's normalizeCode (relay/src/codes.js): Crockford base32, typed I/L → 1 and O → 0.
+ */
+export function normalizeInviteCode(raw) {
+  const compact = String(raw || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  if (compact.length !== 10 || !compact.startsWith('PR')) return '';
+  const body = compact.slice(2).replace(/O/g, '0').replace(/[IL]/g, '1');
+  const code = `PR-${body.slice(0, 4)}-${body.slice(4)}`;
+  return /^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/.test(code) ? code : '';
+}
+
+/** personId (docs/SHARED.md §1): the first 16 hex characters of SHA-256 of the normalised invite code. */
+export async function personIdFor(code) {
+  const normal = normalizeInviteCode(code);
+  if (!normal) throw new Error('초대 코드 형식이 올바르지 않습니다. PR-XXXX-XXXX 형식의 코드를 입력하세요.');
+  return (await sha256Hex(utf8Encode(normal))).slice(0, 16);
+}
+
+/** IndexedDB name of a shared library on this device: one per library and person (invite code). */
+export function sharedDbName(lib, personId) {
+  return `paper-reader-shared-${lib}-${personId}`;
+}
+
+/**
+ * Open 공용 서재 `lib` through the relay (docs/SHARED.md): the relay's GitHub-compatible proxy
+ * (`<relayUrl>/shared/<lib>/gh`, owner 'team', repo 'library', the invite code as token), this person's notes
+ * and AI data under `people/<personId>/`, deletes that only tombstone (휴지통), its own IndexedDB database
+ * (sharedDbName(lib, personId)).
+ * @param {{ relayUrl?: string, code?: string, lib?: string, personId?: string, name?: string | (() => string),
+ *           personName?: string | (() => string), label?: string, branch?: string,
+ *           getConfig?: () => object|null, dbName?: string, db?: object, syncOptions?: object }} opts
+ *   relayUrl + code: the server address and invite code (settings.relay). Or `getConfig` instead: a function
+ *   returning the proxy config `{ owner, repo, branch, token, apiBase, carryOver? }` that follows settings
+ *   changes (it is always used as a proxy config: the code never goes to api.github.com, whatever apiBase says).
+ *   personId: from the relay's GET /shared (computed from the code when omitted). personName (or `name`): the
+ *   person's name from GET /shared, written into tombstones' deletedBy and papers' addedBy.
+ * @returns {Promise<Library>}
+ */
+export async function openSharedLibrary({
+  relayUrl, code, lib = 'team', personId, name, personName, label, branch = 'main', getConfig, dbName, db, syncOptions,
+} = {}) {
+  if (!SHARED_LIB_RE.test(String(lib))) throw new TypeError(`invalid shared library id: ${lib}`);
+  let configFn;
+  let pid = personId == null || personId === '' ? '' : String(personId);
+  if (typeof getConfig === 'function') {
+    configFn = () => {
+      const c = getConfig();
+      return c ? { ...c, proxy: true } : null;
+    };
+    if (!pid) pid = await personIdFor(getConfig()?.token ?? code);
+  } else {
+    const base = normalizeRelayUrl(relayUrl);
+    if (!base) throw new Error('초대 코드 서버 주소가 올바르지 않습니다. 설정 → 초대 코드에서 서버 주소를 확인하세요.');
+    const token = normalizeInviteCode(code) || String(code ?? '').trim();
+    if (!token) throw new Error('초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.');
+    if (!pid) pid = await personIdFor(token);
+    const apiBase = `${base}/shared/${lib}/gh`;
+    const cfg = {
+      owner: 'team',
+      repo: 'library',
+      branch,
+      token,
+      apiBase,
+      proxy: true,
+      // Same person (code) and library: data cached here always belongs to this library, even when the relay's
+      // address changes, so the engine may push it there without asking (GitHubClient.target format).
+      carryOver: `${apiBase}/team/library#${branch}`,
+    };
+    configFn = () => ({ ...cfg });
+  }
+  if (!PERSON_ID_RE.test(pid)) throw new TypeError(`invalid personId: ${pid}`);
+  return Library.open({
+    id: `shared:${lib}`,
+    label: label || '공용 서재',
+    dbName: db ? undefined : dbName || sharedDbName(lib, pid),
+    db,
+    getConfig: configFn,
+    personalPrefix: `people/${pid}/`,
+    retainPdfOnDelete: true,
+    shared: true,
+    personName: personName !== undefined ? personName : name ?? '',
+    syncOptions,
+  });
+}
+
+/** Relay origin (+ optional path) without a trailing slash: https, or http on a loopback address; '' if invalid. */
+function normalizeRelayUrl(raw) {
+  const s = String(raw ?? '').trim().replace(/\/+$/, '');
+  try {
+    const u = new URL(s);
+    const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+    if ((u.protocol === 'https:' || (u.protocol === 'http:' && loopback)) && !u.search && !u.hash && !u.username && !u.password) return s;
+  } catch { /* invalid */ }
+  return '';
+}
+
 // ---------------------------------------------------------------- helpers
 
 /**
@@ -557,6 +1192,53 @@ function touch(item) {
   item.updatedAt = Math.max(Date.now(), toMillis(item.updatedAt) + 1);
 }
 
+/** Back from the 휴지통. */
+function untomb(item) {
+  delete item.deleted;
+  delete item.deletedAt;
+  delete item.deletedBy;
+  touch(item);
+}
+
+function trashItem(kind, record, name, deletedAt, expired) {
+  return Object.freeze({
+    ...record,
+    kind,
+    name,
+    deletedAt,
+    deletedBy: typeof record.deletedBy === 'string' && record.deletedBy ? record.deletedBy : null,
+    expiresAt: deletedAt + TRASH_RETENTION_MS,
+    expired,
+  });
+}
+
+/** ‘title’ for activity text (clipped). */
+function q(text) {
+  return `‘${clip(text)}’`;
+}
+
+function clip(text, max = 40) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** "a · b · c 외 2건", at most `max` characters. */
+function joinLimited(parts, max) {
+  let out = '';
+  for (let i = 0; i < parts.length; i++) {
+    const next = out ? `${out} · ${parts[i]}` : parts[i];
+    const rest = parts.length - i - 1;
+    const tail = rest ? ` 외 ${rest}건` : '';
+    if (out && (next + tail).length > max) return `${out} 외 ${parts.length - i}건`;
+    out = next;
+  }
+  return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+}
+
+function count(v) {
+  return Number.isInteger(v) && v > 0 ? v : 0;
+}
+
 function cleanName(name, label) {
   const s = String(name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!s) throw new Error(`${label}을(를) 입력하세요.`);
@@ -573,6 +1255,17 @@ function cleanYear(v) {
   return Number.isInteger(n) && n >= 1000 && n <= 9999 ? n : null;
 }
 
+/** PDF bytes that addPaper accepts (Korean errors otherwise). */
+function checkedPdf(bytes) {
+  const pdf = toBytes(bytes);
+  if (!pdf.byteLength) throw new Error('빈 파일은 추가할 수 없습니다.');
+  if (pdf.byteLength > LIMITS.maxPdfBytes) {
+    throw new Error(`파일이 너무 큽니다 (${formatBytes(pdf.byteLength)}). 최대 ${formatBytes(LIMITS.maxPdfBytes)}까지 추가할 수 있습니다.`);
+  }
+  if (!looksLikePdf(pdf)) throw new Error('PDF 파일이 아닙니다. 손상되었거나 다른 형식의 파일일 수 있습니다.');
+  return pdf;
+}
+
 function toBytes(bytes) {
   if (bytes instanceof Uint8Array) return bytes;
   if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
@@ -587,6 +1280,11 @@ function looksLikePdf(u8) {
     if (head[i] === 0x25 && head[i + 1] === 0x50 && head[i + 2] === 0x44 && head[i + 3] === 0x46 && head[i + 4] === 0x2d) return true;
   }
   return false;
+}
+
+async function sha256Hex(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function assertKind(kind) {

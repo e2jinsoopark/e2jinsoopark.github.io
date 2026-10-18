@@ -279,6 +279,93 @@ export function saveRelayUrl(raw) {
   return url;
 }
 
+// ───────────────────────────── shared team library (docs/SHARED.md) ─────────────────────────────
+
+/** Library ids the Worker uses in paths (`/shared/<lib>/…`). */
+const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SHARED_NAME = '공용 서재';
+
+/**
+ * The team libraries this code may use: GET /shared → libraries, the code's personId (its per-person folder in the
+ * team repo) and name. The code goes as `Authorization: Bearer` like the GitHub proxy's.
+ * @param {{ code?: string, url?: string, signal?: AbortSignal }} [opts] default: the saved code and server
+ * @returns {Promise<{ libraries: { id: string, name: string }[], personId: string, name: string }>}
+ */
+export async function fetchShared({ code = settings.get().relay?.code, url, signal } = {}) {
+  const key = normalizeInviteCode(code);
+  if (!key) throw aiError(NO_CODE_MESSAGE, { code: 'no_key' });
+  const d = await relayFetch('/shared', { bearer: key, url, signal });
+  const seen = new Set();
+  const libraries = [];
+  for (const x of Array.isArray(d.libraries) ? d.libraries : []) {
+    const id = String(x?.id ?? '');
+    if (!LIBRARY_ID.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof x?.name === 'string' && x.name.trim() ? x.name.trim().slice(0, 60) : SHARED_NAME;
+    libraries.push({ id, name });
+  }
+  return {
+    libraries,
+    personId: typeof d.personId === 'string' && /^[0-9a-f]{16}$/.test(d.personId) ? d.personId : '',
+    name: typeof d.name === 'string' ? d.name : '',
+  };
+}
+
+/**
+ * Who added, moved or deleted what in a team library, newest first: GET /shared/<lib>/activity (from the team repo's
+ * recent commits; `who` is the name of the invite code that made the change).
+ * @returns {Promise<{ items: { ts: number, who: string, summary: string }[] }>}
+ */
+export async function fetchActivity(lib, { limit = 50, code = settings.get().relay?.code, url, signal } = {}) {
+  const key = normalizeInviteCode(code);
+  if (!key) throw aiError(NO_CODE_MESSAGE, { code: 'no_key' });
+  const n = Math.min(Math.max(Math.round(Number(limit) || 50), 1), 100);
+  const d = await relayFetch(`/shared/${libraryPath(lib)}/activity?limit=${n}`, { bearer: key, url, signal });
+  const items = (Array.isArray(d.items) ? d.items : []).map((x) => ({
+    ts: toTime(x?.ts),
+    who: typeof x?.who === 'string' ? x.who : '',
+    summary: typeof x?.summary === 'string' ? x.summary : '',
+  })).filter((x) => x.summary || x.who);
+  items.sort((a, b) => b.ts - a.ts);
+  return { items };
+}
+
+/**
+ * Admin: size of a team library (`maxBytes`: the Worker's cap, 0 when it does not say).
+ * @returns {Promise<{ bytes: number, papers: number, people: number, maxBytes: number }>}
+ */
+export async function sharedStats(lib, { token, signal } = {}) {
+  const d = await adminFetch(`/relay/admin/shared/${libraryPath(lib)}/stats`, { token, signal });
+  return {
+    bytes: toNumber(d.bytes), papers: Math.round(toNumber(d.papers)), people: Math.round(toNumber(d.people)), maxBytes: toNumber(d.maxBytes),
+  };
+}
+
+/**
+ * Admin: delete the files of papers that have been in the 휴지통 for more than 30 days (one server-side commit; the
+ * tombstone records stay). The Worker answers { purged: [paperId], files, freedBytes, commitSha }; `purged` here is
+ * the number of papers whose files were removed.
+ * @returns {Promise<{ purged: number, bytes: number, raw: object }>}
+ */
+export async function purgeShared(lib, { token, signal } = {}) {
+  const d = await adminFetch(`/relay/admin/shared/${libraryPath(lib)}/purge`, { method: 'POST', body: {}, token, signal });
+  const list = [d.purged, d.papers, d.removed, d.paperIds].find(Array.isArray);
+  const purged = list ? list.length : Math.round(toNumber(d.purged ?? d.removed ?? d.count ?? d.papers));
+  return { purged, bytes: toNumber(d.bytes ?? d.freedBytes), raw: d };
+}
+
+/** GitHub-API-compatible proxy root for a team library (the GitHubClient's `apiBase`). */
+export function sharedApiBase(lib, url = settings.relayUrl()) {
+  const root = String(url || '').trim().replace(/\/+$/, '');
+  return root ? `${root}/shared/${libraryPath(lib)}/gh` : '';
+}
+
+function libraryPath(lib) {
+  const id = String(lib ?? '');
+  if (!LIBRARY_ID.test(id)) throw aiError('공용 서재 이름(id)이 올바르지 않습니다.', { code: 'bad_request' });
+  return id;
+}
+
 // ───────────────────────────── admin ─────────────────────────────
 
 /**
@@ -370,13 +457,15 @@ function toCode(c) {
 // ───────────────────────────── transport ─────────────────────────────
 
 /**
- * JSON request to the relay's own endpoints. `key` = invite code (x-api-key), `admin` = admin token (Bearer).
+ * JSON request to the relay's own endpoints. `key` = invite code (x-api-key), `bearer` = invite code sent as
+ * `Authorization: Bearer` (the shared-library endpoints), `admin` = admin token (Bearer).
  * Errors are Korean aiErrors; the relay's own Korean messages are kept as they are.
  */
-async function relayFetch(path, { method = 'GET', body, key, admin, url = settings.relayUrl(), signal } = {}) {
+async function relayFetch(path, { method = 'GET', body, key, bearer, admin, url = settings.relayUrl(), signal } = {}) {
   const root = String(url || '').trim().replace(/\/+$/, '');
   if (!root) throw aiError(NO_URL_MESSAGE, { code: 'no_key' });
-  const headers = admin ? { authorization: `Bearer ${admin}` } : { 'x-api-key': key };
+  const token = admin || bearer;
+  const headers = token ? { authorization: `Bearer ${token}` } : { 'x-api-key': key };
   if (body !== undefined) headers['content-type'] = 'application/json';
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   let res;

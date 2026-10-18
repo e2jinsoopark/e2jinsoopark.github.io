@@ -14,10 +14,19 @@ const WRANGLER = path.join(PR_TOOLS, 'node_modules/wrangler/bin/wrangler.js');
 export const WORKER_PORT = 8787;
 export const UPSTREAM_PORT = 8788;
 export const PAGE_PORT = 8789;
+export const GITHUB_PORT = 8792;
 export const WORKER = `http://127.0.0.1:${WORKER_PORT}`;
 export const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef';
 export const REAL_KEY = 'sk-ant-relay-test-owner-key-0000';
 export const GLOBAL_LIMIT_USD = 1;
+/** The Worker's (fake) fine-grained token for the team repos on the fake GitHub. */
+export const TEAM_TOKEN = 'github_pat_team_test_token_0123456789';
+/** Shared libraries of the test Worker: the team library, a small one (size cap) and one whose repo is public. */
+export const SHARED_LIBRARIES = [
+  { id: 'team', name: '공용 서재', repo: 'dindoopark/paper-team-library', branch: 'main', maxBytes: 4_000_000_000 },
+  { id: 'small', name: '작은 서재', repo: 'dindoopark/paper-small-library', branch: 'main', maxBytes: 1_000_000, maxFiles: 8 },
+  { id: 'lab', name: '연구실 서재', repo: 'dindoopark/lab-library', branch: 'main' },
+];
 
 /** Vars for the test Worker (override wrangler.jsonc; secrets are fake). */
 export const TEST_VARS = {
@@ -26,6 +35,9 @@ export const TEST_VARS = {
   ADMIN_TOKEN,
   TEST_MODE: '1',
   GLOBAL_DAILY_LIMIT_USD: String(GLOBAL_LIMIT_USD),
+  GITHUB_API_BASE: `http://127.0.0.1:${GITHUB_PORT}`,
+  TEAM_GITHUB_TOKEN: TEAM_TOKEN,
+  SHARED_LIBRARIES: JSON.stringify(SHARED_LIBRARIES),
 };
 
 const wranglerEnv = { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1', NO_COLOR: '1' };
