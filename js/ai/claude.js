@@ -1,0 +1,293 @@
+// Claude provider via the official @anthropic-ai/sdk, imported lazily from jsDelivr (VENDOR.anthropicSdk).
+//
+// Request shape (current Claude API):
+// - never send `thinking`: Haiku/Sonnet/Opus 5.5 think adaptively by default, and {type:'disabled'} is a 400 on
+//   Sonnet 5.5 / Opus 5.5. Depth and cost are controlled with output_config.effort instead.
+// - JSON answers use output_config.format = { type: 'json_schema', schema }.
+// - system is always an array of text blocks; blocks marked `cache: true` get cache_control (prompt caching).
+// - non-streaming calls on Sonnet 5.5 / Opus 5.5 opt into server-side refusal fallback (beta).
+import { CLAUDE_MODELS, VENDOR } from '../core/config.js';
+import { settings } from '../core/settings.js';
+import { aiError, throwIfAborted } from './providers.js';
+
+export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+const FALLBACK_MODELS = new Set(['claude-sonnet-5-5', 'claude-opus-5-5']);
+const MAX_RETRIES = 3;
+const DEFAULT_MAX_TOKENS = 16000;
+// The SDK refuses non-streaming requests whose max_tokens implies > 10 min of generation (~21K tokens).
+const MAX_NONSTREAMING_TOKENS = 20000;
+
+let sdkPromise = null;
+let clientCache = { apiKey: '', client: null };
+// Set when the fallback beta was rejected (400) and the same request then succeeded without it.
+let fallbackBetaRejected = false;
+
+/** Lazily import the SDK module (namespace with `default` = Anthropic and the typed error classes). */
+export async function loadSdk() {
+  sdkPromise ||= import(VENDOR.anthropicSdk).catch((err) => {
+    sdkPromise = null;
+    console.warn('[ai] failed to load Anthropic SDK', err);
+    throw aiError('Claude 연결 모듈(SDK)을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.', {
+      code: 'network', cause: err,
+    });
+  });
+  return sdkPromise;
+}
+
+/** For tests: forget the cached client and the remembered fallback-beta rejection. */
+export function resetClaudeState() {
+  clientCache = { apiKey: '', client: null };
+  fallbackBetaRejected = false;
+}
+
+/** True after the server-side fallback beta was rejected once in this session. */
+export function isFallbackBetaDisabled() {
+  return fallbackBetaRejected;
+}
+
+/**
+ * Translate provider-neutral options into Messages API params (exported for tests).
+ * @param {{ model: string, system?: string | { text: string, cache?: boolean }[], messages: object[],
+ *           json?: object, maxTokens?: number, effort?: 'low'|'medium'|'high' }} opts
+ */
+export function buildParams({ model, system, messages, json, maxTokens, effort }) {
+  if (!model) throw aiError('Claude 모델이 선택되지 않았습니다. 설정에서 모델을 선택해 주세요.', { code: 'bad_request' });
+  const params = { model, max_tokens: maxTokens || DEFAULT_MAX_TOKENS, messages: (messages || []).map(toApiMessage) };
+  const sys = toSystemBlocks(system);
+  if (sys.length) params.system = sys;
+  const outputConfig = {};
+  if (effort) outputConfig.effort = effort;
+  if (json) outputConfig.format = { type: 'json_schema', schema: json };
+  if (Object.keys(outputConfig).length) params.output_config = outputConfig;
+  return params;
+}
+
+export const claudeProvider = {
+  id: 'claude',
+  label: 'Claude (Anthropic)',
+
+  async complete(opts) {
+    throwIfAborted(opts.signal);
+    const { client, sdk } = await getClient();
+    const params = buildParams({ ...opts, maxTokens: Math.min(opts.maxTokens || DEFAULT_MAX_TOKENS, MAX_NONSTREAMING_TOKENS) });
+    let message;
+    try {
+      message = await createMessage(client, sdk, params, opts.signal);
+    } catch (err) {
+      throw toKoreanError(err, sdk, { model: params.model, signal: opts.signal });
+    }
+    return readMessage(message, { json: Boolean(opts.json), model: params.model });
+  },
+
+  async *stream(opts) {
+    throwIfAborted(opts.signal);
+    const { client, sdk } = await getClient();
+    const params = buildParams(opts);
+    let stream = null;
+    let finished = false;
+    try {
+      stream = client.messages.stream(params, { signal: opts.signal });
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+          yield { type: 'text', text: event.delta.text };
+        }
+      }
+      const message = await stream.finalMessage();
+      finished = true;
+      const usage = toUsage(message, params.model);
+      if (message.stop_reason === 'refusal') throw refusalError(message, usage);
+      yield { type: 'done', usage, stopReason: message.stop_reason };
+    } catch (err) {
+      finished = true;
+      throw toKoreanError(err, sdk, { model: params.model, signal: opts.signal });
+    } finally {
+      // The consumer stopped early (break / return): close the HTTP stream.
+      if (!finished) stream?.abort();
+    }
+  },
+
+  async listModels() {
+    const { client, sdk } = await getClient();
+    const known = new Map(CLAUDE_MODELS.map((m) => [m.id, m.label]));
+    try {
+      const out = [];
+      for await (const m of client.models.list({ limit: 100 })) {
+        if (String(m.id).startsWith('claude-')) out.push({ id: m.id, label: known.get(m.id) || m.display_name || m.id });
+      }
+      return out.length ? out : CLAUDE_MODELS.map((m) => ({ ...m }));
+    } catch (err) {
+      throw toKoreanError(err, sdk, {});
+    }
+  },
+
+  async testKey() {
+    try {
+      const { client, sdk } = await getClient();
+      try {
+        await client.models.list({ limit: 1 }); // free: lists models, no tokens billed
+      } catch (err) {
+        throw toKoreanError(err, sdk, {});
+      }
+      return { ok: true, message: 'Claude API 키가 확인되었습니다.' };
+    } catch (err) {
+      return { ok: false, message: err.message };
+    }
+  },
+};
+
+// ───────────────────────────── internals ─────────────────────────────
+
+async function getClient() {
+  const apiKey = String(settings.get().claude?.apiKey || '').trim();
+  if (!apiKey) throw aiError('Claude API 키가 없습니다. 설정에서 API 키를 입력해 주세요.', { code: 'no_key' });
+  const sdk = await loadSdk();
+  if (clientCache.apiKey !== apiKey || !clientCache.client) {
+    const Anthropic = sdk.default;
+    clientCache = { apiKey, client: new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: MAX_RETRIES }) };
+  }
+  return { client: clientCache.client, sdk };
+}
+
+/**
+ * Non-streaming create. On Sonnet 5.5 / Opus 5.5 opt into server-side refusal fallback; if that request is a 400
+ * and the identical request without the beta succeeds, the beta is the problem — remember and skip it from now on.
+ * (No error-message matching: a genuinely bad request fails the second time too and is reported as such.)
+ */
+async function createMessage(client, sdk, params, signal) {
+  if (!FALLBACK_MODELS.has(params.model) || fallbackBetaRejected) {
+    return client.messages.create(params, { signal });
+  }
+  try {
+    return await client.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' }, { signal });
+  } catch (err) {
+    if (!(err instanceof sdk.BadRequestError)) throw err;
+    const message = await client.messages.create(params, { signal });
+    fallbackBetaRejected = true;
+    console.warn('[ai] server-side fallback beta rejected; continuing without it:', err.message);
+    return message;
+  }
+}
+
+function readMessage(message, { json, model }) {
+  const usage = toUsage(message, model);
+  if (message.stop_reason === 'refusal') throw refusalError(message, usage);
+  const text = (message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+  if (message.stop_reason === 'max_tokens' && json) {
+    throw aiError('응답이 최대 길이에 도달해 잘렸습니다. 더 작은 단위로 나누어 다시 요청합니다.', {
+      code: 'max_tokens', usage, partialText: text,
+    });
+  }
+  const out = { text, usage, stopReason: message.stop_reason, model: message.model || model };
+  if (json) {
+    try {
+      out.json = JSON.parse(text);
+    } catch (err) {
+      console.warn('[ai] Claude returned invalid JSON', text.slice(0, 200));
+      throw aiError('AI 응답(JSON)을 해석하지 못했습니다. 다시 시도해 주세요.', { code: 'parse', usage, cause: err });
+    }
+  }
+  return out;
+}
+
+function refusalError(message, usage) {
+  const category = message.stop_details?.category ?? null;
+  console.warn('[ai] Claude refusal', category, message.stop_details?.explanation);
+  return aiError(
+    'Claude가 안전 정책에 따라 이 요청에 대한 응답을 거절했습니다. 내용을 바꾸거나 설정에서 다른 모델을 선택해 다시 시도해 주세요.',
+    { code: 'refusal', category, usage },
+  );
+}
+
+/**
+ * Usage of the returned message. With server-side fallback, `usage.iterations` lists every attempt (each billed at
+ * its own model's rates); they are kept as `parts` so costUsd() can price them individually.
+ */
+function toUsage(message, requestedModel) {
+  const u = message?.usage || {};
+  const usage = {
+    model: message?.model || requestedModel,
+    inputTokens: u.input_tokens || 0,
+    outputTokens: u.output_tokens || 0,
+    cacheReadTokens: u.cache_read_input_tokens || 0,
+    cacheWriteTokens: u.cache_creation_input_tokens || 0,
+  };
+  const iterations = Array.isArray(u.iterations) ? u.iterations : [];
+  if (iterations.length > 1) {
+    usage.parts = iterations.map((it) => ({
+      model: it.model || usage.model,
+      inputTokens: it.input_tokens || 0,
+      outputTokens: it.output_tokens || 0,
+      cacheReadTokens: it.cache_read_input_tokens || 0,
+      cacheWriteTokens: it.cache_creation_input_tokens || 0,
+    }));
+  }
+  return usage;
+}
+
+function toApiMessage(m) {
+  const role = m.role === 'assistant' ? 'assistant' : 'user';
+  if (typeof m.content === 'string') return { role, content: m.content };
+  return {
+    role,
+    content: (m.content || []).map((p) =>
+      p.type === 'image'
+        ? { type: 'image', source: { type: 'base64', media_type: p.mediaType || 'image/png', data: p.data } }
+        : { type: 'text', text: String(p.text ?? '') }),
+  };
+}
+
+function toSystemBlocks(system) {
+  if (!system) return [];
+  if (typeof system === 'string') return [{ type: 'text', text: system }];
+  return system
+    .filter((b) => b && b.text)
+    .map((b) => (b.cache
+      ? { type: 'text', text: b.text, cache_control: { type: 'ephemeral' } }
+      : { type: 'text', text: b.text }));
+}
+
+/** Map SDK errors (by class, most specific first) to Korean aiErrors. */
+function toKoreanError(err, sdk, { model, signal } = {}) {
+  if (err?.name === 'AiError' || (err?.code && 'fatal' in err)) return err; // already ours
+  const detail = err?.error?.error?.message || err?.message || '';
+  const make = (message, code, extra = {}) => {
+    console.warn('[ai] Claude error', code, err?.status ?? '', detail);
+    return aiError(message, { code, status: err?.status, cause: err, ...extra });
+  };
+  if (err instanceof sdk.APIUserAbortError || signal?.aborted) return aiError('요청을 취소했습니다.', { code: 'aborted', cause: err });
+  if (err instanceof sdk.APIConnectionTimeoutError) {
+    return make('Claude 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.', 'timeout');
+  }
+  if (err instanceof sdk.APIConnectionError) {
+    return make('Claude 서버에 연결할 수 없습니다. 인터넷 연결을 확인해 주세요.', 'network');
+  }
+  if (err instanceof sdk.AuthenticationError) {
+    return make('Claude API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.', 'auth');
+  }
+  if (err instanceof sdk.PermissionDeniedError) {
+    return make('이 API 키로는 요청한 Claude 모델이나 기능을 사용할 권한이 없습니다. Anthropic Console에서 권한을 확인해 주세요.', 'permission');
+  }
+  if (err instanceof sdk.NotFoundError) {
+    return make(`Claude 모델을 찾을 수 없습니다${model ? `(${model})` : ''}. 설정에서 모델을 다시 선택해 주세요.`, 'not_found');
+  }
+  if (err instanceof sdk.RateLimitError) {
+    return make('Claude 요청 한도(분당 요청·토큰 수)를 초과했습니다. 잠시 후 다시 시도하거나 설정에서 동시 번역 수를 줄여 주세요.', 'rate_limit');
+  }
+  if (err instanceof sdk.BadRequestError) {
+    return make(`Claude가 요청을 처리할 수 없습니다(잘못된 요청).${detail ? ` 상세: ${detail}` : ''}`, 'bad_request');
+  }
+  if (err instanceof sdk.InternalServerError) {
+    const overloaded = err.status === 529;
+    return make(overloaded
+      ? 'Claude 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해 주세요.'
+      : 'Claude 서버에 일시적인 문제가 있습니다. 잠시 후 다시 시도해 주세요.', 'server');
+  }
+  if (err instanceof sdk.APIError) {
+    if (err.status === 402) {
+      return make('Anthropic API 크레딧이 부족하거나 결제에 문제가 있습니다. Claude Console(platform.claude.com)의 Billing에서 잔액을 확인해 주세요.', 'billing');
+    }
+    if (err.status === 413) return make('요청이 너무 큽니다. 더 짧은 내용으로 다시 시도해 주세요.', 'bad_request');
+    return make(`Claude API 오류가 발생했습니다${err.status ? `(HTTP ${err.status})` : ''}. 잠시 후 다시 시도해 주세요.`, 'unknown');
+  }
+  return make('Claude 요청 중 알 수 없는 오류가 발생했습니다.', 'unknown');
+}

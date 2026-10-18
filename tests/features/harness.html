@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features harness</title>
+<script>
+  // Point the features' imports of ai/tasks.js and ui/components.js at the test stubs.
+  // ?real=components keeps the real components.js (once the shell builder has written it).
+  (function () {
+    var real = (new URLSearchParams(location.search).get('real') || '').split(',');
+    var imports = {};
+    if (real.indexOf('tasks') < 0) imports['/js/ai/tasks.js'] = '/tests/features/stubs/tasks.js';
+    if (real.indexOf('components') < 0) imports['/js/ui/components.js'] = '/tests/features/stubs/components.js';
+    var s = document.createElement('script');
+    s.type = 'importmap';
+    s.textContent = JSON.stringify({ imports: imports });
+    document.currentScript.after(s);
+    if (new URLSearchParams(location.search).get('css') === 'app') {
+      var l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = '/css/app.css';
+      document.head.append(l);
+    }
+  })();
+</script>
+<style>
+  :root { color-scheme: light; --h-bg: #f3f4f6; --h-fg: #1f2328; --h-line: #dfe3e8; --h-page: #fff; }
+  :root[data-theme="dark"] { color-scheme: dark; --h-bg: #111418; --h-fg: #e6e8eb; --h-line: #343a42; --h-page: #1d2127; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--h-bg); color: var(--h-fg);
+    font-family: system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+  #tb { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--h-line); background: var(--h-page); }
+  #tb .grow { flex: 1; }
+  #tools { display: flex; gap: 6px; }
+  .tb-btn { font: inherit; font-size: 13px; padding: 7px 11px; border-radius: 6px; border: 1px solid var(--h-line); background: var(--h-page); color: inherit; cursor: pointer; }
+  .tb-btn.is-active { background: #2f6feb; border-color: #2f6feb; color: #fff; }
+  #split { display: flex; height: calc(100% - 52px); }
+  #left { flex: 1 1 52%; overflow: auto; padding: 16px; }
+  #right { flex: 1 1 48%; display: flex; flex-direction: column; border-left: 1px solid var(--h-line); background: var(--h-page); min-width: 0; }
+  #tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--h-line); flex: none; }
+  #tabs button { font: inherit; font-size: 13px; padding: 10px 12px; border: 0; background: none; color: inherit; cursor: pointer; border-bottom: 2px solid transparent; }
+  #tabs button.is-active { border-bottom-color: #2f6feb; font-weight: 700; }
+  #hosts { flex: 1; min-height: 0; position: relative; }
+  .host { position: absolute; inset: 0; }
+  .host[hidden] { display: none; }
+  #pane-host { overflow: auto; padding: 12px 16px; }
+  .sv-page { position: relative; margin: 0 auto 16px; background: var(--h-page); box-shadow: 0 1px 4px rgba(0,0,0,.15); padding: 40px 48px; font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.55; }
+  .sv-marks { position: absolute; inset: 0; pointer-events: none; }
+  .sv-mark { position: absolute; mix-blend-mode: multiply; border-radius: 2px; }
+  :root[data-theme="dark"] .sv-mark { mix-blend-mode: screen; }
+  .sv-mark--underline { background: none !important; }
+  .sv-para { margin: 0 0 12px; }
+  h3.sv-para { font-size: 15px; }
+  .sv-caption { font-style: italic; font-size: 13px; }
+  .sv-reference { font-size: 12.5px; }
+  .sv-s.is-hover { background: rgba(47, 111, 235, .10); }
+  .sv-s.is-flash { outline: 2px solid #2f6feb; }
+  .sv-link { color: #1c64d6; cursor: pointer; }
+  .sv-figure { height: 120px; margin: 0 0 8px; border: 1px dashed #999; display: flex; align-items: center; justify-content: center; color: #888; }
+  .sv-capturing { cursor: crosshair; }
+  .sp-s { margin: 0 0 8px; line-height: 1.6; font-size: 14px; }
+  .sp-s.is-hover { outline: 1px solid #2f6feb; }
+  .stub-pop { position: fixed; z-index: 70; background: var(--h-page); color: var(--h-fg); border: 1px solid var(--h-line); border-radius: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.18); }
+  .stub-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.3); display: flex; align-items: center; justify-content: center; z-index: 95; }
+  .stub-modal { background: var(--h-page); padding: 18px; border-radius: 10px; min-width: 320px; }
+  .stub-modal__actions { display: flex; justify-content: flex-end; gap: 8px; }
+  #stub-toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 96; }
+  .stub-toast { background: #24292f; color: #fff; padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+  .stub-toast--error { background: #cf222e; }
+  .stub-spin { display: inline-block; border: 2px solid #c9cfd6; border-top-color: #2f6feb; border-radius: 50%; animation: stub-rot .8s linear infinite; }
+  @keyframes stub-rot { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header id="tb"><strong>Paper Reader · features harness</strong><span class="grow"></span><div id="tools"></div></header>
+<main id="split">
+  <section id="left"><div id="viewer"></div></section>
+  <section id="right"><nav id="tabs"></nav><div id="hosts"></div></section>
+</main>
+<script type="module" src="./harness.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- Shell test harness: the real index.html shell + js/app.js, with other builders' modules
+     remapped to stubs via an import map. The critical library module is missing: the app must show its Korean error screen. Not shipped. -->
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff">
+  <title>논문 리더 (fatal harness)</title>
+  <script type="importmap">
+{
+  "imports": {
+    "/js/store/library.js": "/tests/shell/stubs/__missing__/library.js",
+    "/js/store/github.js": "/tests/shell/stubs/store-github.js",
+    "/js/pdf/pdfjs.js": "/tests/shell/stubs/pdf-pdfjs.js",
+    "/js/pdf/extract.js": "/tests/shell/stubs/pdf-extract.js",
+    "/js/pdf/viewer.js": "/tests/shell/stubs/pdf-viewer.js",
+    "/js/ai/providers.js": "/tests/shell/stubs/ai-providers.js",
+    "/js/ai/translator.js": "/tests/shell/stubs/ai-translator.js",
+    "/js/ai/usage.js": "/tests/shell/stubs/ai-usage.js",
+    "/js/features/index.js": "/tests/shell/stubs/features-index.js"
+  }
+}
+  </script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="stylesheet" href="/tests/shell/stubs/stub-viewer.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <div id="app"><div class="boot"><div class="boot-inner">불러오는 중…</div></div></div>
+</body>
+</html>

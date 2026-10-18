@@ -1,0 +1,20 @@
+/* Styles for the fake PDF viewer used in shell tests (not shipped). */
+.sv-root { display: grid; justify-items: center; gap: 14px; padding: 16px 0 40px; --sv-zoom: 1; }
+.sv-page {
+  background: #fff; color: #111; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); padding: calc(48px * var(--sv-zoom)) calc(54px * var(--sv-zoom));
+  font-family: 'Times New Roman', Georgia, serif; font-size: calc(11px * var(--sv-zoom)); line-height: 1.45;
+}
+.sv-para { margin: 0 0 0.8em; text-align: justify; }
+h4.sv-para { font-size: 1.15em; margin: 1.2em 0 0.5em; font-family: Arial, sans-serif; }
+.sv-caption { font-style: italic; }
+.sv-furniture { text-align: center; color: #666; }
+.sv-reference { font-size: 0.9em; }
+.sv-s { border-radius: 2px; cursor: text; }
+.sv-s.sv-hover { background: var(--pr-hover); }
+.sv-s.sv-active { box-shadow: 0 0 0 1.5px var(--pr-active-ring); background: var(--pr-active); }
+.sv-s.sv-flash { animation: sv-flash 1.2s ease-out; }
+.sv-s[data-mannotations] { background-image: linear-gradient(var(--mark-yellow), var(--mark-yellow)); }
+.sv-s[data-mauto] { text-decoration: underline 2px var(--mark-blue-line); text-underline-offset: 3px; }
+.sv-s.sv-ko { font-family: var(--font); color: #1d2129; background: rgba(237, 242, 255, 0.9); }
+.sv-capture { cursor: crosshair; }
+@keyframes sv-flash { 0%, 30% { background: var(--pr-flash); } }
