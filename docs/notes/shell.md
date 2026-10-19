@@ -99,9 +99,28 @@ the shell runs `checkAccess()` first and refuses public repos (`repoPrivate === 
 
 ## Design tokens shared with the viewer (css/app.css `:root`, redefined under `[data-theme='dark']`)
 
-`--pr-hover` rgba(255,214,0,.35) · `--pr-active` (fill) · `--pr-active-ring` (outline colour) · `--pr-flash` ·
+`--pr-hover` rgba(245,176,65,.34) (warm amber) · `--pr-active` (mocha tint) · `--pr-active-ring` (outline colour) · `--pr-flash` ·
 `--mark-{yellow,green,blue,pink,orange,purple,red,grey}` (fills) and `--mark-*-line` (underline colours) ·
 `--viewer-bg` · `--tp-font-size` (= `settings.ui.fontSize`, set by app.js).
+css/viewer.css keeps its own `--pdfv-*` values (pages are white in both themes): amber hover, mocha active ring,
+a Mocha Mousse text selection (`--pdfv-selection`, instead of pdf.js's system AccentColor) and warm overlay text
+(`--pdfv-overlay-fg`, `--pdfv-overlay-muted` ≥ 5.3:1 on both overlay papers).
+
+## Brand: 갈피 (GALPI)
+
+- Owner-made artwork in `assets/brand/` (full-bleed squares on mocha #8C6250): `icon-{32,64,180,192,512}.png`,
+  `icon-maskable-512.png`, `galpi-wordmark-1254.webp` / `wordmark-600.png`, `galpi-g-1254.webp`. `index.html` links the
+  favicons, the apple-touch icon and `manifest.webmanifest`; the Pages workflow publishes `assets/` and the manifest.
+- `brandImage(kind, { size, className, alt })` (components.js) — `'mark'` (sidebar), `'mark-lg'`, `'wordmark'`
+  (onboarding hero, join welcome); URLs are resolved from the module, so harness pages under `/tests/` work too.
+  `messageScreen({ brand: 'wordmark'|'mark' })` shows the artwork instead of the icon.
+- Theme: warm paper + mocha ink. One accent (`--accent` = the icon's mocha; latte `#cc9c83` in dark) for primary
+  buttons, the current place, links, focus (`--focus-ring` = Pantone Mocha Mousse #A47864) and progress. Bookmark
+  ribbon (`--ribbon`, `--ribbon-clip`) only on the current sidebar item, the selected reader tab and empty states.
+  All text tokens ≥ 4.5:1 on the surfaces they are used on (focus ring, ribbon, icons ≥ 3:1).
+- `theme-color`: `#f7f3ec` / `#191411` (index.html per `prefers-color-scheme`; app.js `applyTheme()` sets every
+  theme-color meta to the app's own theme). Internal ids, storage keys (`pr.*`), database names, repo names and the
+  data repository's commit messages (js/store) still say "paper reader" / "논문 리더" on purpose.
 
 ## Findings for the integrator / other builders
 

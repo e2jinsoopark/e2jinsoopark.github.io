@@ -42,7 +42,7 @@ const CSS = String.raw`
   border-radius: var(--pf-radius); padding: 12px 14px; margin: 12px 0; }
 .pf-error-box p { margin: 0 0 8px; }
 .pf-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--pf-fg-muted); padding: 6px 0; }
-.pf-empty { text-align: center; padding: 28px 16px; color: var(--pf-fg); }
+.pf-empty { text-align: center; padding: 28px 16px; color: var(--pf-fg); word-break: keep-all; overflow-wrap: anywhere; }
 .pf-empty p { margin: 0 0 10px; line-height: 1.6; }
 .pf-empty__title { font-weight: 600; }
 .pf-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-size: 13px;
@@ -133,7 +133,7 @@ const CSS = String.raw`
 .pf-msg--user .pf-msg__body { white-space: pre-wrap; }
 .pf-msg--assistant { align-self: flex-start; background: var(--pf-bg-soft); border: 1px solid var(--pf-border); border-bottom-left-radius: 4px; }
 .pf-msg--error { align-self: flex-start; border: 1px solid var(--pf-danger); background: var(--pf-danger-soft); }
-.pf-msg__quote { margin: 0 0 6px; padding: 4px 8px; border-left: 3px solid rgba(255,255,255,.6); font-size: 12.5px; opacity: .92; }
+.pf-msg__quote { margin: 0 0 6px; padding: 4px 8px; border-left: 3px solid color-mix(in srgb, currentColor 55%, transparent); font-size: 12.5px; opacity: .92; }
 .pf-msg__note { font-size: 12px; color: var(--pf-fg-muted); margin-top: 6px; }
 .pf-msg__tools { position: absolute; right: 8px; bottom: -13px; display: flex; gap: 2px; padding: 1px 2px; border-radius: 6px;
   background: var(--pf-bg); border: 1px solid var(--pf-border); opacity: 0; pointer-events: none; transition: opacity .15s; }

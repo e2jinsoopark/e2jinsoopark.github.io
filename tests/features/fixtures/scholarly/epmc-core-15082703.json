@@ -1,0 +1,159 @@
+{
+ "version": "6.9",
+ "hitCount": 1,
+ "request": {
+  "queryString": "EXT_ID:15082703 AND SRC:MED",
+  "internalQuery": "EXT_ID:15082703 AND SRC:MED",
+  "resultType": "CORE",
+  "cursorMark": "*",
+  "pageSize": 5,
+  "sort": "",
+  "synonym": false
+ },
+ "resultList": {
+  "result": [
+   {
+    "id": "15082703",
+    "source": "MED",
+    "pmid": "15082703",
+    "doi": "10.1001/jama.291.14.1753",
+    "title": "Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit.",
+    "authorString": "Ely EW, Shintani A, Truman B, Speroff T, Gordon SM, Harrell FE, Inouye SK, Bernard GR, Dittus RS.",
+    "authorList": {
+     "author": [
+      {
+       "fullName": "Ely EW",
+       "lastName": "Ely",
+       "firstName": "E Wesley",
+       "initials": "EW"
+      },
+      {
+       "fullName": "Shintani A",
+       "lastName": "Shintani",
+       "firstName": "Ayumi",
+       "initials": "A"
+      },
+      {
+       "fullName": "Truman B",
+       "lastName": "Truman",
+       "firstName": "Brenda",
+       "initials": "B"
+      },
+      {
+       "fullName": "Speroff T",
+       "lastName": "Speroff",
+       "firstName": "Theodore",
+       "initials": "T"
+      },
+      {
+       "fullName": "Gordon SM",
+       "lastName": "Gordon",
+       "firstName": "Sharon M",
+       "initials": "SM"
+      },
+      {
+       "fullName": "Harrell FE Jr",
+       "lastName": "Harrell",
+       "firstName": "Frank E",
+       "initials": "FE"
+      },
+      {
+       "fullName": "Inouye SK",
+       "lastName": "Inouye",
+       "firstName": "Sharon K",
+       "initials": "SK"
+      },
+      {
+       "fullName": "Bernard GR",
+       "lastName": "Bernard",
+       "firstName": "Gordon R",
+       "initials": "GR",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-4721-3068"
+       }
+      },
+      {
+       "fullName": "Dittus RS",
+       "lastName": "Dittus",
+       "firstName": "Robert S",
+       "initials": "RS"
+      }
+     ]
+    },
+    "authorIdList": {
+     "authorId": [
+      {
+       "type": "ORCID",
+       "value": "0000-0002-4721-3068"
+      }
+     ]
+    },
+    "journalInfo": {
+     "issue": "14",
+     "volume": "291",
+     "journalIssueId": 1139638,
+     "dateOfPublication": "2004 Apr",
+     "monthOfPublication": 4,
+     "yearOfPublication": 2004,
+     "journal": {
+      "medlineAbbreviation": "JAMA",
+      "title": "JAMA",
+      "essn": "1538-3598",
+      "issn": "0098-7484",
+      "nlmid": "7501160",
+      "isoabbreviation": "JAMA"
+     },
+     "printPublicationDate": "2004-04-01"
+    },
+    "pubYear": "2004",
+    "pageInfo": "1753-1762",
+    "abstractText": "<h4>Context</h4>In the intensive care unit (ICU), delirium is a common yet underdiagnosed form of organ dysfunction, and its contribution to patient outcomes is unclear.<h4>Objective</h4>To determine if delirium is an independent predictor of clinical outcomes, including 6-month mortality and length of stay among ICU patients receiving mechanical ventilation.<h4>Design, setting, and participants</h4>Prospective cohort study enrolling 275 consecutive mechanically ventilated patients admitted to adult medical and coronary ICUs of a US university-based medical center between February 2000 and May 2001. Patients were followed up for development of delirium over 2158 ICU days using the Confusion Assessment Method for the ICU and the Richmond Agitation-Sedation Scale.<h4>Main outcome measures</h4>Primary outcomes included 6-month mortality, overall hospital length of stay, and length of stay in the post-ICU period. Secondary outcomes were ventilator-free days and cognitive impairment at hospital discharge.<h4>Results</h4>Of 275 patients, 51 (18.5%) had persistent coma and died in the hospital. Among the remaining 224 patients, 183 (81.7%) developed delirium at some point during the ICU stay. Baseline demographics including age, comorbidity scores, dementia scores, activities of daily living, severity of illness, and admission diagnoses were similar between those with and without delirium (P>.05 for all). Patients who developed delirium had higher 6-month mortality rates (34% vs 15%, P =.03) and spent 10 days longer in the hospital than those who never developed delirium (P<.001). After adjusting for covariates (including age, severity of illness, comorbid conditions, coma, and use of sedatives or analgesic medications), delirium was independently associated with higher 6-month mortality (adjusted hazard ratio [HR], 3.2; 95% confidence interval [CI], 1.4-7.7; P =.008), and longer hospital stay (adjusted HR, 2.0; 95% CI, 1.4-3.0; P<.001). Delirium in the ICU was also independently associated with a longer post-ICU stay (adjusted HR, 1.6; 95% CI, 1.2-2.3; P =.009), fewer median days alive and without mechanical ventilation (19 [interquartile range, 4-23] vs 24 [19-26]; adjusted P =.03), and a higher incidence of cognitive impairment at hospital discharge (adjusted HR, 9.1; 95% CI, 2.3-35.3; P =.002).<h4>Conclusion</h4>Delirium was an independent predictor of higher 6-month mortality and longer hospital stay even after adjusting for relevant covariates including coma, sedatives, and analgesics in patients receiving mechanical ventilation.",
+    "publicationStatus": "ppublish",
+    "language": "eng",
+    "pubModel": "Print",
+    "pubTypeList": {
+     "pubType": [
+      "Research Support, U.S. Gov't, P.H.S.",
+      "Research Support, Non-U.S. Gov't",
+      "Research Support, U.S. Gov't, Non-P.H.S.",
+      "Journal Article"
+     ]
+    },
+    "fullTextUrlList": {
+     "fullTextUrl": [
+      {
+       "availability": "Subscription required",
+       "availabilityCode": "S",
+       "documentStyle": "doi",
+       "site": "DOI",
+       "url": "https://doi.org/10.1001/jama.291.14.1753"
+      }
+     ]
+    },
+    "isOpenAccess": "N",
+    "inEPMC": "N",
+    "inPMC": "N",
+    "citedByCount": 1999,
+    "hasReferences": "N",
+    "hasTextMinedTerms": "Y",
+    "hasDbCrossReferences": "N",
+    "hasPDF": "N",
+    "hasBook": "N",
+    "hasSuppl": "N",
+    "hasLabsLinks": "Y",
+    "hasData": "N",
+    "authMan": "N",
+    "epmcAuthMan": "N",
+    "nihAuthMan": "N",
+    "hasTMAccessionNumbers": "N",
+    "dateOfCompletion": "2004-04-16",
+    "dateOfCreation": "2004-04-15",
+    "dateOfRevision": "2024-12-19",
+    "firstPublicationDate": "2004-04-01",
+    "firstIndexDate": "2008-01-29",
+    "hasEvaluations": "N"
+   }
+  ]
+ }
+}

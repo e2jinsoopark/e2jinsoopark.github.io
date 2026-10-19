@@ -32,6 +32,8 @@ const SHARED_DB_PREFIX = 'paper-reader-shared-';
 const INVITEE_FIRST_WAIT_MS = 2500;
 
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+/** Browser/OS title-bar colour per theme (= --bg in css/app.css; also index.html and manifest.webmanifest). */
+const THEME_COLOR = { light: '#f7f3ec', dark: '#191411' };
 
 boot().catch((err) => {
   console.warn('[app] boot failed', err);
@@ -48,13 +50,13 @@ async function boot() {
   bus.on('settings:change', () => { applyTheme(); applyFontSize(); });
   darkQuery.addEventListener('change', applyTheme);
   installGlobalErrorHandlers();
-  console.info('[app] 논문 리더', APP_VERSION);
+  console.info('[app] 갈피 (GALPI)', APP_VERSION);
 
   const appEl = document.getElementById('app');
   const bannerHost = el('div', { class: 'app-banner-host' });
   const viewEl = el('div', { class: 'view', id: 'view' });
   appEl.replaceChildren(bannerHost, viewEl);
-  viewEl.replaceChildren(el('div', { class: 'boot' }, el('div', { class: 'boot-inner' }, spinner(18), '논문 리더를 준비하는 중…')));
+  viewEl.replaceChildren(el('div', { class: 'boot' }, el('div', { class: 'boot-inner' }, spinner(18), '갈피를 준비하는 중…')));
 
   const { modules, failures } = await loadModules();
   const criticalFailures = failures.filter((f) => f.critical);
@@ -541,7 +543,7 @@ function startRouter(viewEl, deps) {
       } else if (r.name === 'join') {
         current = mountJoinView(viewEl, { code: r.code, deps, navigate });
       } else {
-        document.title = '논문 리더';
+        document.title = '갈피';
         current = mountLibraryView(viewEl, { deps, navigate, route: r });
       }
     } catch (err) {
@@ -566,7 +568,8 @@ function applyTheme() {
   const pref = settings.get().ui?.theme || 'light';
   const dark = pref === 'dark' || (pref === 'system' && darkQuery.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#181b21' : '#ffffff');
+  // index.html has one theme-color per prefers-color-scheme; the app's own choice (설정 → 테마) wins over both.
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', dark ? THEME_COLOR.dark : THEME_COLOR.light);
 }
 
 function applyFontSize() {
@@ -578,7 +581,7 @@ function applyFontSize() {
 
 function showFatal(host, { title, message, details, actions }) {
   if (!host) return;
-  document.title = '오류 · 논문 리더';
+  document.title = '오류 · 갈피';
   host.replaceChildren(messageScreen({
     title, message, details,
     actions: actions || [{ label: '다시 시도', kind: 'primary', icon: 'refresh', onClick: () => location.reload() }],

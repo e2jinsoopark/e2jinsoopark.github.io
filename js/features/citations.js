@@ -1,16 +1,34 @@
 // Link previews on PDF hover: a citation that lands inside a bibliography entry shows a reference
-// card (with lazy Semantic Scholar lookup); any other internal link shows a rendered preview of
-// the target area; external links show their address.
+// card (keyless lookup: DOI or Crossref -> Europe PMC / PubMed for abstract and citation count,
+// Semantic Scholar only if nothing matched; automatic once the user has agreed, see scholarly.js);
+// any other internal link shows a rendered preview of the target area; external links show their address.
 import { clamp, el } from '../core/util.js';
 import { popover, spinner } from '../ui/components.js';
+import { abstractNodes, linkBadges } from './paper-bits.js';
+import { ensureRelatedStyles } from './related-styles.js';
+import { formatAuthors } from './s2.js';
+import { CONSENT_TEXT, grantConsent, hasConsent, lookupReference, primaryUrl } from './scholarly.js';
 import {
   anySignal, button, clip, errorMessage, externalLink, isAbortError, safeHref, toRect,
 } from './shared.js';
-import { formatAuthors, lookupReference } from './s2.js';
 
 const SHOW_DELAY_MS = 140;
 const HIDE_GRACE_MS = 280;
 const PREVIEW_CSS_WIDTH = 440;
+const ABSTRACT_MAX = 900;
+
+/** Cut a multi-line text to about `max` characters, keeping its line breaks. */
+function clipLines(text, max) {
+  const lines = String(text ?? '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const out = [];
+  let left = max;
+  for (const line of lines) {
+    if (left <= 0) break;
+    out.push(line.length > left ? `${line.slice(0, Math.max(0, left - 1)).trimEnd()}…` : line);
+    left -= line.length;
+  }
+  return out.join('\n');
+}
 
 /**
  * Link target point in PDF units with top-left origin. The viewer supplies `target.pt` (crop-box and
@@ -71,6 +89,9 @@ export function previewRegion(doc, target) {
 export function installCitations(ctx, session, { signal }) {
   const { viewer, doc } = ctx;
   if (!viewer) return;
+  ensureRelatedStyles();
+  /** Reference index -> AbortController of a lookup still running (aborted when its card closes). */
+  const running = new Map();
   let showTimer = null;
   let hideTimer = null;
   /** @type {{ key: string, pop: any, abort: AbortController } | null} */
@@ -148,50 +169,88 @@ export function installCitations(ctx, session, { signal }) {
   function referenceCard(ref, target, abortSignal) {
     const label = ref.n != null ? `참고문헌 ${ref.n}` : `참고문헌 ${ref.index + 1}`;
     const result = el('div', { class: 'pf-cite__s2' });
-    const searchBtn = button('Semantic Scholar 검색', { small: true, attrs: { 'data-action': 's2-search' } });
-    searchBtn.addEventListener('click', () => lookup(ref, result, searchBtn, abortSignal));
+    const lookupBtn = button('논문 정보 찾기', { small: true, attrs: { 'data-action': 'ref-lookup' } });
+    lookupBtn.addEventListener('click', () => {
+      if (hasConsent()) lookup(ref, result, lookupBtn, abortSignal);
+      else askConsent(ref, result, lookupBtn, abortSignal);
+    });
     const node = el('div', { class: 'pf-cite pf-cite--ref' },
       el('div', { class: 'pf-pop__head' }, label, el('span', { class: 'pf-muted' }, ` · ${ref.page}쪽`)),
       el('p', { class: 'pf-cite__text' }, clip(ref.text, 700)),
       result,
-      el('div', { class: 'pf-pop__foot' }, searchBtn,
+      el('div', { class: 'pf-pop__foot' }, lookupBtn,
         button('참고문헌으로 이동', { small: true, onClick: () => goTo(target), attrs: { 'data-action': 'goto' } })));
-    // A lookup done earlier for this entry is shown immediately.
-    const cached = session.refLookups.get(ref.index);
-    if (cached) lookup(ref, result, searchBtn, abortSignal);
+    // Earlier lookups are shown at once; after the one-time consent, entries are looked up on hover.
+    if (session.refLookups.has(ref.index) || hasConsent()) lookup(ref, result, lookupBtn, abortSignal);
     return node;
+  }
+
+  /** Nothing is sent before the once-per-browser consent (shared with the 관련 논문 panel). */
+  function askConsent(ref, box, btn, abortSignal) {
+    btn.hidden = true;
+    box.replaceChildren(el('div', { class: 'pf-cite__consent' },
+      el('p', { class: 'pf-muted pf-small' }, CONSENT_TEXT),
+      el('div', { class: 'pf-row' }, button('동의하고 찾기', {
+        kind: 'primary', small: true, attrs: { 'data-action': 'scholar-consent' },
+        onClick: () => { grantConsent(); btn.hidden = false; lookup(ref, box, btn, abortSignal); },
+      }))));
+    current?.pop.update?.(current.rect);
   }
 
   async function lookup(ref, box, btn, abortSignal) {
     btn.disabled = true;
-    box.replaceChildren(el('div', { class: 'pf-loading' }, spinner(14), el('span', {}, '찾는 중…')));
+    box.replaceChildren(el('div', { class: 'pf-loading' }, spinner(14), el('span', {}, 'PubMed·Crossref에서 찾는 중…')));
     let promise = session.refLookups.get(ref.index);
     if (!promise) {
-      const apiKey = ctx.settings.get().semanticScholar?.apiKey || '';
-      // Not tied to the popover: a lookup survives the card closing and is reused next hover.
-      promise = lookupReference(ref.text, { apiKey, signal: ctx.signal });
+      const ctl = new AbortController();
+      const s2ApiKey = ctx.settings?.get?.()?.semanticScholar?.apiKey || '';
+      promise = lookupReference(ref.text, { signal: anySignal(ctl.signal, ctx.signal), s2ApiKey });
       session.refLookups.set(ref.index, promise);
-      promise.catch(() => session.refLookups.delete(ref.index));
+      running.set(ref.index, ctl);
+      const settle = () => { if (running.get(ref.index) === ctl) running.delete(ref.index); };
+      promise.then(settle, () => {
+        settle();
+        if (session.refLookups.get(ref.index) === promise) session.refLookups.delete(ref.index);
+      });
     }
+    // A lookup still running when its card closes is dropped (sweeping across many citations must not
+    // queue requests); a finished one stays cached for the next hover.
+    abortSignal.addEventListener('abort', () => {
+      const ctl = running.get(ref.index);
+      if (!ctl) return;
+      running.delete(ref.index);
+      if (session.refLookups.get(ref.index) === promise) session.refLookups.delete(ref.index);
+      ctl.abort();
+    }, { once: true });
     try {
       const paper = await promise;
       if (abortSignal.aborted) return;
-      box.replaceChildren(paper ? paperSummary(paper) : el('p', { class: 'pf-muted pf-small' }, 'Semantic Scholar에서 찾지 못했습니다.'));
+      box.replaceChildren(paper ? paperSummary(paper)
+        : el('p', { class: 'pf-muted pf-small' }, 'PubMed·Europe PMC·Crossref·Semantic Scholar에서 찾지 못했습니다.'));
+      btn.hidden = true;
       current?.pop.update?.(current.rect);
     } catch (err) {
       if (isAbortError(err) || abortSignal.aborted) return;
       box.replaceChildren(el('p', { class: 'pf-error' }, errorMessage(err, '검색하지 못했습니다.')));
+      btn.textContent = '다시 찾기';
       btn.disabled = false;
+      current?.pop.update?.(current.rect);
     }
   }
 
   function paperSummary(p) {
-    const meta = [formatAuthors(p.authors), p.year, p.venue, p.citationCount != null ? `인용 ${p.citationCount}회` : '']
-      .filter(Boolean).join(' · ');
+    const cites = p.citationCount != null
+      ? `인용 ${p.citationCount}회${p.citationSource && p.citationSource !== 'Europe PMC' ? ` (${p.citationSource})` : ''}`
+      : '';
+    const venue = [p.journal || p.venue, p.year].filter(Boolean).join(' · ');
+    const meta = [formatAuthors(p.authors), venue, cites].filter(Boolean).join(' · ');
+    const abs = clipLines(p.abstract, ABSTRACT_MAX);
     return el('div', { class: 'pf-cite__paper' },
-      el('div', { class: 'pf-cite__title' }, externalLink(p.url, p.title || '(제목 없음)')),
+      el('div', { class: 'pf-cite__title' }, externalLink(primaryUrl(p), p.title || '(제목 없음)')),
       meta ? el('div', { class: 'pf-muted pf-small' }, meta) : null,
-      p.abstract ? el('p', { class: 'pf-cite__abs' }, clip(p.abstract, 600)) : el('p', { class: 'pf-muted pf-small' }, '초록 없음'));
+      abs ? el('div', { class: 'pf-cite__abs' }, abstractNodes(abs)) : el('p', { class: 'pf-muted pf-small' }, '초록 없음'),
+      linkBadges(p, 'pf-cite__links'),
+      p.sources?.length ? el('div', { class: 'pf-cite__source' }, `출처: ${p.sources.join(' → ')}`) : null);
   }
 
   function previewCard(target, abortSignal, anchorRect) {

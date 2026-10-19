@@ -1,0 +1,23 @@
+{
+ "header": {
+  "type": "esearch",
+  "version": "0.3"
+ },
+ "esearchresult": {
+  "count": "0",
+  "retmax": "0",
+  "retstart": "0",
+  "idlist": [],
+  "translationset": [],
+  "querytranslation": "\"Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit\"[ti]",
+  "warninglist": {
+   "phrasesignored": [],
+   "quotedphrasesnotfound": [
+    "\"Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit\"[ti]"
+   ],
+   "outputmessages": [
+    "No items found."
+   ]
+  }
+ }
+}

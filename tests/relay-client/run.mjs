@@ -20,7 +20,7 @@ const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/relay-client';
 const FIXTURES = 'C:/Users/dindoo/Projects/pr-fixtures';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SETTINGS_KEY = 'pr.settings.v1';
-const STRICT_CONNECT_SRC = ["'self'", 'https://api.anthropic.com', 'https://api.openai.com', 'https://generativelanguage.googleapis.com', 'https://api.github.com', 'https://api.semanticscholar.org'];
+const STRICT_CONNECT_SRC = ["'self'", 'https://api.anthropic.com', 'https://api.openai.com', 'https://generativelanguage.googleapis.com', 'https://api.github.com', 'https://api.semanticscholar.org', 'https://eutils.ncbi.nlm.nih.gov', 'https://www.ebi.ac.uk', 'https://api.crossref.org'];
 const HAIKU_LABEL = 'Claude Haiku 5.5 (빠름·저렴)';
 
 mkdirSync(OUT, { recursive: true });

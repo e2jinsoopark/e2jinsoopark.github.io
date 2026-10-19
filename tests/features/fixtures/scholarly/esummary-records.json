@@ -1,0 +1,5654 @@
+{
+ "15082703": {
+  "uid": "15082703",
+  "pubdate": "2004 Apr 14",
+  "epubdate": "",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Truman B",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Speroff T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gordon SM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Harrell FE Jr",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Inouye SK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bernard GR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dittus RS",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Dittus RS",
+  "title": "Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit.",
+  "sorttitle": "delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit",
+  "volume": "291",
+  "issue": "14",
+  "pages": "1753-62",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "1538-3598",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, Non-P.H.S.",
+   "Research Support, U.S. Gov't, P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "15082703"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.291.14.1753"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "291/14/1753"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2004/04/15 05:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2004/04/17 05:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2004/04/15 05:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "JAMA. 2004 Jul 14;292(2):168; author reply 168-9. doi: 10.1001/jama.292.2.168-a.",
+    "reftype": "Comment in",
+    "pmid": 15249562,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2004/04/14 00:00",
+  "sortfirstauthor": "Ely EW",
+  "vernaculartitle": ""
+ },
+ "19446324": {
+  "uid": "19446324",
+  "pubdate": "2009 May 30",
+  "epubdate": "2009 May 14",
+  "source": "Lancet",
+  "authors": [
+   {
+    "name": "Schweickert WD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman MC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman AS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Nigos C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pawlik AJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Esbrook CL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Spears L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Miller M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Franczyk M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Deprizio D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Schmidt GA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bowman A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Barr R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McCallister KE",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hall JB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kress JP",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Kress JP",
+  "title": "Early physical and occupational therapy in mechanically ventilated, critically ill patients: a randomised controlled trial.",
+  "sorttitle": "early physical and occupational therapy in mechanically ventilated critically ill patients a randomised controlled trial",
+  "volume": "373",
+  "issue": "9678",
+  "pages": "1874-82",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "2985213R",
+  "issn": "0140-6736",
+  "essn": "1474-547X",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "19446324"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC9906655"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC9906655;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S0140-6736(09)60658-9"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0140-6736(09)60658-9"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2009/05/19 09:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2009/05/19 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2009/06/13 09:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2009/05/14 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet. 2009 May 30;373(9678):1824-6. doi: 10.1016/S0140-6736(09)60866-7.",
+    "reftype": "Comment in",
+    "pmid": 19446327,
+    "note": ""
+   },
+   {
+    "refsource": "Aust J Physiother. 2009;55(3):210. doi: 10.1016/s0004-9514(09)70086-8.",
+    "reftype": "Comment in",
+    "pmid": 19736681,
+    "note": ""
+   },
+   {
+    "refsource": "Aust Occup Ther J. 2009 Dec;56(6):438-9. doi: 10.1111/j.1440-1630.2009.00823.x.",
+    "reftype": "Comment in",
+    "pmid": 20854556,
+    "note": ""
+   },
+   {
+    "refsource": "Crit Care. 2010;14(5):321. doi: 10.1186/cc9262.",
+    "reftype": "Comment in",
+    "pmid": 20880413,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 53,
+  "fulljournalname": "Lancet (London, England)",
+  "elocationid": "doi: 10.1016/S0140-6736(09)60658-9",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2009/05/30 00:00",
+  "sortfirstauthor": "Schweickert WD",
+  "vernaculartitle": ""
+ },
+ "16137350": {
+  "uid": "16137350",
+  "pubdate": "2005 Aug",
+  "epubdate": "2005 Jun 1",
+  "source": "Crit Care",
+  "authors": [
+   {
+    "name": "Thomason JW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Peterson JF",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pun BT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jackson JC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Ely EW",
+  "title": "Intensive care unit delirium is an independent predictor of longer hospital stay: a prospective analysis of 261 non-ventilated patients.",
+  "sorttitle": "intensive care unit delirium is an independent predictor of longer hospital stay a prospective analysis of 261 non ventilated patients",
+  "volume": "9",
+  "issue": "4",
+  "pages": "R375-81",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "9801902",
+  "issn": "1364-8535",
+  "essn": "1466-609X",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "16137350"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC1269454"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC1269454;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1186/cc3729"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "cc3729"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2005/04/08 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2005/05/04 00:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2005/09/03 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2006/09/27 09:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2005/09/03 09:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2005/06/01 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Crit Care. 2005 Aug;9(4):335-6. doi: 10.1186/cc3755.",
+    "reftype": "Comment in",
+    "pmid": 16137377,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 46,
+  "fulljournalname": "Critical care (London, England)",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2005/08/01 00:00",
+  "sortfirstauthor": "Thomason JW",
+  "vernaculartitle": ""
+ },
+ "24602999": {
+  "uid": "24602999",
+  "pubdate": "2014 Jun",
+  "epubdate": "2014 Feb 3",
+  "source": "J Crit Care",
+  "authors": [
+   {
+    "name": "Tsuruta R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Oda Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Nunomiya S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hashimoto S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Nakagawa T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Oida Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Miyazaki D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Yabe S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Japanese Epidemiology of Delirium in ICUs (JEDI) Study Investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Yabe S",
+  "title": "Delirium and coma evaluated in mechanically ventilated patients in the intensive care unit in Japan: a multi-institutional prospective observational study.",
+  "sorttitle": "delirium and coma evaluated in mechanically ventilated patients in the intensive care unit in japan a multi institutional prospective observational study",
+  "volume": "29",
+  "issue": "3",
+  "pages": "472.e1-5",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "8610642",
+  "issn": "0883-9441",
+  "essn": "1557-8615",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Observational Study",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "24602999"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/j.jcrc.2014.01.021"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0883-9441(14)00049-5"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2013/08/20 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2014/01/20 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2014/01/26 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2014/03/08 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2014/03/08 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2015/01/08 06:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Journal of critical care",
+  "elocationid": "doi: 10.1016/j.jcrc.2014.01.021",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2014/06/01 00:00",
+  "sortfirstauthor": "Tsuruta R",
+  "vernaculartitle": ""
+ },
+ "18784563": {
+  "uid": "18784563",
+  "pubdate": "2008 Sep",
+  "epubdate": "",
+  "source": "J Trauma",
+  "authors": [
+   {
+    "name": "Robinson BR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Mueller EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Henson K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Branson RD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Barsoum S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Tsuei BJ",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Tsuei BJ",
+  "title": "An analgesia-delirium-sedation protocol for critically ill trauma patients reduces ventilator days and hospital length of stay.",
+  "sorttitle": "analgesia delirium sedation protocol for critically ill trauma patients reduces ventilator days and hospital length of stay",
+  "volume": "65",
+  "issue": "3",
+  "pages": "517-26",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0376373",
+  "issn": "0022-5282",
+  "essn": "1529-8809",
+  "pubtype": [
+   "Journal Article"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "18784563"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/TA.0b013e318181b8f6"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "00005373-200809000-00003"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2008/09/12 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2008/10/04 09:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2008/09/12 09:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "The Journal of trauma",
+  "elocationid": "doi: 10.1097/TA.0b013e318181b8f6",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2008/09/01 00:00",
+  "sortfirstauthor": "Robinson BR",
+  "vernaculartitle": ""
+ },
+ "19188334": {
+  "uid": "19188334",
+  "pubdate": "2009 Feb 4",
+  "epubdate": "2009 Feb 2",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Riker RR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shehabi Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bokesch PM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ceraso D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Wisemandle W",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Koura F",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Whitten P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Margolis BD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Byrne DW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Rocha MG",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "SEDCOM (Safety and Efficacy of Dexmedetomidine Compared With Midazolam) Study Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Rocha MG",
+  "title": "Dexmedetomidine vs midazolam for sedation of critically ill patients: a randomized trial.",
+  "sorttitle": "dexmedetomidine vs midazolam for sedation of critically ill patients a randomized trial",
+  "volume": "301",
+  "issue": "5",
+  "pages": "489-99",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "1538-3598",
+  "pubtype": [
+   "Comparative Study",
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "19188334"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.2009.56"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "2009.56"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2009/02/04 09:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2009/02/04 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2009/02/10 09:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "JAMA. 2009 Feb 4;301(5):542-4. doi: 10.1001/jama.2009.24.",
+    "reftype": "Comment in",
+    "pmid": 19188333,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2009 Jun 17;301(23):2439-40; author reply 2441-2. doi: 10.1001/jama.2009.837.",
+    "reftype": "Comment in",
+    "pmid": 19531776,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2009 Jun 17;301(23):2439; author reply 2441-2. doi: 10.1001/jama.2009.836.",
+    "reftype": "Comment in",
+    "pmid": 19531777,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2009 Jun 17;301(23):2440-1; author reply 2441-2. doi: 10.1001/jama.2009.839.",
+    "reftype": "Comment in",
+    "pmid": 19531778,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2009 Jun 17;301(23):2440; author reply 2441-2. doi: 10.1001/jama.2009.838.",
+    "reftype": "Comment in",
+    "pmid": 19531779,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "doi: 10.1001/jama.2009.56",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2009/02/04 00:00",
+  "sortfirstauthor": "Riker RR",
+  "vernaculartitle": ""
+ },
+ "18073360": {
+  "uid": "18073360",
+  "pubdate": "2007 Dec 12",
+  "epubdate": "",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Pandharipande PP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pun BT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Herr DL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Maze M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Girard TD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Miller RR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani AK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Thompson JL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jackson JC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Deppen SA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Stiles RA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dittus RS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bernard GR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Ely EW",
+  "title": "Effect of sedation with dexmedetomidine vs lorazepam on acute brain dysfunction in mechanically ventilated patients: the MENDS randomized controlled trial.",
+  "sorttitle": "effect of sedation with dexmedetomidine vs lorazepam on acute brain dysfunction in mechanically ventilated patients the mends randomized controlled trial",
+  "volume": "298",
+  "issue": "22",
+  "pages": "2644-53",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "1538-3598",
+  "pubtype": [
+   "Comparative Study",
+   "Journal Article",
+   "Randomized Controlled Trial",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, Non-P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "18073360"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.298.22.2644"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "298/22/2644"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2007/12/13 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2007/12/15 09:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2007/12/13 09:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "JAMA. 2008 Apr 2;299(13):1540-1; author reply 1542. doi: 10.1001/jama.299.13.1540-b.",
+    "reftype": "Comment in",
+    "pmid": 18387926,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2008 Apr 2;299(13):1540; author reply 1542. doi: 10.1001/jama.299.13.1540-a.",
+    "reftype": "Comment in",
+    "pmid": 18387927,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2008 Apr 2;299(13):1541-2; author reply 1542. doi: 10.1001/jama.299.13.1541.",
+    "reftype": "Comment in",
+    "pmid": 18387928,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2007/12/12 00:00",
+  "sortfirstauthor": "Pandharipande PP",
+  "vernaculartitle": ""
+ },
+ "25493968": {
+  "uid": "25493968",
+  "pubdate": "2015 Mar",
+  "epubdate": "",
+  "source": "Crit Care Med",
+  "authors": [
+   {
+    "name": "Mehta S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Cook D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Devlin JW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Skrobik Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Meade M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Fergusson D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Herridge M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Steinberg M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Granton J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ferguson N",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Tanios M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dodek P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Fowler R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Burns K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jacka M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Olafson K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Mallick R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Reynolds S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Keenan S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Burry L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "SLEAP Investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   },
+   {
+    "name": "Canadian Critical Care Trials Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Burry L",
+  "title": "Prevalence, risk factors, and outcomes of delirium in mechanically ventilated adults.",
+  "sorttitle": "prevalence risk factors and outcomes of delirium in mechanically ventilated adults",
+  "volume": "43",
+  "issue": "3",
+  "pages": "557-66",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0355501",
+  "issn": "0090-3493",
+  "essn": "1530-0293",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "25493968"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/CCM.0000000000000727"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2014/12/11 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2014/12/11 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2015/04/22 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Crit Care Med. 2015 Mar;43(3):703-5. doi: 10.1097/CCM.0000000000000803.",
+    "reftype": "Comment in",
+    "pmid": 25700056,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Critical care medicine",
+  "elocationid": "doi: 10.1097/CCM.0000000000000727",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2015/03/01 00:00",
+  "sortfirstauthor": "Mehta S",
+  "vernaculartitle": ""
+ },
+ "22859526": {
+  "uid": "22859526",
+  "pubdate": "2012 Oct 15",
+  "epubdate": "2012 Aug 2",
+  "source": "Am J Respir Crit Care Med",
+  "authors": [
+   {
+    "name": "Shehabi Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bellomo R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Reade MC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bailey M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bass F",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Howe B",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McArthur C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Seppelt IM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Webb S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Weisbrodt L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Sedation Practice in Intensive Care Evaluation (SPICE) Study Investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   },
+   {
+    "name": "ANZICS Clinical Trials Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Weisbrodt L",
+  "title": "Early intensive care sedation predicts long-term mortality in ventilated critically ill patients.",
+  "sorttitle": "early intensive care sedation predicts long term mortality in ventilated critically ill patients",
+  "volume": "186",
+  "issue": "8",
+  "pages": "724-31",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "9421642",
+  "issn": "1073-449X",
+  "essn": "1535-4970",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "22859526"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1164/rccm.201203-0522OC"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "rccm.201203-0522OC"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2012/08/04 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2012/08/04 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2012/12/27 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Am J Respir Crit Care Med. 2012 Oct 15;186(8):699. doi: 10.1164/rccm.201208-1387ED.",
+    "reftype": "Comment in",
+    "pmid": 23071182,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2013 Apr 15;187(8):892-3. doi: 10.1164/rccm.201210-1817LE.",
+    "reftype": "Comment in",
+    "pmid": 23586386,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2013 Apr 15;187(8):893. doi: 10.1164/rccm.201211-2065LE.",
+    "reftype": "Comment in",
+    "pmid": 23586388,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "American journal of respiratory and critical care medicine",
+  "elocationid": "doi: 10.1164/rccm.201203-0522OC",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2012/10/15 00:00",
+  "sortfirstauthor": "Shehabi Y",
+  "vernaculartitle": ""
+ },
+ "20375300": {
+  "uid": "20375300",
+  "pubdate": "2010 Aug",
+  "epubdate": "2010 Apr 7",
+  "source": "Anesth Analg",
+  "authors": [
+   {
+    "name": "Skrobik Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ahern S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Leblanc M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Marquis F",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Awissi DK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kavanagh BP",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Kavanagh BP",
+  "title": "Protocolized intensive care unit management of analgesia, sedation, and delirium improves analgesia and subsyndromal delirium rates.",
+  "sorttitle": "protocolized intensive care unit management of analgesia sedation and delirium improves analgesia and subsyndromal delirium rates",
+  "volume": "111",
+  "issue": "2",
+  "pages": "451-63",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "1310650",
+  "issn": "0003-2999",
+  "essn": "1526-7598",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "20375300"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1213/ANE.0b013e3181d7e1b8"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "ANE.0b013e3181d7e1b8"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2010/04/09 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2010/04/09 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2010/08/27 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Anesth Analg. 2012 Jul;115(1):169",
+    "reftype": "Erratum in",
+    "pmid": "",
+    "note": ""
+   },
+   {
+    "refsource": "Anesth Analg. 2010 Aug;111(2):266-7. doi: 10.1213/ANE.0b013e3181e4d9b0.",
+    "reftype": "Comment in",
+    "pmid": 20664089,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Anesthesia and analgesia",
+  "elocationid": "doi: 10.1213/ANE.0b013e3181d7e1b8",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2010/08/01 00:00",
+  "sortfirstauthor": "Skrobik Y",
+  "vernaculartitle": ""
+ },
+ "25072756": {
+  "uid": "25072756",
+  "pubdate": "2014 Oct",
+  "epubdate": "",
+  "source": "Crit Care Med",
+  "authors": [
+   {
+    "name": "Andresen JM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Girard TD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pandharipande PP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Davidson MA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Watson PL",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Watson PL",
+  "title": "Burst suppression on processed electroencephalography as a predictor of postcoma delirium in mechanically ventilated ICU patients.",
+  "sorttitle": "burst suppression on processed electroencephalography as a predictor of postcoma delirium in mechanically ventilated icu patients",
+  "volume": "42",
+  "issue": "10",
+  "pages": "2244-51",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0355501",
+  "issn": "0090-3493",
+  "essn": "1530-0293",
+  "pubtype": [
+   "Journal Article",
+   "Observational Study",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, Non-P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "25072756"
+   },
+   {
+    "idtype": "mid",
+    "idtypen": 8,
+    "value": "NIHMS609453"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC4493889"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC4493889;manuscript-id: NIHMS609453;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/CCM.0000000000000522"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2014/07/30 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2014/07/30 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2014/12/15 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2015/10/01 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 64,
+  "fulljournalname": "Critical care medicine",
+  "elocationid": "doi: 10.1097/CCM.0000000000000522",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2014/10/01 00:00",
+  "sortfirstauthor": "Andresen JM",
+  "vernaculartitle": ""
+ },
+ "11730446": {
+  "uid": "11730446",
+  "pubdate": "2001 Dec 5",
+  "epubdate": "",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Inouye SK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bernard GR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gordon S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Francis J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "May L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Truman B",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Speroff T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gautam S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Margolin R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hart RP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dittus R",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Dittus R",
+  "title": "Delirium in mechanically ventilated patients: validity and reliability of the confusion assessment method for the intensive care unit (CAM-ICU).",
+  "sorttitle": "delirium in mechanically ventilated patients validity and reliability of the confusion assessment method for the intensive care unit cam icu",
+  "volume": "286",
+  "issue": "21",
+  "pages": "2703-10",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, P.H.S.",
+   "Validation Study"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "11730446"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.286.21.2703"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "jce10051"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2001/12/26 10:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2002/01/05 10:01"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2001/12/26 10:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2001/12/05 00:00",
+  "sortfirstauthor": "Ely EW",
+  "vernaculartitle": ""
+ },
+ "22819154": {
+  "uid": "22819154",
+  "pubdate": "2012 Nov-Dec",
+  "epubdate": "2012 Jul 20",
+  "source": "Gen Hosp Psychiatry",
+  "authors": [
+   {
+    "name": "Sharma A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Malhotra S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Grover S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jindal SK",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Jindal SK",
+  "title": "Incidence, prevalence, risk factor and outcome of delirium in intensive care unit: a study from India.",
+  "sorttitle": "incidence prevalence risk factor and outcome of delirium in intensive care unit a study from india",
+  "volume": "34",
+  "issue": "6",
+  "pages": "639-46",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7905527",
+  "issn": "0163-8343",
+  "essn": "1873-7714",
+  "pubtype": [
+   "Journal Article"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "22819154"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/j.genhosppsych.2012.06.009"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0163-8343(12)00200-9"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2012/02/06 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2012/06/13 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2012/06/14 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2012/07/24 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2012/07/24 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2013/05/04 06:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "General hospital psychiatry",
+  "elocationid": "doi: 10.1016/j.genhosppsych.2012.06.009",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2012/11/01 00:00",
+  "sortfirstauthor": "Sharma A",
+  "vernaculartitle": ""
+ },
+ "36205994": {
+  "uid": "36205994",
+  "pubdate": "2022 Oct 3",
+  "epubdate": "2022 Oct 3",
+  "source": "JAMA Netw Open",
+  "authors": [
+   {
+    "name": "Li HC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Yeh TY",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Wei YC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ku SC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Xu YJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Chen CC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Inouye S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Boehm LM",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Boehm LM",
+  "title": "Association of Incident Delirium With Short-term Mortality in Adults With Critical Illness Receiving Mechanical Ventilation.",
+  "sorttitle": "association of incident delirium with short term mortality in adults with critical illness receiving mechanical ventilation",
+  "volume": "5",
+  "issue": "10",
+  "pages": "e2235339",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101729235",
+  "issn": "",
+  "essn": "2574-3805",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, N.I.H., Extramural"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "3",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "36205994"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC9547314"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC9547314;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jamanetworkopen.2022.35339"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "2797177"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2022/10/07 11:33"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2022/10/08 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2022/10/12 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2022/10/07 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 38,
+  "fulljournalname": "JAMA network open",
+  "elocationid": "doi: 10.1001/jamanetworkopen.2022.35339",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2022/10/03 00:00",
+  "sortfirstauthor": "Li HC",
+  "vernaculartitle": ""
+ },
+ "32068366": {
+  "uid": "32068366",
+  "pubdate": "2020 Mar 19",
+  "epubdate": "2020 Feb 16",
+  "source": "N Engl J Med",
+  "authors": [
+   {
+    "name": "Olsen HT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Nedergaard HK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Strøm T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Oxlund J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Wian KA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ytrebø LM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kroken BA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Chew M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Korkmaz S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Lauridsen JT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Toft P",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Toft P",
+  "title": "Nonsedation or Light Sedation in Critically Ill, Mechanically Ventilated Patients.",
+  "sorttitle": "nonsedation or light sedation in critically ill mechanically ventilated patients",
+  "volume": "382",
+  "issue": "12",
+  "pages": "1103-1111",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0255562",
+  "issn": "0028-4793",
+  "essn": "1533-4406",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "32068366"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1056/NEJMoa1906759"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2020/02/19 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2020/03/26 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2020/02/19 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "N Engl J Med. 2020 Mar 19;382(12):1162-1164. doi: 10.1056/NEJMe2001025.",
+    "reftype": "Comment in",
+    "pmid": 32068367,
+    "note": ""
+   },
+   {
+    "refsource": "N Engl J Med. 2020 Jun 25;382(26):e107. doi: 10.1056/NEJMc2011055.",
+    "reftype": "Comment in",
+    "pmid": 32579832,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "The New England journal of medicine",
+  "elocationid": "doi: 10.1056/NEJMoa1906759",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2020/03/19 00:00",
+  "sortfirstauthor": "Olsen HT",
+  "vernaculartitle": ""
+ },
+ "34855749": {
+  "uid": "34855749",
+  "pubdate": "2021",
+  "epubdate": "2021 Dec 2",
+  "source": "PLoS One",
+  "authors": [
+   {
+    "name": "Paixao L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Sun H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hogan J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hartnack K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Westmeijer M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Neelagiri A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Zhou DW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McClain LM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kimchi EY",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Purdon PL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Akeju O",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Westover MB",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Westover MB",
+  "title": "ICU delirium burden predicts functional neurologic outcomes.",
+  "sorttitle": "icu delirium burden predicts functional neurologic outcomes",
+  "volume": "16",
+  "issue": "12",
+  "pages": "e0259840",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101285081",
+  "issn": "",
+  "essn": "1932-6203",
+  "pubtype": [
+   "Journal Article",
+   "Observational Study",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "258",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "34855749"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC8638853"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC8638853;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1371/journal.pone.0259840"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "PONE-D-21-16905"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2021/05/22 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2021/10/28 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2021/12/02 17:26"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2021/12/03 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2022/01/13 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2021/12/02 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 70,
+  "fulljournalname": "PloS one",
+  "elocationid": "doi: 10.1371/journal.pone.0259840",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2021/12/02 00:00",
+  "sortfirstauthor": "Paixao L",
+  "vernaculartitle": ""
+ },
+ "18090383": {
+  "uid": "18090383",
+  "pubdate": "2008 Jan",
+  "epubdate": "",
+  "source": "Crit Care Med",
+  "authors": [
+   {
+    "name": "Moran JL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bristow P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Solomon PJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "George C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hart GK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Australian and New Zealand Intensive Care Society Database Management Committee (ADMC)",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Hart GK",
+  "title": "Mortality and length-of-stay outcomes, 1993-2003, in the binational Australian and New Zealand intensive care adult patient database.",
+  "sorttitle": "mortality and length of stay outcomes 1993 2003 in the binational australian and new zealand intensive care adult patient database",
+  "volume": "36",
+  "issue": "1",
+  "pages": "46-61",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0355501",
+  "issn": "0090-3493",
+  "essn": "1530-0293",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "18090383"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/01.CCM.0000295313.08084.58"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2007/12/20 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2008/02/13 09:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2007/12/20 09:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Crit Care Med. 2008 Jan;36(1):336-7. doi: 10.1097/01.CCM.0000295460.91315.00.",
+    "reftype": "Comment in",
+    "pmid": 18158444,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Critical care medicine",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2008/01/01 00:00",
+  "sortfirstauthor": "Moran JL",
+  "vernaculartitle": ""
+ },
+ "21576622": {
+  "uid": "21576622",
+  "pubdate": "2011 Jun 1",
+  "epubdate": "2011 May 16",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Lilly CM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Cody S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Zhao H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Landry K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Baker SP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McIlwaine J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Chandler MW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Irwin RS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "University of Massachusetts Memorial Critical Care Operations Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Irwin RS",
+  "title": "Hospital mortality, length of stay, and preventable complications among critically ill patients before and after tele-ICU reengineering of critical care processes.",
+  "sorttitle": "hospital mortality length of stay and preventable complications among critically ill patients before and after tele icu reengineering of critical care processes",
+  "volume": "305",
+  "issue": "21",
+  "pages": "2175-83",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "1538-3598",
+  "pubtype": [
+   "Evaluation Study",
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "21576622"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.2011.697"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "jama.2011.697"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2011/05/18 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2011/05/18 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2011/06/04 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "JAMA. 2011 Jun 1;305(21):2227-8. doi: 10.1001/jama.2011.716.",
+    "reftype": "Comment in",
+    "pmid": 21576623,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2011 Oct 5;306(13):1441; author reply 1441-2. doi: 10.1001/jama.2011.1400.",
+    "reftype": "Comment in",
+    "pmid": 21972302,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2012 Mar 1;185(5):584-5. doi: 10.1164/rccm.201108-1571RR.",
+    "reftype": "Comment in",
+    "pmid": 22383569,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "doi: 10.1001/jama.2011.697",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2011/06/01 00:00",
+  "sortfirstauthor": "Lilly CM",
+  "vernaculartitle": ""
+ },
+ "25855901": {
+  "uid": "25855901",
+  "pubdate": "2015 Aug",
+  "epubdate": "",
+  "source": "Crit Care Med",
+  "authors": [
+   {
+    "name": "Wei X",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Day AG",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ouellette-Kuntz H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Heyland DK",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Heyland DK",
+  "title": "The Association Between Nutritional Adequacy and Long-Term Outcomes in Critically Ill Patients Requiring Prolonged Mechanical Ventilation: A Multicenter Cohort Study.",
+  "sorttitle": "association between nutritional adequacy and long term outcomes in critically ill patients requiring prolonged mechanical ventilation a multicenter cohort study",
+  "volume": "43",
+  "issue": "8",
+  "pages": "1569-79",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0355501",
+  "issn": "0090-3493",
+  "essn": "1530-0293",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "25855901"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/CCM.0000000000001000"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2015/04/10 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2015/04/10 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2015/10/02 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Crit Care Med. 2015 Aug;43(8):1769-72. doi: 10.1097/CCM.0000000000001098.",
+    "reftype": "Comment in",
+    "pmid": 26181114,
+    "note": ""
+   },
+   {
+    "refsource": "Crit Care Med. 2015 Dec;43(12):e598. doi: 10.1097/CCM.0000000000001345.",
+    "reftype": "Comment in",
+    "pmid": 26575685,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Critical care medicine",
+  "elocationid": "doi: 10.1097/CCM.0000000000001000",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2015/08/01 00:00",
+  "sortfirstauthor": "Wei X",
+  "vernaculartitle": ""
+ },
+ "33428871": {
+  "uid": "33428871",
+  "pubdate": "2021 Mar",
+  "epubdate": "2021 Jan 8",
+  "source": "Lancet Respir Med",
+  "authors": [
+   {
+    "name": "Pun BT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Badenes R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Heras La Calle G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Orun OM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Chen W",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Raman R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Simpson BK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Wilson-Linville S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hinojal Olmedillo B",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Vallejo de la Cueva A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "van der Jagt M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Navarro Casado R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Leal Sanz P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Orhun G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ferrer Gómez C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Núñez Vázquez K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Piñeiro Otero P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Taccone FS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gallego Curto E",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Caricato A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Woien H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Lacave G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "O'Neal HR Jr",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Peterson SJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Brummel NE",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Girard TD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pandharipande PP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "COVID-19 Intensive Care International Study Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Pandharipande PP",
+  "title": "Prevalence and risk factors for delirium in critically ill patients with COVID-19 (COVID-D): a multicentre cohort study.",
+  "sorttitle": "prevalence and risk factors for delirium in critically ill patients with covid 19 covid d a multicentre cohort study",
+  "volume": "9",
+  "issue": "3",
+  "pages": "239-250",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101605555",
+  "issn": "2213-2600",
+  "essn": "2213-2619",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, U.S. Gov't, Non-P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "33428871"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC7832119"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC7832119;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S2213-2600(20)30552-X"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S2213-2600(20)30552-X"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2020/10/01 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2020/11/14 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2020/11/17 00:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2021/01/12 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2021/03/20 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2021/01/11 20:09"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2021/01/08 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet Respir Med. 2021 Mar;9(3):218-219. doi: 10.1016/S2213-2600(20)30570-1.",
+    "reftype": "Comment in",
+    "pmid": 33428873,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2021 Mar;9(3):e29. doi: 10.1016/S2213-2600(21)00047-3.",
+    "reftype": "Erratum in",
+    "pmid": 33515501,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 48,
+  "fulljournalname": "The Lancet. Respiratory medicine",
+  "elocationid": "doi: 10.1016/S2213-2600(20)30552-X",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2021/03/01 00:00",
+  "sortfirstauthor": "Pun BT",
+  "vernaculartitle": ""
+ },
+ "24423152": {
+  "uid": "24423152",
+  "pubdate": "2014 Mar 15",
+  "epubdate": "",
+  "source": "Am J Respir Crit Care Med",
+  "authors": [
+   {
+    "name": "Patel SB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Poston JT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hall JB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kress JP",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Kress JP",
+  "title": "Rapidly reversible, sedation-related delirium versus persistent delirium in the intensive care unit.",
+  "sorttitle": "rapidly reversible sedation related delirium versus persistent delirium in the intensive care unit",
+  "volume": "189",
+  "issue": "6",
+  "pages": "658-65",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "9421642",
+  "issn": "1073-449X",
+  "essn": "1535-4970",
+  "pubtype": [
+   "Comparative Study",
+   "Journal Article",
+   "Observational Study"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "24423152"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1164/rccm.201310-1815OC"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2014/01/16 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2014/01/16 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2014/05/06 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Am J Respir Crit Care Med. 2014 Mar 15;189(6):622-4. doi: 10.1164/rccm.201401-0195ED.",
+    "reftype": "Comment in",
+    "pmid": 24628309,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2014 Jun 1;189(11):1442-3. doi: 10.1164/rccm.201403-0550LE.",
+    "reftype": "Comment in",
+    "pmid": 24881943,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2014 Jun 1;189(11):1443-4. doi: 10.1164/rccm.201403-0506LE.",
+    "reftype": "Comment in",
+    "pmid": 24881944,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2014 Jun 1;189(11):1444. doi: 10.1164/rccm.201404-0642LE.",
+    "reftype": "Comment in",
+    "pmid": 24881945,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2014 Jun 1;189(11):1444-5. doi: 10.1164/rccm.201404-0637LE.",
+    "reftype": "Comment in",
+    "pmid": 24881946,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "American journal of respiratory and critical care medicine",
+  "elocationid": "doi: 10.1164/rccm.201310-1815OC",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2014/03/15 00:00",
+  "sortfirstauthor": "Patel SB",
+  "vernaculartitle": ""
+ },
+ "24120090": {
+  "uid": "24120090",
+  "pubdate": "2014 Feb",
+  "epubdate": "2013 Oct 9",
+  "source": "J Crit Care",
+  "authors": [
+   {
+    "name": "Zhang Z",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pan L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Deng H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ni H",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Xu X",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Xu X",
+  "title": "Prediction of delirium in critically ill patients with elevated C-reactive protein.",
+  "sorttitle": "prediction of delirium in critically ill patients with elevated c reactive protein",
+  "volume": "29",
+  "issue": "1",
+  "pages": "88-92",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "8610642",
+  "issn": "0883-9441",
+  "essn": "1557-8615",
+  "pubtype": [
+   "Journal Article"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "24120090"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/j.jcrc.2013.09.002"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0883-9441(13)00319-5"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2013/03/13 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2013/09/02 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2013/09/02 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2013/10/15 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2013/10/15 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2014/09/03 06:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Journal of critical care",
+  "elocationid": "doi: 10.1016/j.jcrc.2013.09.002",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2014/02/01 00:00",
+  "sortfirstauthor": "Zhang Z",
+  "vernaculartitle": ""
+ },
+ "29582429": {
+  "uid": "29582429",
+  "pubdate": "2018 Mar 27",
+  "epubdate": "2018 Mar 27",
+  "source": "Cochrane Database Syst Rev",
+  "authors": [
+   {
+    "name": "Doiron KA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hoffmann TC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Beller EM",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Beller EM",
+  "title": "Early intervention (mobilization or active exercise) for critically ill adults in the intensive care unit.",
+  "sorttitle": "early intervention mobilization or active exercise for critically ill adults in the intensive care unit",
+  "volume": "3",
+  "issue": "3",
+  "pages": "CD010754",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "100909747",
+  "issn": "1361-6137",
+  "essn": "1469-493X",
+  "pubtype": [
+   "Journal Article",
+   "Research Support, Non-U.S. Gov't",
+   "Systematic Review"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "3",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "29582429"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC6494211"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC6494211;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1002/14651858.CD010754.pub2"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2018/03/28 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2018/05/01 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2018/03/28 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2019/03/27 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "doi: 10.1002/14651858.CD010754",
+    "reftype": "Update of",
+    "pmid": "",
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 77,
+  "fulljournalname": "The Cochrane database of systematic reviews",
+  "elocationid": "doi: 10.1002/14651858.CD010754.pub2",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2018/03/27 00:00",
+  "sortfirstauthor": "Doiron KA",
+  "vernaculartitle": ""
+ },
+ "23180503": {
+  "uid": "23180503",
+  "pubdate": "2012 Nov 21",
+  "epubdate": "",
+  "source": "JAMA",
+  "authors": [
+   {
+    "name": "Mehta S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Burry L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Cook D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Fergusson D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Steinberg M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Granton J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Herridge M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ferguson N",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Devlin J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Tanios M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dodek P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Fowler R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Burns K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jacka M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Olafson K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Skrobik Y",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hébert P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Sabri E",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Meade M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "SLEAP Investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   },
+   {
+    "name": "Canadian Critical Care Trials Group",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Meade M",
+  "title": "Daily sedation interruption in mechanically ventilated critically ill patients cared for with a sedation protocol: a randomized controlled trial.",
+  "sorttitle": "daily sedation interruption in mechanically ventilated critically ill patients cared for with a sedation protocol a randomized controlled trial",
+  "volume": "308",
+  "issue": "19",
+  "pages": "1985-92",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "7501160",
+  "issn": "0098-7484",
+  "essn": "1538-3598",
+  "pubtype": [
+   "Comparative Study",
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "23180503"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1001/jama.2012.13872"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2012/11/27 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2012/11/28 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2012/12/10 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "JAMA. 2013 Jan 16;309(3):237",
+    "reftype": "Erratum in",
+    "pmid": "",
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2012 Nov 21;308(19):2030-1. doi: 10.1001/jama.2012.48321.",
+    "reftype": "Comment in",
+    "pmid": 23168826,
+    "note": ""
+   },
+   {
+    "refsource": "Med Klin Intensivmed Notfmed. 2013 Mar;108(2):153-5. doi: 10.1007/s00063-012-0210-2.",
+    "reftype": "Comment in",
+    "pmid": 23455442,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2013 Mar 13;309(10):981. doi: 10.1001/jama.2013.995.",
+    "reftype": "Comment in",
+    "pmid": 23483161,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2013 Mar 13;309(10):981-2. doi: 10.1001/jama.2013.1004.",
+    "reftype": "Comment in",
+    "pmid": 23483162,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2013 Mar 13;309(10):982-3. doi: 10.1001/jama.2013.998.",
+    "reftype": "Comment in",
+    "pmid": 23483163,
+    "note": ""
+   },
+   {
+    "refsource": "JAMA. 2013 Mar 13;309(10):982-3. doi: 10.1001/jama.2013.1007.",
+    "reftype": "Comment in",
+    "pmid": 23483164,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2013 Mar;1(1):e11-2. doi: 10.1016/S2213-2600(13)70003-1.",
+    "reftype": "Comment in",
+    "pmid": 24321809,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "JAMA",
+  "elocationid": "",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2012/11/21 00:00",
+  "sortfirstauthor": "Mehta S",
+  "vernaculartitle": ""
+ },
+ "20711065": {
+  "uid": "20711065",
+  "pubdate": "2010 Nov",
+  "epubdate": "",
+  "source": "Crit Care Med",
+  "authors": [
+   {
+    "name": "Pohlman MC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Schweickert WD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman AS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Nigos C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pawlik AJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Esbrook CL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Spears L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Miller M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Franczyk M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Deprizio D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Schmidt GA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bowman A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Barr R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McCallister K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hall JB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kress JP",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Kress JP",
+  "title": "Feasibility of physical and occupational therapy beginning from initiation of mechanical ventilation.",
+  "sorttitle": "feasibility of physical and occupational therapy beginning from initiation of mechanical ventilation",
+  "volume": "38",
+  "issue": "11",
+  "pages": "2089-94",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "0355501",
+  "issn": "0090-3493",
+  "essn": "1530-0293",
+  "pubtype": [
+   "Journal Article",
+   "Randomized Controlled Trial"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "20711065"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1097/CCM.0b013e3181f270c3"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2010/08/17 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2010/08/17 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2010/11/03 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Crit Care Med. 2010 Nov;38(11):2254-5. doi: 10.1097/CCM.0b013e3181f8477d.",
+    "reftype": "Comment in",
+    "pmid": 20959752,
+    "note": ""
+   },
+   {
+    "refsource": "Am J Respir Crit Care Med. 2011 Sep 15;184(6):738-9. doi: 10.1164/rccm.201105-0780RR.",
+    "reftype": "Comment in",
+    "pmid": 21920927,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Critical care medicine",
+  "elocationid": "doi: 10.1097/CCM.0b013e3181f270c3",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2010/11/01 00:00",
+  "sortfirstauthor": "Pohlman MC",
+  "vernaculartitle": ""
+ },
+ "36693400": {
+  "uid": "36693400",
+  "pubdate": "2023 Jun",
+  "epubdate": "2023 Jan 21",
+  "source": "Lancet Respir Med",
+  "authors": [
+   {
+    "name": "Patel BK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Wolfe KS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Patel SB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dugan KC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Esbrook CL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pawlik AJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Stulberg M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kemple C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Teele M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Zeleny E",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hedeker D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman AS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Arora VM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hall JB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kress JP",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Kress JP",
+  "title": "Effect of early mobilisation on long-term cognitive impairment in critical illness in the USA: a randomised controlled trial.",
+  "sorttitle": "effect of early mobilisation on long term cognitive impairment in critical illness in the usa a randomised controlled trial",
+  "volume": "11",
+  "issue": "6",
+  "pages": "563-572",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101605555",
+  "issn": "2213-2600",
+  "essn": "2213-2619",
+  "pubtype": [
+   "Randomized Controlled Trial",
+   "Journal Article",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "36693400"
+   },
+   {
+    "idtype": "mid",
+    "idtypen": 8,
+    "value": "NIHMS1870108"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC10238598"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC10238598;manuscript-id: NIHMS1870108;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S2213-2600(22)00489-1"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S2213-2600(22)00489-1"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2022/10/20 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2022/11/22 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2022/11/24 00:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2023/06/05 06:42"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2023/01/25 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2023/01/24 18:52"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2024/06/01 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet Respir Med. 2023 Jun;11(6):500-502. doi: 10.1016/S2213-2600(23)00011-5.",
+    "reftype": "Comment in",
+    "pmid": 36708729,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 61,
+  "fulljournalname": "The Lancet. Respiratory medicine",
+  "elocationid": "doi: 10.1016/S2213-2600(22)00489-1",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2023/06/01 00:00",
+  "sortfirstauthor": "Patel BK",
+  "vernaculartitle": ""
+ },
+ "30427933": {
+  "uid": "30427933",
+  "pubdate": "2018",
+  "epubdate": "2018 Nov 14",
+  "source": "PLoS One",
+  "authors": [
+   {
+    "name": "Eggmann S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Verra ML",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Luder G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Takala J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jakob SM",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Jakob SM",
+  "title": "Effects of early, combined endurance and resistance training in mechanically ventilated, critically ill patients: A randomised controlled trial.",
+  "sorttitle": "effects of early combined endurance and resistance training in mechanically ventilated critically ill patients a randomised controlled trial",
+  "volume": "13",
+  "issue": "11",
+  "pages": "e0207428",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101285081",
+  "issn": "",
+  "essn": "1932-6203",
+  "pubtype": [
+   "Journal Article",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "258",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "30427933"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC6235392"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC6235392;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1371/journal.pone.0207428"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "PONE-D-18-17676"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2018/06/17 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2018/10/30 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2018/11/15 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2018/11/15 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2019/04/17 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2018/11/14 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 53,
+  "fulljournalname": "PloS one",
+  "elocationid": "doi: 10.1371/journal.pone.0207428",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2018/11/14 00:00",
+  "sortfirstauthor": "Eggmann S",
+  "vernaculartitle": ""
+ },
+ "27707496": {
+  "uid": "27707496",
+  "pubdate": "2016 Oct 1",
+  "epubdate": "",
+  "source": "Lancet",
+  "authors": [
+   {
+    "name": "Schaller SJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Anstey M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Blobner M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Edrich T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Grabitz SD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gradwohl-Matis I",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Heim M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Houle T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kurth T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Latronico N",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Lee J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Meyer MJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Peponis T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Talmor D",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Velmahos GC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Waak K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Walz JM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Zafonte R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Eikermann M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "International Early SOMS-guided Mobilization Research Initiative",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Eikermann M",
+  "title": "Early, goal-directed mobilisation in the surgical intensive care unit: a randomised controlled trial.",
+  "sorttitle": "early goal directed mobilisation in the surgical intensive care unit a randomised controlled trial",
+  "volume": "388",
+  "issue": "10052",
+  "pages": "1377-1388",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "2985213R",
+  "issn": "0140-6736",
+  "essn": "1474-547X",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "27707496"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S0140-6736(16)31637-3"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0140-6736(16)31637-3"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2016/04/21 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2016/07/13 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2016/07/19 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2016/10/07 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2016/10/07 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2016/11/05 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet. 2016 Oct 1;388(10052):1351-1352. doi: 10.1016/S0140-6736(16)31745-7.",
+    "reftype": "Comment in",
+    "pmid": 27707476,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2017 Feb 18;389(10070):695-696. doi: 10.1016/S0140-6736(17)30334-3.",
+    "reftype": "Comment in",
+    "pmid": 28229868,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2017 Feb 18;389(10070):695. doi: 10.1016/S0140-6736(17)30335-5.",
+    "reftype": "Comment in",
+    "pmid": 28229869,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2017 Feb 18;389(10070):695. doi: 10.1016/S0140-6736(17)30336-7.",
+    "reftype": "Comment in",
+    "pmid": 28229870,
+    "note": ""
+   },
+   {
+    "refsource": "Ann Transl Med. 2017 Feb;5(3):57. doi: 10.21037/atm.2017.01.48.",
+    "reftype": "Comment in",
+    "pmid": 28251136,
+    "note": ""
+   },
+   {
+    "refsource": "Ann Transl Med. 2017 Apr;5(7):176. doi: 10.21037/atm.2017.03.44.",
+    "reftype": "Comment in",
+    "pmid": 28480212,
+    "note": ""
+   },
+   {
+    "refsource": "Natl Med J India. 2017 Jan-Feb;30(1):28-29.",
+    "reftype": "Comment in",
+    "pmid": 28731004,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Lancet (London, England)",
+  "elocationid": "doi: 10.1016/S0140-6736(16)31637-3",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2016/10/01 00:00",
+  "sortfirstauthor": "Schaller SJ",
+  "vernaculartitle": ""
+ },
+ "19446327": {
+  "uid": "19446327",
+  "pubdate": "2009 May 30",
+  "epubdate": "2009 May 14",
+  "source": "Lancet",
+  "authors": [
+   {
+    "name": "Jakob SM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Takala J",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Takala J",
+  "title": "Physical and occupational therapy during sedation stops.",
+  "sorttitle": "physical and occupational therapy during sedation stops",
+  "volume": "373",
+  "issue": "9678",
+  "pages": "1824-6",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "2985213R",
+  "issn": "0140-6736",
+  "essn": "1474-547X",
+  "pubtype": [
+   "Comment",
+   "Journal Article"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "19446327"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S0140-6736(09)60866-7"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0140-6736(09)60866-7"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2009/05/19 09:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2009/05/19 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2009/06/13 09:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet. 2009 May 30;373(9678):1874-82. doi: 10.1016/S0140-6736(09)60658-9.",
+    "reftype": "Comment on",
+    "pmid": 19446324,
+    "note": ""
+   }
+  ],
+  "attributes": [],
+  "pmcrefcount": "",
+  "fulljournalname": "Lancet (London, England)",
+  "elocationid": "doi: 10.1016/S0140-6736(09)60866-7",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2009/05/30 00:00",
+  "sortfirstauthor": "Jakob SM",
+  "vernaculartitle": ""
+ },
+ "20116842": {
+  "uid": "20116842",
+  "pubdate": "2010 Feb 6",
+  "epubdate": "2010 Jan 29",
+  "source": "Lancet",
+  "authors": [
+   {
+    "name": "Strøm T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Martinussen T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Toft P",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Toft P",
+  "title": "A protocol of no sedation for critically ill patients receiving mechanical ventilation: a randomised trial.",
+  "sorttitle": "protocol of no sedation for critically ill patients receiving mechanical ventilation a randomised trial",
+  "volume": "375",
+  "issue": "9713",
+  "pages": "475-80",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "2985213R",
+  "issn": "0140-6736",
+  "essn": "1474-547X",
+  "pubtype": [
+   "Journal Article",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "20116842"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S0140-6736(09)62072-9"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0140-6736(09)62072-9"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2010/02/02 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2010/02/02 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2010/03/10 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet. 2010 Feb 6;375(9713):436-8. doi: 10.1016/S0140-6736(10)60103-1.",
+    "reftype": "Comment in",
+    "pmid": 20116840,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2010 Apr 3;375(9721):1159-60; author reply 1160. doi: 10.1016/S0140-6736(10)60507-7.",
+    "reftype": "Comment in",
+    "pmid": 20362804,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2010 Apr 3;375(9721):1159; author reply 1160. doi: 10.1016/S0140-6736(10)60506-5.",
+    "reftype": "Comment in",
+    "pmid": 20362805,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2010 Apr 3;375(9721):1159; author reply 1160. doi: 10.1016/S0140-6736(10)60505-3.",
+    "reftype": "Comment in",
+    "pmid": 20362806,
+    "note": ""
+   },
+   {
+    "refsource": "Crit Care. 2010;14(6):339. doi: 10.1186/cc9339.",
+    "reftype": "Comment in",
+    "pmid": 21144006,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Lancet (London, England)",
+  "elocationid": "doi: 10.1016/S0140-6736(09)62072-9",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2010/02/06 00:00",
+  "sortfirstauthor": "Strøm T",
+  "vernaculartitle": ""
+ },
+ "33115543": {
+  "uid": "33115543",
+  "pubdate": "2020 Oct 28",
+  "epubdate": "2020 Oct 28",
+  "source": "Trials",
+  "authors": [
+   {
+    "name": "Emadi A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Chua JV",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Talwani R",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bentzen SM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Baddley J",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Baddley J",
+  "title": "Safety and Efficacy of Imatinib for Hospitalized Adults with COVID-19: A structured summary of a study protocol for a randomised controlled trial.",
+  "sorttitle": "safety and efficacy of imatinib for hospitalized adults with covid 19 a structured summary of a study protocol for a randomised controlled trial",
+  "volume": "21",
+  "issue": "1",
+  "pages": "897",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101263253",
+  "issn": "",
+  "essn": "1745-6215",
+  "pubtype": [
+   "Clinical Trial Protocol",
+   "Letter"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "3",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "33115543"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC7594416"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC7594416;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1186/s13063-020-04819-9"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "10.1186/s13063-020-04819-9"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2020/10/14 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2020/10/16 00:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2020/10/29 05:30"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2020/10/30 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2020/11/06 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2020/10/28 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Trials",
+  "elocationid": "doi: 10.1186/s13063-020-04819-9",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2020/10/28 00:00",
+  "sortfirstauthor": "Emadi A",
+  "vernaculartitle": ""
+ },
+ "18191684": {
+  "uid": "18191684",
+  "pubdate": "2008 Jan 12",
+  "epubdate": "",
+  "source": "Lancet",
+  "authors": [
+   {
+    "name": "Girard TD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kress JP",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Fuchs BD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Thomason JW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Schweickert WD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pun BT",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Taichman DB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dunn JG",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Pohlman AS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kinniry PA",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jackson JC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Canonico AE",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Light RW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani AK",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Thompson JL",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gordon SM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hall JB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Dittus RS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Bernard GR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Ely EW",
+  "title": "Efficacy and safety of a paired sedation and ventilator weaning protocol for mechanically ventilated patients in intensive care (Awakening and Breathing Controlled trial): a randomised controlled trial.",
+  "sorttitle": "efficacy and safety of a paired sedation and ventilator weaning protocol for mechanically ventilated patients in intensive care awakening and breathing controlled trial a randomised controlled trial",
+  "volume": "371",
+  "issue": "9607",
+  "pages": "126-34",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "2985213R",
+  "issn": "0140-6736",
+  "essn": "1474-547X",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't",
+   "Research Support, U.S. Gov't, Non-P.H.S."
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "4",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "18191684"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S0140-6736(08)60105-1"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S0140-6736(08)60105-1"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "pubmed",
+    "date": "2008/01/15 09:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2008/01/30 09:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2008/01/15 09:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet. 2008 Jan 12;371(9607):95-7. doi: 10.1016/S0140-6736(08)60082-3.",
+    "reftype": "Comment in",
+    "pmid": 18191669,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2008 Apr 26;371(9622):1413-4; author reply 1414-5. doi: 10.1016/S0140-6736(08)60617-0.",
+    "reftype": "Comment in",
+    "pmid": 18440419,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet. 2008 Apr 26;371(9622):1414; author reply 1414-5. doi: 10.1016/S0140-6736(08)60618-2.",
+    "reftype": "Comment in",
+    "pmid": 18440421,
+    "note": ""
+   },
+   {
+    "refsource": "Evid Based Nurs. 2008 Jul;11(3):81. doi: 10.1136/ebn.11.3.81.",
+    "reftype": "Comment in",
+    "pmid": 18583493,
+    "note": ""
+   },
+   {
+    "refsource": "ACP J Club. 2008 Jun 17;148(4):5.",
+    "reftype": "Comment in",
+    "pmid": 18588256,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "Lancet (London, England)",
+  "elocationid": "doi: 10.1016/S0140-6736(08)60105-1",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2008/01/12 00:00",
+  "sortfirstauthor": "Girard TD",
+  "vernaculartitle": ""
+ },
+ "28935558": {
+  "uid": "28935558",
+  "pubdate": "2017 Oct",
+  "epubdate": "2017 Sep 18",
+  "source": "Lancet Respir Med",
+  "authors": [
+   {
+    "name": "Chanques G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Conseil M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Roger C",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Constantin JM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Prades A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Carr J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Muller L",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jung B",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Belafia F",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Cissé M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Delay JM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "de Jong A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Lefrant JY",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Futier E",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Mercier G",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Molinari N",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jaber S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "SOS-Ventilation study investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Jaber S",
+  "title": "Immediate interruption of sedation compared with usual sedation care in critically ill postoperative patients (SOS-Ventilation): a randomised, parallel-group clinical trial.",
+  "sorttitle": "immediate interruption of sedation compared with usual sedation care in critically ill postoperative patients sos ventilation a randomised parallel group clinical trial",
+  "volume": "5",
+  "issue": "10",
+  "pages": "795-805",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101605555",
+  "issn": "2213-2600",
+  "essn": "2213-2619",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "28935558"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S2213-2600(17)30304-1"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S2213-2600(17)30304-1"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2017/06/07 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2017/07/27 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2017/07/28 00:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2017/09/25 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2018/06/06 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2017/09/23 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet Respir Med. 2017 Oct;5(10):764-765. doi: 10.1016/S2213-2600(17)30350-8.",
+    "reftype": "Comment in",
+    "pmid": 28935559,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "The Lancet. Respiratory medicine",
+  "elocationid": "doi: 10.1016/S2213-2600(17)30304-1",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2017/10/01 00:00",
+  "sortfirstauthor": "Chanques G",
+  "vernaculartitle": ""
+ },
+ "27473760": {
+  "uid": "27473760",
+  "pubdate": "2016 Oct",
+  "epubdate": "2016 Jul 26",
+  "source": "Lancet Respir Med",
+  "authors": [
+   {
+    "name": "Walsh TS",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Kydonaki K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Antonelli J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Stephen J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Lee RJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Everingham K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Hanley J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Phillips EC",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Uutela K",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Peltola P",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Cole S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Quasim T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ruddy J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McDougall M",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Davidson A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Rutherford J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Richards J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Weir CJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Development and Evaluation of Strategies to Improve Sedation Practice in Intensive Care (DESIST) study investigators",
+    "authtype": "CollectiveName",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "Weir CJ",
+  "title": "Staff education, regular sedation and analgesia quality feedback, and a sedation monitoring technology for improving sedation and analgesia quality for critically ill, mechanically ventilated patients: a cluster randomised trial.",
+  "sorttitle": "staff education regular sedation and analgesia quality feedback and a sedation monitoring technology for improving sedation and analgesia quality for critically ill mechanically ventilated patients a cluster randomised trial",
+  "volume": "4",
+  "issue": "10",
+  "pages": "807-817",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101605555",
+  "issn": "2213-2600",
+  "essn": "2213-2619",
+  "pubtype": [
+   "Journal Article",
+   "Multicenter Study",
+   "Randomized Controlled Trial",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "27473760"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S2213-2600(16)30178-3"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S2213-2600(16)30178-3"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "received",
+    "date": "2016/05/24 00:00"
+   },
+   {
+    "pubstatus": "revised",
+    "date": "2016/06/10 00:00"
+   },
+   {
+    "pubstatus": "accepted",
+    "date": "2016/06/16 00:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2016/07/31 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2017/12/08 06:00"
+   },
+   {
+    "pubstatus": "entrez",
+    "date": "2016/07/31 06:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet Respir Med. 2016 Oct;4(10):767-768. doi: 10.1016/S2213-2600(16)30226-0.",
+    "reftype": "Comment in",
+    "pmid": 27473761,
+    "note": ""
+   },
+   {
+    "refsource": "J Thorac Dis. 2016 Dec;8(12):E1676-E1678. doi: 10.21037/jtd.2016.12.87.",
+    "reftype": "Comment in",
+    "pmid": 28149611,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": "",
+  "fulljournalname": "The Lancet. Respiratory medicine",
+  "elocationid": "doi: 10.1016/S2213-2600(16)30178-3",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2016/10/01 00:00",
+  "sortfirstauthor": "Walsh TS",
+  "vernaculartitle": ""
+ },
+ "24461612": {
+  "uid": "24461612",
+  "pubdate": "2013 Sep",
+  "epubdate": "2013 Aug 21",
+  "source": "Lancet Respir Med",
+  "authors": [
+   {
+    "name": "Page VJ",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Ely EW",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Gates S",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Zhao XB",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Alce T",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Shintani A",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Jackson J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Perkins GD",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McAuley DF",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "McAuley DF",
+  "title": "Effect of intravenous haloperidol on the duration of delirium and coma in critically ill patients (Hope-ICU): a randomised, double-blind, placebo-controlled trial.",
+  "sorttitle": "effect of intravenous haloperidol on the duration of delirium and coma in critically ill patients hope icu a randomised double blind placebo controlled trial",
+  "volume": "1",
+  "issue": "7",
+  "pages": "515-23",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101605555",
+  "issn": "2213-2600",
+  "essn": "2213-2619",
+  "pubtype": [
+   "Journal Article",
+   "Randomized Controlled Trial",
+   "Research Support, N.I.H., Extramural",
+   "Research Support, Non-U.S. Gov't"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "256",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "24461612"
+   },
+   {
+    "idtype": "mid",
+    "idtypen": 8,
+    "value": "NIHMS750963"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC4730945"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC4730945;manuscript-id: NIHMS750963;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1016/S2213-2600(13)70166-8"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "S2213-2600(13)70166-8"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2014/01/28 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2014/01/28 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2014/12/31 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2016/01/28 00:00"
+   }
+  ],
+  "references": [
+   {
+    "refsource": "Lancet Respir Med. 2013 Oct;1(8):592",
+    "reftype": "Erratum in",
+    "pmid": "",
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2013 Sep;1(7):498-9. doi: 10.1016/S2213-2600(13)70178-4.",
+    "reftype": "Comment in",
+    "pmid": 24461599,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2013 Oct;1(8):e27. doi: 10.1016/S2213-2600(13)70210-8.",
+    "reftype": "Comment in",
+    "pmid": 24461669,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2013 Oct;1(8):e27-e28. doi: 10.1016/S2213-2600(13)70193-0.",
+    "reftype": "Comment in",
+    "pmid": 24461670,
+    "note": ""
+   },
+   {
+    "refsource": "Lancet Respir Med. 2013 Oct;1(8):e28. doi: 10.1016/S2213-2600(13)70194-2.",
+    "reftype": "Comment in",
+    "pmid": 24461671,
+    "note": ""
+   }
+  ],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 43,
+  "fulljournalname": "The Lancet. Respiratory medicine",
+  "elocationid": "doi: 10.1016/S2213-2600(13)70166-8",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2013/09/01 00:00",
+  "sortfirstauthor": "Page VJ",
+  "vernaculartitle": ""
+ },
+ "29061618": {
+  "uid": "29061618",
+  "pubdate": "2017 Oct 22",
+  "epubdate": "2017 Oct 22",
+  "source": "BMJ Open",
+  "authors": [
+   {
+    "name": "Nickels MR",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Aitken LM",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Walsham J",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "Barnett AG",
+    "authtype": "Author",
+    "clusterid": ""
+   },
+   {
+    "name": "McPhail SM",
+    "authtype": "Author",
+    "clusterid": ""
+   }
+  ],
+  "lastauthor": "McPhail SM",
+  "title": "Critical Care Cycling Study (CYCLIST) trial protocol: a randomised controlled trial of usual care plus additional in-bed cycling sessions versus usual care in the critically ill.",
+  "sorttitle": "critical care cycling study cyclist trial protocol a randomised controlled trial of usual care plus additional in bed cycling sessions versus usual care in the critically ill",
+  "volume": "7",
+  "issue": "10",
+  "pages": "e017393",
+  "lang": [
+   "eng"
+  ],
+  "nlmuniqueid": "101552874",
+  "issn": "",
+  "essn": "2044-6055",
+  "pubtype": [
+   "Journal Article",
+   "Randomized Controlled Trial"
+  ],
+  "recordstatus": "PubMed - indexed for MEDLINE",
+  "pubstatus": "3",
+  "articleids": [
+   {
+    "idtype": "pubmed",
+    "idtypen": 1,
+    "value": "29061618"
+   },
+   {
+    "idtype": "pmc",
+    "idtypen": 8,
+    "value": "PMC5665265"
+   },
+   {
+    "idtype": "pmcid",
+    "idtypen": 5,
+    "value": "pmc-id: PMC5665265;"
+   },
+   {
+    "idtype": "doi",
+    "idtypen": 3,
+    "value": "10.1136/bmjopen-2017-017393"
+   },
+   {
+    "idtype": "pii",
+    "idtypen": 4,
+    "value": "bmjopen-2017-017393"
+   }
+  ],
+  "history": [
+   {
+    "pubstatus": "entrez",
+    "date": "2017/10/25 06:00"
+   },
+   {
+    "pubstatus": "pubmed",
+    "date": "2017/10/25 06:00"
+   },
+   {
+    "pubstatus": "medline",
+    "date": "2018/06/29 06:00"
+   },
+   {
+    "pubstatus": "pmc-release",
+    "date": "2017/10/22 00:00"
+   }
+  ],
+  "references": [],
+  "attributes": [
+   "Has Abstract"
+  ],
+  "pmcrefcount": 35,
+  "fulljournalname": "BMJ open",
+  "elocationid": "doi: 10.1136/bmjopen-2017-017393",
+  "doctype": "citation",
+  "srccontriblist": [],
+  "booktitle": "",
+  "medium": "",
+  "edition": "",
+  "publisherlocation": "",
+  "publishername": "",
+  "srcdate": "",
+  "reportnumber": "",
+  "availablefromurl": "",
+  "locationlabel": "",
+  "doccontriblist": [],
+  "docdate": "",
+  "bookname": "",
+  "chapter": "",
+  "sortpubdate": "2017/10/22 00:00",
+  "sortfirstauthor": "Nickels MR",
+  "vernaculartitle": ""
+ }
+}

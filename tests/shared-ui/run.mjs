@@ -697,7 +697,7 @@ try {
     const bg = await op.evaluate(() => getComputedStyle(document.querySelector('.activity-list')).backgroundColor);
     await shot(op, 'dark-activity');
     await op.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-    assert(bg === 'rgb(24, 27, 33)', `activity list background ${bg}`);
+    assert(bg === 'rgb(33, 27, 23)', `activity list background ${bg}`); // dark --surface (갈피 espresso #211b17)
     return `activity list background ${bg} (--surface, dark)`;
   });
 

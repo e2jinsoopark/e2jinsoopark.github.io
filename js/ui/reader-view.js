@@ -426,7 +426,7 @@ class ReaderView {
     const title = paper?.title || paper?.fileName || '제목 없음';
     this.#els.title.textContent = title;
     this.#els.title.title = title;
-    document.title = `${title} · 논문 리더`;
+    document.title = `${title} · 갈피`;
   }
 
   #buildToolbar() {
@@ -1313,7 +1313,7 @@ class ReaderView {
   }
 
   #showNotFound() {
-    document.title = '논문을 찾을 수 없음 · 논문 리더';
+    document.title = '논문을 찾을 수 없음 · 갈피';
     const toLibrary = { label: '라이브러리로', kind: 'primary', icon: 'arrow-left', onClick: () => this.#navigate(this.#libraryHref()) };
     this.#els.body.replaceChildren(messageScreen({
       iconName: 'file', tone: 'info', title: '논문을 찾을 수 없습니다',
@@ -1328,7 +1328,7 @@ class ReaderView {
 
   /** #/s/<lib>/paper/<id> without that team library (no invite code, not offered to this code, or it failed to open). */
   #showNoSharedLibrary() {
-    document.title = '공용 서재 · 논문 리더';
+    document.title = '공용 서재 · 갈피';
     const shared = this.#deps.shared;
     const failed = shared?.entry?.(this.#libId)?.error || (shared?.state === 'error' ? shared.message : '');
     const off = !shared || shared.state === 'off';

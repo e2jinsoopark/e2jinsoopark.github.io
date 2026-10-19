@@ -81,7 +81,7 @@ class SettingsView {
     this.#deps = deps;
     this.#navigate = navigate;
     this.#backHref = backHref;
-    document.title = '설정 · 논문 리더';
+    document.title = '설정 · 갈피';
     this.#root = el('div', { class: 'settings' });
     container.replaceChildren(this.#root);
     this.#render();
@@ -163,7 +163,7 @@ class SettingsView {
       this.#usageSection(),
       this.#dataSection(),
       this.#invitesSection(),
-      el('p', { class: 'settings-footer' }, `논문 리더 ${APP_VERSION} · 모든 설정은 이 브라우저에만 저장됩니다.`));
+      el('p', { class: 'settings-footer' }, `갈피 (GALPI) ${APP_VERSION} · 모든 설정은 이 브라우저에만 저장됩니다.`));
     this.#root.replaceChildren(header, inner);
     this.#renderShared();
   }
@@ -1108,7 +1108,7 @@ class SettingsView {
     const s2 = this.#secretField({
       label: 'Semantic Scholar API 키 (선택)', value: settings.get().semanticScholar?.apiKey || '', placeholder: '없어도 됩니다',
       onSave: (v) => settings.set({ semanticScholar: { apiKey: v } }),
-      hint: '‘관련 논문’과 인용 정보 조회에 씁니다. 키가 없으면 공용 한도로 동작합니다.',
+      hint: '없어도 됩니다. ‘관련 논문’과 인용 정보는 키가 필요 없는 PubMed·Europe PMC·Crossref에서 찾고, Semantic Scholar는 그곳에 없는 논문일 때만 씁니다.',
     });
     const clearBtn = button('이 기기에서 키·토큰 지우기', { icon: 'trash', kind: 'danger', onClick: () => this.#clearSecrets() });
     const wipeBtn = button('이 기기의 데이터 모두 지우기', { icon: 'trash', kind: 'danger', onClick: () => this.#wipeDevice() });
@@ -1126,7 +1126,7 @@ class SettingsView {
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
           'API 키·초대 코드와 GitHub 토큰은 이 브라우저의 저장소(localStorage)에만 보관되며, 각각 해당 서비스로 요청할 때만 사용됩니다. 논문 PDF와 번역은 이 브라우저(IndexedDB)와, 동기화를 켠 경우 내 GitHub 비공개 저장소에 저장됩니다.'),
         el('p', { class: 'field-hint', style: { margin: '0 0 12px' } },
-          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic·OpenAI·Google 중 하나, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · 공용 서재의 논문·번역과 내 메모 → 초대 코드 서버를 거쳐 팀 저장소(내 메모는 나만 읽을 수 있는 칸) · ‘관련 논문’을 찾을 때 논문 제목 → Semantic Scholar.'),
+          '보내는 곳: 번역·요약·채팅할 문장 → 선택한 AI(Anthropic·OpenAI·Google 중 하나, 초대 코드를 쓰면 초대 코드 서버를 거쳐 Anthropic) · 라이브러리와 메모 → 내 GitHub 저장소(동기화를 켠 경우) · 공용 서재의 논문·번역과 내 메모 → 초대 코드 서버를 거쳐 팀 저장소(내 메모는 나만 읽을 수 있는 칸) · ‘관련 논문’·인용 정보를 찾을 때(처음 한 번 동의 후) 논문 제목·DOI·참고문헌 문구 → PubMed(미국 국립의학도서관)·Europe PMC·Crossref, 없으면 Semantic Scholar.'),
         shared ? note('alert-triangle', shared) : null,
         persisted,
         el('div', { class: 'btn-row' }, clearBtn, wipeBtn),
@@ -1430,7 +1430,7 @@ class SettingsView {
  * @returns {{ destroy: () => void }}
  */
 export function mountJoinView(container, { code, deps, navigate }) {
-  document.title = '초대 코드 · 논문 리더';
+  document.title = '초대 코드 · 갈피';
   const controller = new AbortController();
   let alive = true;
   const show = (node) => { if (alive) container.replaceChildren(node); };
@@ -1464,8 +1464,9 @@ export function mountJoinView(container, { code, deps, navigate }) {
       history.replaceState(null, '', '#/');
       const who = me.name ? `${me.name}님, ` : '';
       const models = me.allowedModels.map(relay.modelShortName).join(', ') || '-';
+      document.title = '환영합니다 · 갈피';
       show(messageScreen({
-        iconName: 'check-circle', tone: 'success',
+        iconName: 'check-circle', tone: 'success', brand: 'wordmark',
         title: me.name ? `환영합니다, ${me.name}님` : '환영합니다',
         message: [
           `${who}초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다.`,

@@ -114,11 +114,36 @@ export function progressBar(ratio = 0, { label = '진행률' } = {}) {
   return { el: node, set };
 }
 
-/** Full-area message screen used for errors, empty and not-found states. */
-export function messageScreen({ iconName = 'alert-circle', tone = 'error', title, message, details, actions = [] }) {
+/** Owner-made brand artwork in assets/brand/ (full-bleed squares on mocha). */
+const BRAND_FILES = { mark: 'icon-64.png', 'mark-lg': 'icon-192.png', wordmark: 'galpi-wordmark-1254.webp' };
+
+/**
+ * The 갈피 (GALPI) brand image: `'mark'` = the paper-ribbon 'g' app icon (`'mark-lg'` for ≥ 64 px), `'wordmark'` =
+ * '갈피' in the same paper-ribbon style. Resolved from this module, so pages outside the site root (test harnesses)
+ * find it too. Decorative unless `alt` is given.
+ * @param {'mark'|'mark-lg'|'wordmark'} [kind]
+ * @param {{ size?: number, className?: string, alt?: string }} [opts]
+ */
+export function brandImage(kind = 'mark', { size = 32, className = '', alt = '' } = {}) {
+  const file = BRAND_FILES[kind] || BRAND_FILES.mark;
+  return el('img', {
+    class: ['brand-img', kind === 'wordmark' ? 'brand-wordmark' : 'brand-mark', className].filter(Boolean).join(' '),
+    src: new URL(`../../assets/brand/${file}`, import.meta.url).href,
+    width: String(size), height: String(size), alt, decoding: 'async', draggable: 'false',
+    'aria-hidden': alt ? null : 'true',
+  });
+}
+
+/**
+ * Full-area message screen used for errors, empty and not-found states.
+ * `brand: 'wordmark'|'mark'` shows the 갈피 artwork instead of the icon (welcome screens).
+ */
+export function messageScreen({ iconName = 'alert-circle', tone = 'error', title, message, details, actions = [], brand = null }) {
   return el('div', { class: `message-screen tone-${tone}`, role: tone === 'error' ? 'alert' : null },
     el('div', { class: 'message-card' },
-      el('div', { class: 'message-icon' }, icon(iconName, { size: 28 })),
+      brand
+        ? brandImage(brand === 'mark' ? 'mark-lg' : 'wordmark', { size: brand === 'mark' ? 64 : 112, alt: brand === 'mark' ? '' : '갈피' })
+        : el('div', { class: 'message-icon' }, icon(iconName, { size: 28 })),
       el('h1', { class: 'message-title' }, title),
       message ? el('p', { class: 'message-text' }, message) : null,
       details ? el('details', { class: 'message-details' },

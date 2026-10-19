@@ -13,8 +13,16 @@ if (params.has('reset')) StubLibrary.reset();
 if (params.get('theme') === 'dark') document.documentElement.dataset.theme = 'dark';
 
 const doc = buildDoc();
+// ?folder=1 puts the paper in a folder with three other papers (관련 논문 "이 폴더 기준 추천").
+const inFolder = params.has('folder');
 const library = new StubLibrary({
-  paper: { id: 'paper1', title: doc.meta.title, authors: doc.meta.authors, year: 2024, fileName: 'mobility.pdf', pages: 3, folderId: null },
+  paper: { id: 'paper1', title: doc.meta.title, authors: doc.meta.authors, year: 2024, fileName: 'mobility.pdf', pages: 3, folderId: inFolder ? 'f1' : null },
+  folders: inFolder ? [{ id: 'f1', name: '섬망 연구', parentId: null }] : [],
+  others: inFolder ? [
+    { id: 'paper2', title: 'Early physical and occupational therapy in mechanically ventilated, critically ill patients: a randomised controlled trial', year: 2009, folderId: 'f1', pmid: '19446324', lastOpenedAt: 3 },
+    { id: 'paper3', title: 'Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit', year: 2004, folderId: 'f1', lastOpenedAt: 2 },
+    { id: 'paper4', title: '병동 내부 QI 보고서 (미출판)', year: 2025, folderId: 'f1', lastOpenedAt: 1 },
+  ] : [],
 });
 const paperId = library.paper.id;
 const viewer = new StubViewer(document.getElementById('viewer'), { doc });

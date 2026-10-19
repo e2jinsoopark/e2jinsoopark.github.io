@@ -1,0 +1,201 @@
+{
+ "version": "6.9",
+ "hitCount": 1,
+ "request": {
+  "queryString": "EXT_ID:36205994 AND SRC:MED",
+  "internalQuery": "EXT_ID:36205994 AND SRC:MED",
+  "resultType": "CORE",
+  "cursorMark": "*",
+  "pageSize": 25,
+  "sort": "",
+  "synonym": false
+ },
+ "resultList": {
+  "result": [
+   {
+    "id": "36205994",
+    "source": "MED",
+    "pmid": "36205994",
+    "pmcid": "PMC9547314",
+    "fullTextIdList": {
+     "fullTextId": [
+      "PMC9547314"
+     ]
+    },
+    "doi": "10.1001/jamanetworkopen.2022.35339",
+    "title": "Association of Incident Delirium With Short-term Mortality in Adults With Critical Illness Receiving Mechanical Ventilation.",
+    "authorString": "Li HC, Yeh TY, Wei YC, Ku SC, Xu YJ, Chen CC, Inouye S, Boehm LM.",
+    "authorList": {
+     "author": [
+      {
+       "fullName": "Li HC",
+       "lastName": "Li",
+       "firstName": "Hsiu-Ching",
+       "initials": "HC",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-0920-7924"
+       }
+      },
+      {
+       "fullName": "Yeh TY",
+       "lastName": "Yeh",
+       "firstName": "Tony Yu-Chang",
+       "initials": "TY"
+      },
+      {
+       "fullName": "Wei YC",
+       "lastName": "Wei",
+       "firstName": "Yu-Chung",
+       "initials": "YC",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-3747-2215"
+       }
+      },
+      {
+       "fullName": "Ku SC",
+       "lastName": "Ku",
+       "firstName": "Shih-Chi",
+       "initials": "SC",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-4123-0967"
+       }
+      },
+      {
+       "fullName": "Xu YJ",
+       "lastName": "Xu",
+       "firstName": "Yu-Juan",
+       "initials": "YJ"
+      },
+      {
+       "fullName": "Chen CC",
+       "lastName": "Chen",
+       "firstName": "Cheryl Chia-Hui",
+       "initials": "CC",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-9927-6215"
+       }
+      },
+      {
+       "fullName": "Inouye S",
+       "lastName": "Inouye",
+       "firstName": "Sharon",
+       "initials": "S"
+      },
+      {
+       "fullName": "Boehm LM",
+       "lastName": "Boehm",
+       "firstName": "Leanne M",
+       "initials": "LM",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-0127-6677"
+       }
+      }
+     ]
+    },
+    "authorIdList": {
+     "authorId": [
+      {
+       "type": "ORCID",
+       "value": "0000-0001-9927-6215"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-4123-0967"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-0127-6677"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-0920-7924"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-3747-2215"
+      }
+     ]
+    },
+    "journalInfo": {
+     "issue": "10",
+     "volume": "5",
+     "journalIssueId": 3433387,
+     "dateOfPublication": "2022 Oct",
+     "monthOfPublication": 10,
+     "yearOfPublication": 2022,
+     "journal": {
+      "medlineAbbreviation": "JAMA Netw Open",
+      "title": "JAMA network open",
+      "essn": "2574-3805",
+      "issn": "2574-3805",
+      "isoabbreviation": "JAMA Netw Open",
+      "nlmid": "101729235"
+     },
+     "printPublicationDate": "2022-10-01"
+    },
+    "pubYear": "2022",
+    "pageInfo": "e2235339",
+    "abstractText": "<h4>Importance</h4>Intensive care unit (ICU)-acquired delirium and/or coma have consequences for patient outcomes. However, contradictory findings exist, especially when considering short-term (ie, in-hospital) mortality and length of stay (LOS).<h4>Objective</h4>To assess whether incident delirium, days of delirium, days of coma, and delirium- and coma-free days (DCFDs) are associated with 14-day mortality, in-hospital mortality, and hospital LOS among patients with critical illness receiving mechanical ventilation.<h4>Design, setting, and participants</h4>This single-center prospective cohort study was conducted in 6 ICUs of a university-affiliated tertiary hospital in Taiwan. A total of 267 delirium-free patients (aged ≥20 years) with critical illness receiving mechanical ventilation were consecutively enrolled from August 14, 2018, to October 1, 2020.<h4>Exposures</h4>Participants were assessed daily for the development of delirium and coma status over 14 days (or until death or ICU discharge) using the Confusion Assessment Method for the Intensive Care Unit and the Richmond Agitation-Sedation Scale, respectively.<h4>Main outcomes and measures</h4>Mortality rates (14-day and in-hospital) and hospital LOS using electronic health records.<h4>Results</h4>Of 267 participants (median [IQR] age, 65.9 [57.4-75.1] years; 171 men [64.0%]; all of Taiwanese ethnicity), 149 patients (55.8%) developed delirium for a median (IQR) of 3.0 (1.0-5.0) days at some point during their first 14 days of ICU stay, and 105 patients (39.3%) had coma episodes also lasting for a median (IQR) of 3.0 (1.0-5.0) days. The 14-day and in-hospital mortality rates were 18.0% (48 patients) and 42.1% (112 of 266 patients [1 patient withdrew from the study]), respectively. The incidence and days of delirium were not associated with either 14-day mortality (incident delirium: adjusted hazard ratio [aHR], 1.37; 95% CI, 0.69-2.72; delirium by day: aHR, 1.00; 95% CI, 0.91-1.10) or in-hospital mortality (incident delirium: aHR, 1.00; 95% CI, 0.64-1.55; delirium by day: aHR, 1.02; 95% CI, 0.97-1.07), whereas days spent in coma were associated with an increased hazard of dying during a given 14-day period (aHR, 1.16; 95% CI, 1.10-1.22) and during hospitalization (aHR, 1.10; 95% CI, 1.06-1.14). The number of DCFDs was a protective factor; for each additional DCFD, the risk of dying during the 14-day period was reduced by 11% (aHR, 0.89; 95% CI, 0.84-0.94), and the risk of dying during hospitalization was reduced by 7% (aHR, 0.93; 95% CI, 0.90-0.97). Incident delirium was associated with longer hospital stays (adjusted β = 10.80; 95% CI, 0.53-21.08) when compared with no incident delirium.<h4>Conclusions and relevance</h4>In this study, despite prolonged LOS, ICU delirium was not associated with short-term mortality. However, DCFDs were associated with a lower risk of dying, suggesting that future research and intervention implementation should refocus on maximizing DCFDs to potentially improve the survival of patients receiving mechanical ventilation.",
+    "publicationStatus": "epublish",
+    "language": "eng",
+    "pubModel": "Electronic",
+    "pubTypeList": {
+     "pubType": [
+      "Research Support, Non-U.S. Gov't",
+      "research-article",
+      "Journal Article",
+      "Research Support, N.I.H., Extramural"
+     ]
+    },
+    "fullTextUrlList": {
+     "fullTextUrl": [
+      {
+       "availability": "Subscription required",
+       "availabilityCode": "S",
+       "documentStyle": "doi",
+       "site": "DOI",
+       "url": "https://doi.org/10.1001/jamanetworkopen.2022.35339"
+      },
+      {
+       "availability": "Open access",
+       "availabilityCode": "OA",
+       "documentStyle": "html",
+       "site": "Europe_PMC",
+       "url": "https://europepmc.org/articles/PMC9547314"
+      }
+     ]
+    },
+    "isOpenAccess": "Y",
+    "inEPMC": "Y",
+    "inPMC": "Y",
+    "citedByCount": 24,
+    "hasReferences": "Y",
+    "hasTextMinedTerms": "Y",
+    "hasDbCrossReferences": "N",
+    "hasPDF": "N",
+    "hasBook": "N",
+    "hasSuppl": "Y",
+    "hasLabsLinks": "Y",
+    "hasData": "Y",
+    "license": "cc by",
+    "authMan": "N",
+    "epmcAuthMan": "N",
+    "nihAuthMan": "N",
+    "hasTMAccessionNumbers": "N",
+    "dateOfCompletion": "2022-10-11",
+    "dateOfCreation": "2022-10-07",
+    "dateOfRevision": "2022-10-30",
+    "electronicPublicationDate": "2022-10-03",
+    "firstPublicationDate": "2022-10-03",
+    "firstIndexDate": "2022-10-08",
+    "fullTextReceivedDate": "2025-02-04",
+    "hasEvaluations": "N"
+   }
+  ]
+ }
+}

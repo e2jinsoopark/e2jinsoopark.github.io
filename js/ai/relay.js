@@ -76,9 +76,9 @@ export function inviteMessage({ code, name = '', dailyLimitUsd }) {
   const who = name ? `${name}님, ` : '';
   const limit = Number.isFinite(dailyLimitUsd) ? `하루 한도 ${formatUsd(dailyLimitUsd)}, ` : '';
   return [
-    `[논문 리더 초대] ${who}아래 링크를 열면 API 키 없이 영어 논문 번역·요약·채팅을 쓸 수 있습니다.`,
+    `[갈피 초대] ${who}아래 링크를 열면 API 키 없이 영어 논문 번역·요약·채팅을 쓸 수 있습니다.`,
     inviteLink(code),
-    `링크가 안 열리면 논문 리더 → 설정 → AI 번역 → ‘키 없이 쓰기’에 코드 ${code}를 넣고 테스트를 누르세요. (${limit}코드는 본인만 써 주세요)`,
+    `링크가 안 열리면 갈피 → 설정 → AI 번역 → ‘키 없이 쓰기’에 코드 ${code}를 넣고 테스트를 누르세요. (${limit}코드는 본인만 써 주세요)`,
   ].join('\n');
 }
 

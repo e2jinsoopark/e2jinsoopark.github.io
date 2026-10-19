@@ -1,14 +1,18 @@
 // Minimal Semantic Scholar client (Graph + Recommendations APIs), browser fetch, Korean errors.
-import { isAbortError, sleepAbortable } from './shared.js';
+// Only a fallback now: PubMed / Europe PMC / Crossref (scholarly.js) answer first and need no key.
+import { anySignal, isAbortError, sleepAbortable } from './shared.js';
+import { findDoi, referenceTitle } from './textmatch.js';
+
+export { findDoi };
 
 const BASE = 'https://api.semanticscholar.org';
+const TIMEOUT_MS = 15000;
 const MATCH_FIELDS = 'title,year,authors,url,externalIds,abstract,citationCount';
-const REC_FIELDS = 'title,year,authors,url,abstract,citationCount';
+const REC_FIELDS = 'title,year,authors,url,externalIds,abstract,citationCount,venue';
 const REF_FIELDS = 'title,year,authors,url,externalIds,abstract,citationCount,venue';
 const MAX_QUERY = 300;
 
-export const RATE_LIMIT_MESSAGE = 'Semantic Scholar 요청이 잠시 몰렸습니다(429). 1~2분 뒤 다시 시도해 주세요. '
-  + '설정에서 Semantic Scholar API 키를 넣으면 더 안정적으로 쓸 수 있습니다.';
+export const RATE_LIMIT_MESSAGE = 'Semantic Scholar가 잠시 바쁩니다(429). 1~2분 뒤 다시 시도해 주세요.';
 
 export class S2Error extends Error {
   constructor(message, { status = 0 } = {}) {
@@ -30,31 +34,52 @@ function statusMessage(status, hasKey) {
 
 /**
  * GET a Semantic Scholar endpoint. Resolves to parsed JSON, or null on 404.
- * One quick automatic retry on 429, then a friendly S2Error.
+ * One quick automatic retry on 429 (or a failed fetch while online, which is how a CORS-less 429 looks),
+ * then a friendly S2Error.
  */
 export async function s2Get(path, params = {}, { apiKey = '', signal, retry = true } = {}) {
   const url = new URL(path, BASE);
   for (const [k, v] of Object.entries(params)) if (v != null && v !== '') url.searchParams.set(k, String(v));
   const headers = { Accept: 'application/json' };
   if (apiKey) headers['x-api-key'] = apiKey;
+  const timer = new AbortController();
+  const t = setTimeout(() => timer.abort(), TIMEOUT_MS);
+  const timedOut = () => !signal?.aborted && timer.signal.aborted;
   let res;
   try {
-    res = await fetch(url, { headers, signal });
-  } catch (err) {
-    if (isAbortError(err, signal)) throw err;
-    console.warn('[features] s2 fetch failed', err);
-    throw new S2Error('Semantic Scholar에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.');
-  }
-  if (res.status === 429 && retry) {
-    await sleepAbortable(1200, signal);
-    return s2Get(path, params, { apiKey, signal, retry: false });
-  }
-  if (res.status === 404) return null;
-  if (!res.ok) throw new S2Error(statusMessage(res.status, Boolean(apiKey)), { status: res.status });
-  try {
-    return await res.json();
-  } catch {
-    throw new S2Error('Semantic Scholar 응답을 읽지 못했습니다.', { status: res.status });
+    try {
+      res = await fetch(url, { headers, signal: anySignal(signal, timer.signal), credentials: 'omit', referrerPolicy: 'no-referrer' });
+    } catch (err) {
+      if (timedOut()) throw new S2Error('Semantic Scholar 응답이 늦어 중단했습니다. 잠시 후 다시 시도해 주세요.');
+      if (isAbortError(err, signal)) throw err;
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+      // The keyless pool answers 429 without CORS headers (seen 2026-10-19), which the browser reports as a
+      // failed fetch: retry once like a 429.
+      if (!offline && retry) {
+        clearTimeout(t);
+        await sleepAbortable(1200, signal);
+        return s2Get(path, params, { apiKey, signal, retry: false });
+      }
+      console.warn('[features] s2 fetch failed', err);
+      throw new S2Error(offline
+        ? 'Semantic Scholar에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.'
+        : 'Semantic Scholar에 연결하지 못했습니다. 서버가 잠시 바쁘거나 네트워크가 막혀 있을 수 있습니다.');
+    }
+    if (res.status === 429 && retry) {
+      clearTimeout(t);
+      await sleepAbortable(1200, signal);
+      return s2Get(path, params, { apiKey, signal, retry: false });
+    }
+    if (res.status === 404) return null;
+    if (!res.ok) throw new S2Error(statusMessage(res.status, Boolean(apiKey)), { status: res.status });
+    try {
+      return await res.json();
+    } catch (err) {
+      if (isAbortError(err, signal) && !timedOut()) throw err;
+      throw new S2Error('Semantic Scholar 응답을 읽지 못했습니다.', { status: res.status });
+    }
+  } finally {
+    clearTimeout(t);
   }
 }
 
@@ -100,31 +125,39 @@ export async function recommendations(paperId, opts = {}) {
   return (data?.recommendedPapers || []).filter((p) => p?.paperId).map(normalizePaper);
 }
 
-export function findDoi(text) {
-  const m = String(text ?? '').match(/\b(10\.\d{4,9}\/[^\s"<>]+)/i);
-  return m ? m[1].replace(/[.,;)\]]+$/, '') : null;
-}
-
 /**
- * Guess the article title inside a bibliography entry (APA/Harvard "(2019). Title." or
- * Vancouver "Authors. Title. Journal. 2019;"), falling back to the cleaned entry.
+ * Guess the article title inside a bibliography entry (quoted “Title,” or APA/Harvard "(2019). Title."
+ * via textmatch.referenceTitle, else Vancouver "Authors. Title. Journal. 2019;"), falling back to the
+ * cleaned entry.
  */
 export function guessReferenceTitle(text) {
+  const marked = referenceTitle(text);
+  if (marked) return marked.slice(0, MAX_QUERY);
   const t = String(text ?? '').replace(/\s+/g, ' ').trim().replace(/^\[?\d{1,3}[\].)]?\s+/, '');
-  const apa = t.match(/\((?:19|20)\d{2}[a-z]?(?:, [^)]*)?\)\.?\s*(.+?[.?!])(?=\s|$)/);
-  if (apa && apa[1].length >= 15) return apa[1].replace(/\.$/, '');
   const parts = t.split(/\.\s+/);
   if (parts.length >= 3 && parts[1].length >= 15) return parts[1];
   return t.slice(0, MAX_QUERY);
+}
+
+/** Exact DOI lookup (no guessing); null when Semantic Scholar does not know the DOI. */
+export async function paperByDoi(doi, opts = {}) {
+  if (!doi) return null;
+  const path = String(doi).split('/').map(encodeURIComponent).join('/'); // the API expects literal slashes
+  const byDoi = await s2Get(`/graph/v1/paper/DOI:${path}`, { fields: REF_FIELDS }, opts);
+  return byDoi?.paperId ? normalizePaper(byDoi) : null;
+}
+
+/** Best title match for a bibliography entry (its guessed title), or null. */
+export function matchReference(refText, opts = {}) {
+  return matchPaper(guessReferenceTitle(refText), opts);
 }
 
 /** Metadata for a bibliography entry: DOI lookup first, then title match. Null when not found. */
 export async function lookupReference(refText, opts = {}) {
   const doi = findDoi(refText);
   if (doi) {
-    const path = doi.split('/').map(encodeURIComponent).join('/'); // the API expects literal slashes
-    const byDoi = await s2Get(`/graph/v1/paper/DOI:${path}`, { fields: REF_FIELDS }, opts);
-    if (byDoi?.paperId) return normalizePaper(byDoi);
+    const hit = await paperByDoi(doi, opts);
+    if (hit) return hit;
   }
-  return matchPaper(guessReferenceTitle(refText), opts);
+  return matchReference(refText, opts);
 }

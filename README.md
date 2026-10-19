@@ -1,6 +1,7 @@
-# 논문 리더 (Paper Reader)
+# 갈피 (GALPI)
 
-영어 논문 PDF를 올리면 **왼쪽에 원문, 오른쪽에 한국어 번역**을 나란히 보여 주는 개인용 논문 뷰어입니다.
+**갈피**는 영어 논문 PDF를 올리면 **왼쪽에 원문, 오른쪽에 한국어 번역**을 나란히 보여 주는 개인용 논문 뷰어입니다.
+책갈피처럼, 읽던 논문과 읽던 자리를 지켜 줍니다.
 어느 쪽이든 문장에 마우스를 올리면 반대쪽의 짝 문장이 함께 표시됩니다.
 GitHub Pages에서 바로 열리는 정적 웹앱이라 설치할 것이 없습니다.
 
@@ -22,7 +23,7 @@ GitHub Pages에서 바로 열리는 정적 웹앱이라 설치할 것이 없습�
 | 미리보기 | Figure·Table·Section 링크를 누르지 않고 미리보기 |
 | 핵심 밑줄 | 핵심 기여·방법·결과·한계 문장 자동 밑줄 |
 | 하이라이트·메모 | 4색 하이라이트, 메모, 메모 모아보기 |
-| 관련 논문 | Semantic Scholar 기반 추천 |
+| 관련 논문 | PubMed 유사 논문 + Europe PMC 인용 수, 폴더 기준 추천 (키 필요 없음) |
 
 ## 처음 설정 (기기마다 한 번)
 
@@ -167,7 +168,7 @@ Sonnet도)를 쓰며, 하루 사용 한도는 초대한 분이 정하고 한국 
   초대 코드 서버(Cloudflare)를 거쳐 Anthropic으로 갑니다. GPT 요청은 OpenAI에 저장하지 않도록(`store: false`) 보냅니다.
 - 공용 PC에서 썼다면 **설정 → 이 기기의 데이터 모두 지우기**를 누르세요. 키·토큰과 함께 그 브라우저에 남은
   논문·번역·메모·사용 기록을 지웁니다(GitHub 저장소의 데이터는 그대로).
-- ‘관련 논문’은 처음 쓸 때 묻고 나서 논문 제목을 Semantic Scholar로 보냅니다.
+- ‘관련 논문’과 인용 정보는 처음 쓸 때 한 번 동의를 받은 뒤 논문 제목·DOI·참고문헌 문구를 PubMed·Europe PMC·Crossref로 보냅니다(없으면 Semantic Scholar).
 
 ### 배포(호스팅) 주의
 
@@ -178,7 +179,7 @@ API 키·GitHub 토큰·논문은 **브라우저의 사이트(origin)별 저장�
 - 이 앱만 올리는 **전용 origin**에서 배포하세요. 예: 이 앱 전용 GitHub 계정(조직)의 `<이름>.github.io` 루트 사이트,
   또는 사용자 도메인(CNAME, 예: `papers.example.com`). 같은 origin에 다른 프로젝트 페이지나 service worker를 두지 마세요.
 - 앱이 공유 origin(`*.github.io/<프로젝트>/`)에서 열리면 **설정 → 보안·데이터**에 경고가 표시됩니다.
-- 배포에는 앱 파일(`index.html`, `css/`, `js/`, `vendor/`)만 올리는 것을 권장합니다(GitHub Actions의 Pages artifact나
+- 배포에는 앱 파일(`index.html`, `manifest.webmanifest`, `css/`, `js/`, `vendor/`, `assets/`)만 올리는 것을 권장합니다(GitHub Actions의 Pages artifact나
   배포 전용 브랜치). `tests/` 페이지가 함께 올라가도 localhost가 아니면 항상 모의 AI로만 동작합니다.
 
 ## 한계

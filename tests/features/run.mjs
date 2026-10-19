@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { HARNESS_PMID, routeScholarly } from './scholarly-routes.mjs';
 
 const { chromium } = await import(pathToFileURL('C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs').href);
 
@@ -42,53 +43,20 @@ async function test(name, fn) {
   }
 }
 
-// ---------- Semantic Scholar fixtures (served by page.route; nothing leaves the machine) ----------
-const S2 = {
-  match: {
-    data: [{
-      paperId: 'S2MATCH', title: 'Early Mobilization and Delirium in Mechanically Ventilated Adults: A Nurse-Led Protocol',
-      year: 2024, authors: [{ name: 'H. Kim' }, { name: 'J. Lee' }], url: 'https://www.semanticscholar.org/paper/S2MATCH',
-      externalIds: { DOI: '10.0000/test.1' }, abstract: 'Synthetic abstract.', citationCount: 12, matchScore: 210,
-    }],
-  },
-  recs: {
-    recommendedPapers: [
-      ['Sedation interruption and early mobility bundles in the ICU', 2022, 41],
-      ['Nurse-driven delirium screening with CAM-ICU: a multicenter cohort', 2021, 88],
-      ['Barriers to early mobilization: a qualitative study of ICU nurses', 2023, 17],
-      ['Effect of ABCDEF bundle adherence on ventilator-free days', 2020, 230],
-      ['Accidental extubation during mobilization: incidence and prevention', 2019, 54],
-    ].map(([title, year, citationCount], i) => ({
-      paperId: `REC${i}`, title, year, citationCount, url: `https://www.semanticscholar.org/paper/REC${i}`,
-      authors: [{ name: 'A. Author' }, { name: 'B. Writer' }, { name: 'C. Third' }, { name: 'D. Fourth' }],
-      abstract: i === 3 ? null : `Background: synthetic abstract number ${i + 1} describing a study of critically ill adults. Methods and results are invented for testing the 관련 논문 panel layout across several lines of text so that clamping is visible.`,
-    })),
-  },
-  ref1: {
-    paperId: 'REF1', title: 'Delirium as a predictor of mortality in mechanically ventilated patients in the intensive care unit',
-    year: 2004, venue: 'JAMA', citationCount: 3100, authors: [{ name: 'E. W. Ely' }, { name: 'A. Shintani' }, { name: 'B. Truman' }, { name: 'T. Speroff' }],
-    url: 'https://www.semanticscholar.org/paper/REF1', abstract: 'Synthetic abstract for the reference card test.',
-  },
-};
-
-/** mode: 'ok' | '429' */
-async function routeS2(page, { mode = 'ok', log = [] } = {}) {
+// ---------- scholarly APIs (served by page.route; nothing leaves the machine) ----------
+// PubMed / Europe PMC / Crossref answers come from tests/features/scholarly-routes.mjs (real-format
+// fixtures). Semantic Scholar is only a fallback now; it answers 404 here unless a test says otherwise.
+async function routeS2(page, { log = [] } = {}) {
   await page.route('https://api.semanticscholar.org/**', async (route) => {
-    const req = route.request();
-    const url = new URL(req.url());
-    log.push({ path: url.pathname, query: url.search, apiKey: req.headers()['x-api-key'] ?? null });
-    const json = (status, body) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(body) });
-    if (mode === '429') return json(429, { message: 'Too Many Requests' });
-    if (url.pathname === '/graph/v1/paper/search/match') return json(200, S2.match);
-    if (url.pathname.startsWith('/recommendations/v1/papers/forpaper/')) return json(200, S2.recs);
-    if (url.pathname.startsWith('/graph/v1/paper/DOI:10.1001/jama.291.14.1753')) return json(200, S2.ref1);
-    return json(404, { error: 'not found' });
+    const url = new URL(route.request().url());
+    log.push({ host: 's2', path: url.pathname, query: url.search });
+    await route.fulfill({ status: 404, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ error: 'not found' }) });
   });
 }
 
 const browser = await chromium.launch({ channel: 'msedge' });
 
-async function open({ query = 'mock=1&reset=1', tab, s2 = {}, viewport = { width: 1440, height: 900 }, context } = {}) {
+async function open({ query = 'mock=1&reset=1', tab, s2 = {}, scholarly = {}, viewport = { width: 1440, height: 900 }, context } = {}) {
   const ctx = context ?? await browser.newContext({ viewport, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
@@ -96,6 +64,7 @@ async function open({ query = 'mock=1&reset=1', tab, s2 = {}, viewport = { width
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|ERR_FAILED/.test(m.text())) errors.push(m.text()); });
   await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, (r) => r.abort()); // no real external traffic
   await routeS2(page, s2);
+  await routeScholarly(page, scholarly);
   await page.goto(`${BASE}/tests/features/harness.html?${query}${tab ? `&tab=${tab}` : ''}`);
   await page.waitForSelector('body[data-ready="1"]', { timeout: 10000 });
   return { page, ctx, errors };
@@ -468,65 +437,70 @@ await test('notes panel: grouped by page, colour filter, jump, edit note, delete
   return `groups ${groups.join(' & ')}, green filter → 2, click → jump ${jumps[0]}, note edited, delete → undo restored ${count0} items`;
 });
 
-await test('related panel: match → recommendations, s2PaperId stored, cache, api key header', async () => {
+await test('related panel: consent → PubMed similar articles (no key), pmid stored, cache, abstract translate', async () => {
   const log = [];
-  const { page, ctx, errors } = await open({ s2: { log } });
-  await page.evaluate(() => __h.ctx.settings.set({ semanticScholar: { apiKey: 'test-key-123' } }));
+  const { page, ctx, errors } = await open({ scholarly: { log } });
   await page.click('#tabs [data-tab="related"]');
   // Regression (third-party-flows-not-disclosed): nothing is sent until the user agrees once.
-  await page.waitForSelector('[data-action="s2-consent"]');
-  assert(log.length === 0, `no Semantic Scholar request before consent (${log.length})`);
-  await page.click('[data-action="s2-consent"]');
+  await page.waitForSelector('[data-action="scholar-consent"]');
+  assert(log.length === 0, `no request before consent (${log.length})`);
+  await page.click('[data-action="scholar-consent"]');
   await page.waitForSelector('.pf-related__item');
   const titles = await page.$$eval('.pf-related__title', (ts) => ts.map((t) => t.textContent));
   const updates = await page.evaluate(() => __h.library.updates);
-  const cached = await page.waitForFunction(() => __h.library.data['paper1/ai']?.related?.items?.length === 5).then(() => true);
-  const links = await page.$$eval('.pf-related__title a', (as) => as.every((a) => a.target === '_blank' && a.rel === 'noopener noreferrer'));
-  await page.click('.pf-related__item >> nth=0 >> [data-action="translate"]');
-  await page.waitForFunction(() => document.querySelector('.pf-related__ko')?.textContent.includes('〔빠른 번역〕'));
+  const cached = await page.waitForFunction(() => __h.library.data['paper1/ai']?.related?.items?.length === 20).then(() => true);
+  const links = await page.$$eval('.pf-related__item a', (as) => as.every((a) => a.target === '_blank' && a.rel.includes('noopener')));
+  const li = '.pf-related__item[data-pmid="36205994"]';
+  await page.click(`${li} [data-action="abstract"]`);
+  await page.waitForSelector(`${li} .pf-related__absbox strong`);
+  await page.click(`${li} [data-action="translate"]`);
+  await page.waitForFunction((sel) => document.querySelector(`${sel} .pf-related__ko`)?.textContent.includes('〔빠른 번역〕'), li);
   await shot(page, '14-related');
   const before = log.length;
   await page.goto(`${BASE}/tests/features/harness.html?mock=1&tab=related`);
   await page.waitForSelector('body[data-ready="1"]');
   await page.waitForSelector('.pf-related__item');
+  const paths = log.map((l) => (l.host === 'ncbi' ? l.path : l.host));
   assert(log.length === before, 'reopen served from ai.related cache');
-  assert(titles.length === 5 && log[0].path.endsWith('/search/match') && log[1].path.includes('/forpaper/S2MATCH'), `calls ${JSON.stringify(log)}`);
-  assert(log.every((l) => l.apiKey === 'test-key-123'), 'x-api-key sent');
-  assert(new URLSearchParams(log[0].query).get('fields') === 'title,year,authors,url,externalIds,abstract,citationCount', 'match fields');
-  assert(new URLSearchParams(log[1].query).get('limit') === '20', 'limit=20');
-  assert(updates.length === 1 && updates[0].patch.s2PaperId === 'S2MATCH', 'updatePaper(s2PaperId)');
+  assert(titles.length === 20, `20 items (${titles.length})`);
+  assert(paths.slice(0, 5).join() === 'esearch.fcgi,esummary.fcgi,elink.fcgi,esummary.fcgi,epmc', paths.join());
+  assert(log.filter((l) => l.host === 'ncbi').every((l) => l.params.tool === 'galpi' && !l.params.api_key), 'tool=galpi, no key');
+  assert(updates.length === 1 && updates[0].patch.pmid === HARNESS_PMID, 'updatePaper(pmid)');
   assert(cached && links, 'cached & safe links');
   assert(!errors.length, `page errors: ${errors}`);
   await ctx.close();
-  return `GET ${log[0].path} → ${log[1].path}; 5 items; updatePaper({s2PaperId:'S2MATCH'}); ai.related cached (reopen made 0 requests); x-api-key sent; abstract translated`;
+  return `${paths.slice(0, 5).join(' → ')}; 20 items; updatePaper({pmid:'${HARNESS_PMID}'}); ai.related cached (reopen made 0 requests); abstract (Europe PMC) translated`;
 });
 
-await test('related panel: 429 → friendly Korean retry message', async () => {
+await test('related panel: PubMed 429 → friendly Korean retry message', async () => {
   const log = [];
-  const { page, ctx } = await open({ s2: { mode: '429', log } });
+  const { page, ctx } = await open({ scholarly: { log, mode: { ncbi429: 'always' } } });
   await page.click('#tabs [data-tab="related"]');
-  await page.click('[data-action="s2-consent"]');
-  await page.waitForSelector('.pf-error-box', { timeout: 6000 });
+  await page.click('[data-action="scholar-consent"]');
+  await page.waitForSelector('.pf-error-box', { timeout: 12000 });
   const msg = await page.textContent('.pf-error-box p');
   await shot(page, '15-related-429');
-  assert(msg.includes('429') && msg.includes('다시 시도'), msg);
-  assert(log.length === 2, `one automatic retry (${log.length} requests)`);
+  assert(msg === 'PubMed가 잠시 바쁩니다. 잠시 후 다시 시도해 주세요.', msg);
+  assert(log.length === 3, `two automatic back-off retries (${log.length} requests)`);
+  assert(await page.$('[data-action="retry"]'), '다시 시도 button');
   await ctx.close();
-  return `message: "${msg}" (auto-retried once, then 다시 시도 button)`;
+  return `message: "${msg}" (retried twice with back-off, then 다시 시도 button)`;
 });
 
-await test('citation card: [1] → reference card, Semantic Scholar lookup, grace delay hover', async () => {
+await test('citation card: [1] → reference card, consent, keyless lookup, grace delay hover', async () => {
   const log = [];
-  const { page, ctx } = await open({ s2: { log } });
+  const { page, ctx } = await open({ scholarly: { log } });
   await page.hover('.sv-link[data-token="[1]"]');
   await page.waitForSelector('.pf-cite--ref');
   const head = await page.textContent('.pf-cite--ref .pf-pop__head');
   const text = await page.textContent('.pf-cite__text');
   await shot(page, '16-citation-card');
-  await page.click('[data-action="s2-search"]');
+  const sentBefore = log.length;
+  await page.click('[data-action="ref-lookup"]');
+  await page.click('[data-action="scholar-consent"]');
   await page.waitForSelector('.pf-cite__paper');
   const title = await page.textContent('.pf-cite__title');
-  await shot(page, '17-citation-s2');
+  await shot(page, '17-citation-lookup');
   // grace: leave the link, enter the popover → stays open
   const pop = await page.$eval('.pf-pop--cite', (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 20 }; });
   await page.mouse.move(pop.x, pop.y);
@@ -540,11 +514,12 @@ await test('citation card: [1] → reference card, Semantic Scholar lookup, grac
   await page.waitForSelector('.pf-cite--ref');
   const head2 = await page.textContent('.pf-cite--ref .pf-pop__head');
   assert(head.startsWith('참고문헌 1') && text.includes('Ely EW'), `card ${head} / ${text}`);
-  assert(title.startsWith('Delirium as a predictor') && log[0].path.startsWith('/graph/v1/paper/DOI:10.1001/jama.291.14.1753'), `lookup ${title} ${JSON.stringify(log)}`);
+  assert(sentBefore === 0, 'nothing sent before consent');
+  assert(title.startsWith('Delirium as a predictor') && log[0].host === 'epmc' && log[0].params.query === 'DOI:"10.1001/jama.291.14.1753"', `lookup ${title} ${JSON.stringify(log[0])}`);
   assert(stillOpen && closed, `grace hover open=${stillOpen} closed=${closed}`);
   assert(head2.startsWith('참고문헌 2'), head2);
   await ctx.close();
-  return `hover [1] → "${head}" card; 검색 → DOI lookup "${title.slice(0, 40)}…"; popover survives moving into it, hides after leaving; [2] → "${head2}"`;
+  return `hover [1] → "${head}" card; 논문 정보 찾기 + 동의 → Europe PMC DOI lookup "${title.slice(0, 40)}…"; popover survives moving into it, hides after leaving; [2] → "${head2}"`;
 });
 
 await test('preview popover: internal non-reference link renders target region; external link card', async () => {

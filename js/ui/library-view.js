@@ -5,7 +5,7 @@ import { LIMITS } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { debounce, el, formatBytes, formatDate } from '../core/util.js';
 import {
-  button, confirmDialog, contextMenu, iconButton, modal, progressBar, promptDialog, spinner, toast, uiState,
+  brandImage, button, confirmDialog, contextMenu, iconButton, modal, progressBar, promptDialog, spinner, toast, uiState,
 } from './components.js';
 import { icon } from './icons.js';
 
@@ -184,9 +184,11 @@ class LibraryView {
     });
 
     const sidebar = el('aside', { class: 'lib-sidebar', 'aria-label': '라이브러리 탐색' },
-      el('div', { class: 'lib-brand' },
-        el('span', { class: 'lib-brand-mark' }, icon('book-open', { size: 18 })),
-        el('div', {}, el('div', { class: 'lib-brand-name' }, '논문 리더'), el('div', { class: 'lib-brand-sub' }, '원문과 번역을 나란히'))),
+      el('div', { class: 'lib-brand', title: '갈피 — 논문을 나란히 읽다' },
+        brandImage('mark', { size: 34, className: 'lib-brand-mark' }),
+        el('div', { class: 'lib-brand-text' },
+          el('div', { class: 'lib-brand-name' }, '갈피'),
+          el('div', { class: 'lib-brand-sub', lang: 'en', 'aria-hidden': 'true' }, 'GALPI'))),
       els.nav,
       el('div', { class: 'lib-sidebar-footer' },
         button('설정', { icon: 'settings', kind: 'ghost', className: 'lib-settings-btn', onClick: () => this.#navigate('#/settings') })));
@@ -566,7 +568,7 @@ class LibraryView {
     const els = this.#els;
     els.crumbs.replaceChildren(...(crumbs || [el('span', {}, this.#multi() ? src?.label || SHARED_LABEL : '라이브러리')]));
     els.title.textContent = title;
-    document.title = src?.shared ? `${title} · ${src.label} · 논문 리더` : '논문 리더';
+    document.title = src?.shared ? `${title} · ${src.label} · 갈피` : '갈피';
   }
 
   #renderList(src) {
@@ -738,6 +740,7 @@ class LibraryView {
       action || el('span'));
     return el('section', { class: 'onboarding', 'aria-label': '시작하기' },
       el('div', { class: 'onboarding-hero' },
+        brandImage('wordmark', { size: 96, alt: '갈피' }),
         el('h2', {}, '첫 논문을 추가해 보세요'),
         el('p', {}, '왼쪽에는 PDF 원문, 오른쪽에는 한국어 번역이 나란히 표시되고,\n한쪽 문장에 마우스를 올리면 반대쪽의 같은 문장이 함께 강조됩니다.')),
       this.#dropzone(),
@@ -1697,7 +1700,10 @@ function describeChange(summary, titleOf) {
   return String(summary || '')
     .replace(/(?:people\/[0-9a-f]{16}\/)?papers\/([A-Za-z0-9_-]{1,64})\/(paper\.pdf|translation\.json|annotations\.json|ai\.json)/g,
       (_, id, file) => { const t = titleOf(id); return `${t ? `‘${shorten(t, 40)}’` : '논문'} ${LABELS[file]}`; })
-    .replace(/\blibrary\.json\b/g, '서재 목록');
+    .replace(/\blibrary\.json\b/g, '서재 목록')
+    // The data repository's commits still carry the app's old name (js/store keeps its commit texts):
+    // '논문 리더 데이터 저장소 시작' and '논문 리더 동기화: …' are shown under the new name.
+    .replace(/^논문 리더(?= (?:데이터 저장소 시작|동기화))/, '갈피');
 }
 
 function toMillis(v) {

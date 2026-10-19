@@ -173,7 +173,7 @@ export class GitHubClient {
     const notes = [];
     if (empty) notes.push('빈 저장소 — 첫 동기화 때 README.md를 만들고 시작합니다');
     else if (!branchExists) notes.push(`‘${this.#branch}’ 브랜치가 없어 첫 동기화 때 만듭니다`);
-    if (foreign) notes.push('주의: 이 저장소에는 논문 리더와 관계없는 파일이 있습니다. 논문 전용 비공개 저장소를 따로 만들어 쓰는 것을 권장합니다');
+    if (foreign) notes.push('주의: 이 저장소에는 갈피와 관계없는 파일이 있습니다. 논문 전용 비공개 저장소를 따로 만들어 쓰는 것을 권장합니다');
     if (broadToken) notes.push('주의: 이 토큰은 내 모든 저장소에 접근할 수 있는 Classic 토큰입니다. 이 저장소 하나만 선택한 Fine-grained 토큰(github_pat_…)으로 바꾸는 것을 권장합니다');
     return {
       ok: true, repoPrivate, canPush: true, empty, branchExists, foreign, broadToken, defaultBranch: repo.default_branch,

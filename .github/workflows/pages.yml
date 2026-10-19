@@ -1,4 +1,5 @@
-# Publishes only the app files (no tests/ or docs/) to GitHub Pages.
+# Publishes only the app files (no tests/ or docs/) to GitHub Pages: the page, its styles and scripts, the vendored
+# libraries, the brand artwork (assets/: icons, wordmark) and the web app manifest.
 name: Deploy to GitHub Pages
 
 on:
@@ -26,7 +27,7 @@ jobs:
       - name: Stage app files only
         run: |
           mkdir _site
-          cp -r index.html css js vendor _site/
+          cp -r index.html manifest.webmanifest css js vendor assets _site/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

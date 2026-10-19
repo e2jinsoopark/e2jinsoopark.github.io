@@ -532,7 +532,8 @@ export async function routeGitHubToFake(context, fakeUrl) {
       const response = await route.fetch({ url });
       await route.fulfill({ response });
     } catch {
-      await route.abort('connectionfailed');
+      // The page or context may already be gone (a test closing its browser mid-request): nothing to answer.
+      await route.abort('connectionfailed').catch(() => {});
     }
   });
 }

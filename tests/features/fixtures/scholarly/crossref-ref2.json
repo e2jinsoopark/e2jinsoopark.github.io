@@ -1,0 +1,296 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "message": {
+  "facets": {},
+  "total-results": 6910,
+  "items": [
+   {
+    "short-container-title": [
+     "The Lancet"
+    ],
+    "DOI": "10.1016/s0140-6736(09)60658-9",
+    "type": "journal-article",
+    "is-referenced-by-count": 2785,
+    "title": [
+     "Early physical and occupational therapy in mechanically ventilated, critically ill patients: a randomised controlled trial"
+    ],
+    "author": [
+     {
+      "given": "William D",
+      "family": "Schweickert",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Mark C",
+      "family": "Pohlman",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Anne S",
+      "family": "Pohlman",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Celerina",
+      "family": "Nigos",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Amy J",
+      "family": "Pawlik",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Cheryl L",
+      "family": "Esbrook",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Linda",
+      "family": "Spears",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Megan",
+      "family": "Miller",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Mietka",
+      "family": "Franczyk",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Deanna",
+      "family": "Deprizio",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Gregory A",
+      "family": "Schmidt",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Amy",
+      "family": "Bowman",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Rhonda",
+      "family": "Barr",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Kathryn E",
+      "family": "McCallister",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Jesse B",
+      "family": "Hall",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "John P",
+      "family": "Kress",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "The Lancet"
+    ],
+    "score": 116.90284,
+    "issued": {
+     "date-parts": [
+      [
+       2009,
+       5
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.2490/jjrmc.55.701",
+    "title": [
+     "第８回　Early Physical and Occupational Therapy in Mechanically Ventilated, Critically Ill Patients：A Randomised Controlled Trial"
+    ],
+    "score": 100.440796,
+    "issued": {
+     "date-parts": [
+      [
+       2018,
+       8,
+       17
+      ]
+     ]
+    },
+    "container-title": [
+     "The Japanese Journal of Rehabilitation Medicine"
+    ],
+    "short-container-title": [
+     "Jpn J Rehabil Med"
+    ],
+    "is-referenced-by-count": 0,
+    "type": "journal-article"
+   },
+   {
+    "DOI": "10.3410/f.1160807.628059",
+    "type": "dataset",
+    "is-referenced-by-count": 0,
+    "title": [
+     "Faculty Opinions recommendation of Early physical and occupational therapy in mechanically ventilated, critically ill patients: a randomised controlled trial."
+    ],
+    "author": [
+     {
+      "given": "Babak",
+      "family": "Sarani",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Department of Surgery, University of Pennsylvania, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Faculty Opinions – Post-Publication Peer Review of the Biomedical Literature"
+    ],
+    "score": 81.64805,
+    "issued": {
+     "date-parts": [
+      [
+       2009,
+       10,
+       5
+      ]
+     ]
+    }
+   }
+  ],
+  "items-per-page": 3,
+  "query": {
+   "start-index": 0,
+   "search-terms": null
+  }
+ }
+}

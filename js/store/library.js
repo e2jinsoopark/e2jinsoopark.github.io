@@ -481,6 +481,8 @@ export class Library extends EventTarget {
       translatedCount: translation ? src.translatedCount : 0,
       sentenceCount: src.sentenceCount,
       s2PaperId: src.s2PaperId,
+      pmid: src.pmid,
+      doi: src.doi,
     }, { sha256 });
     if (translation) await target.savePaperData(paper.id, 'translation', structuredClone(translation));
     target.#note(`논문 추가 ${q(paper.title)} (${this.label}에서 복사)`);
@@ -801,6 +803,9 @@ export class Library extends EventTarget {
       sha256: digest,
     };
     if (typeof fields.s2PaperId === 'string' && fields.s2PaperId) paper.s2PaperId = fields.s2PaperId;
+    // Scholarly ids resolved by 관련 논문 (js/features/scholarly.js); copied so the target never looks them up again.
+    if (typeof fields.pmid === 'string' && /^\d{1,10}$/.test(fields.pmid)) paper.pmid = fields.pmid;
+    if (typeof fields.doi === 'string' && /^10\.\d{4,9}\/\S{1,200}$/.test(fields.doi)) paper.doi = fields.doi;
     const who = this.#shared ? this.#who() : null;
     if (who) paper.addedBy = who; // 공용 서재 shows who added a paper
     this.#data.papers.push(paper);

@@ -1,0 +1,157 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "message": {
+  "facets": {},
+  "total-results": 791335,
+  "items": [
+   {
+    "short-container-title": [
+     "Dimens Crit Care Nurs"
+    ],
+    "DOI": "10.1097/dcc.0000000000000415",
+    "type": "journal-article",
+    "is-referenced-by-count": 2,
+    "title": [
+     "Implementing a Comfort Care Cart"
+    ],
+    "author": [
+     {
+      "given": "Kori A.",
+      "family": "Stolzman",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Joan M.",
+      "family": "Connors",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Dimensions of Critical Care Nursing"
+    ],
+    "score": 51.84743,
+    "issued": {
+     "date-parts": [
+      [
+       2020,
+       5
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.4037/ccn2022631",
+    "type": "journal-article",
+    "is-referenced-by-count": 13,
+    "title": [
+     "An In Situ Mock Code Program in the Pediatric Intensive Care Unit: A Multimodal Nurse-Led Quality Improvement Initiative"
+    ],
+    "author": [
+     {
+      "given": "Jennifer",
+      "family": "Hammontree",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Jennifer Hammontree is a clinical registered nurse and co-chair of the PICU Mock Code Committee, Cook Children’s Medical Center, Fort Worth, Texas."
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Catherine Glenn",
+      "family": "Kinderknecht",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Catherine Glenn Kinderknecht is a nurse practitioner in the pediatric intensive care unit and manager of advanced practice providers, Cook Children’s Medical Center."
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Critical Care Nurse"
+    ],
+    "score": 49.709938,
+    "issued": {
+     "date-parts": [
+      [
+       2022,
+       4,
+       1
+      ]
+     ]
+    }
+   },
+   {
+    "short-container-title": [
+     "Dimens Crit Care Nurs"
+    ],
+    "DOI": "10.1097/dcc.0000000000000522",
+    "type": "journal-article",
+    "is-referenced-by-count": 8,
+    "title": [
+     "Development of a Comprehensive Extracorporeal Membrane Oxygenation Program in a Cardiac Transplant Intensive Care Unit"
+    ],
+    "author": [
+     {
+      "given": "Michelle",
+      "family": "Galos",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Dimensions of Critical Care Nursing"
+    ],
+    "score": 47.99197,
+    "issued": {
+     "date-parts": [
+      [
+       2022,
+       5
+      ]
+     ]
+    }
+   }
+  ],
+  "items-per-page": 3,
+  "query": {
+   "start-index": 0,
+   "search-terms": null
+  }
+ }
+}

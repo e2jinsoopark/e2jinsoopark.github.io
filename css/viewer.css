@@ -1,17 +1,22 @@
 /* PDF viewer: page column, pdf.js text layer, highlight/mark layers, translation overlay, capture. */
 
 .pdfv-root {
-  --pdfv-bg: #e9ebef;
+  /* 갈피 theme: warm grey desk, white pages, an amber hover (multiplied onto the page, so the text stays black),
+     a mocha active ring. Pages stay white in both themes, so these do not change with the theme. */
+  --pdfv-bg: #e8e1d6;
   --pdfv-page-bg: #ffffff;
-  --pdfv-page-shadow: 0 1px 3px rgb(15 23 42 / 0.12), 0 6px 18px rgb(15 23 42 / 0.06);
-  --pdfv-hover: rgb(255 196 0 / 0.32);
-  --pdfv-active: rgb(37 99 235 / 0.85);
-  --pdfv-active-fill: rgb(37 99 235 / 0.08);
-  --pdfv-flash: rgb(255 170 0 / 0.55);
+  --pdfv-page-shadow: 0 1px 3px rgb(60 38 22 / 0.14), 0 6px 18px rgb(60 38 22 / 0.07);
+  --pdfv-hover: rgb(250 178 60 / 0.4);
+  --pdfv-active: rgb(140 98 80 / 0.88);
+  --pdfv-active-fill: rgb(140 98 80 / 0.08);
+  --pdfv-flash: rgb(245 160 30 / 0.55);
   --pdfv-overlay-bg: #fffdf7;
-  --pdfv-overlay-fg: #1b1b1f;
-  --pdfv-overlay-hover: rgb(255 196 0 / 0.38);
-  --pdfv-capture: #2563eb;
+  --pdfv-overlay-fg: #241c17;
+  /* secondary overlay text (English fallback, '(앞 쪽에서 이어짐)', page errors): ≥ 5.3:1 on both overlay papers */
+  --pdfv-overlay-muted: #6e6056;
+  --pdfv-selection: rgb(164 120 100 / 0.34); /* Mocha Mousse tint for text selected on the page */
+  --pdfv-overlay-hover: rgb(250 178 60 / 0.4);
+  --pdfv-capture: #8c6250;
   /* Used by pdf.js setLayerDimensions(): round(down, …, var(--scale-round-x)). */
   --scale-round-x: 1px;
   --scale-round-y: 1px;
@@ -31,7 +36,7 @@
 :where(.pdfv-root) { position: relative; }
 
 [data-theme="dark"] .pdfv-root {
-  --pdfv-bg: #1c1f24;
+  --pdfv-bg: #120e0c;
   --pdfv-page-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
   --pdfv-overlay-bg: #f4f1e8;
 }
@@ -64,7 +69,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  color: #6b7280;
+  color: var(--pdfv-overlay-muted);
   font-size: 14px;
   text-align: center;
 }
@@ -211,8 +216,8 @@
 }
 
 .textLayer ::selection {
-  background: rgb(0 0 255 / 0.25);
-  background: color-mix(in srgb, AccentColor, transparent 75%);
+  /* 갈피: a mocha tint instead of pdf.js's system AccentColor (blue on most systems) */
+  background: var(--pdfv-selection);
 }
 
 .textLayer br::selection {
@@ -268,12 +273,12 @@
 }
 
 .pdfv-tbox--heading { font-weight: 700; }
-.pdfv-tbox--caption { color: #3b3b44; }
+.pdfv-tbox--caption { color: #43382f; }
 
 .pdfv-tsent { border-radius: 2px; }
 .pdfv-tsent--hover { background: var(--pdfv-overlay-hover); }
-.pdfv-tsent--missing { color: #6b7280; font-style: italic; }
-.pdfv-tsent--tail { color: #9ca3af; font-size: 0.85em; }
+.pdfv-tsent--missing { color: var(--pdfv-overlay-muted); font-style: italic; }
+.pdfv-tsent--tail { color: var(--pdfv-overlay-muted); font-size: 0.85em; }
 
 /* ---- region capture ---- */
 
@@ -292,6 +297,6 @@
   z-index: 5;
   box-sizing: border-box;
   border: 2px dashed var(--pdfv-capture);
-  background: rgb(37 99 235 / 0.08);
+  background: rgb(140 98 80 / 0.08);
   pointer-events: none;
 }

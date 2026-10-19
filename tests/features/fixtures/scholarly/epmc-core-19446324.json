@@ -1,0 +1,227 @@
+{
+ "version": "6.9",
+ "hitCount": 1,
+ "request": {
+  "queryString": "DOI:\"10.1016/s0140-6736(09)60658-9\"",
+  "resultType": "core",
+  "cursorMark": "*",
+  "pageSize": 1,
+  "sort": "",
+  "synonym": false
+ },
+ "resultList": {
+  "result": [
+   {
+    "id": "19446324",
+    "source": "MED",
+    "pmid": "19446324",
+    "pmcid": "PMC9906655",
+    "fullTextIdList": {
+     "fullTextId": [
+      "PMC9906655"
+     ]
+    },
+    "doi": "10.1016/s0140-6736(09)60658-9",
+    "title": "Early physical and occupational therapy in mechanically ventilated, critically ill patients: a randomised controlled trial.",
+    "authorString": "Schweickert WD, Pohlman MC, Pohlman AS, Nigos C, Pawlik AJ, Esbrook CL, Spears L, Miller M, Franczyk M, Deprizio D, Schmidt GA, Bowman A, Barr R, McCallister KE, Hall JB, Kress JP.",
+    "authorList": {
+     "author": [
+      {
+       "fullName": "Schweickert WD",
+       "lastName": "Schweickert",
+       "firstName": "William D",
+       "initials": "WD"
+      },
+      {
+       "fullName": "Pohlman MC",
+       "lastName": "Pohlman",
+       "firstName": "Mark C",
+       "initials": "MC"
+      },
+      {
+       "fullName": "Pohlman AS",
+       "lastName": "Pohlman",
+       "firstName": "Anne S",
+       "initials": "AS"
+      },
+      {
+       "fullName": "Nigos C",
+       "lastName": "Nigos",
+       "firstName": "Celerina",
+       "initials": "C"
+      },
+      {
+       "fullName": "Pawlik AJ",
+       "lastName": "Pawlik",
+       "firstName": "Amy J",
+       "initials": "AJ"
+      },
+      {
+       "fullName": "Esbrook CL",
+       "lastName": "Esbrook",
+       "firstName": "Cheryl L",
+       "initials": "CL"
+      },
+      {
+       "fullName": "Spears L",
+       "lastName": "Spears",
+       "firstName": "Linda",
+       "initials": "L"
+      },
+      {
+       "fullName": "Miller M",
+       "lastName": "Miller",
+       "firstName": "Megan",
+       "initials": "M"
+      },
+      {
+       "fullName": "Franczyk M",
+       "lastName": "Franczyk",
+       "firstName": "Mietka",
+       "initials": "M"
+      },
+      {
+       "fullName": "Deprizio D",
+       "lastName": "Deprizio",
+       "firstName": "Deanna",
+       "initials": "D"
+      },
+      {
+       "fullName": "Schmidt GA",
+       "lastName": "Schmidt",
+       "firstName": "Gregory A",
+       "initials": "GA",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-5013-6323"
+       }
+      },
+      {
+       "fullName": "Bowman A",
+       "lastName": "Bowman",
+       "firstName": "Amy",
+       "initials": "A"
+      },
+      {
+       "fullName": "Barr R",
+       "lastName": "Barr",
+       "firstName": "Rhonda",
+       "initials": "R"
+      },
+      {
+       "fullName": "McCallister KE",
+       "lastName": "McCallister",
+       "firstName": "Kathryn E",
+       "initials": "KE"
+      },
+      {
+       "fullName": "Hall JB",
+       "lastName": "Hall",
+       "firstName": "Jesse B",
+       "initials": "JB"
+      },
+      {
+       "fullName": "Kress JP",
+       "lastName": "Kress",
+       "firstName": "John P",
+       "initials": "JP"
+      }
+     ]
+    },
+    "authorIdList": {
+     "authorId": [
+      {
+       "type": "ORCID",
+       "value": "0000-0002-5013-6323"
+      }
+     ]
+    },
+    "journalInfo": {
+     "issue": "9678",
+     "volume": "373",
+     "journalIssueId": 1625842,
+     "dateOfPublication": "2009 May",
+     "monthOfPublication": 5,
+     "yearOfPublication": 2009,
+     "journal": {
+      "medlineAbbreviation": "Lancet",
+      "title": "Lancet (London, England)",
+      "essn": "1474-547X",
+      "issn": "0140-6736",
+      "nlmid": "2985213R",
+      "isoabbreviation": "Lancet"
+     },
+     "printPublicationDate": "2009-05-01"
+    },
+    "pubYear": "2009",
+    "pageInfo": "1874-1882",
+    "abstractText": "<h4>Background</h4>Long-term complications of critical illness include intensive care unit (ICU)-acquired weakness and neuropsychiatric disease. Immobilisation secondary to sedation might potentiate these problems. We assessed the efficacy of combining daily interruption of sedation with physical and occupational therapy on functional outcomes in patients receiving mechanical ventilation in intensive care.<h4>Methods</h4>Sedated adults (>/=18 years of age) in the ICU who had been on mechanical ventilation for less than 72 h, were expected to continue for at least 24 h, and who met criteria for baseline functional independence were eligible for enrolment in this randomised controlled trial at two university hospitals. We randomly assigned 104 patients by computer-generated, permuted block randomisation to early exercise and mobilisation (physical and occupational therapy) during periods of daily interruption of sedation (intervention; n=49) or to daily interruption of sedation with therapy as ordered by the primary care team (control; n=55). The primary endpoint-the number of patients returning to independent functional status at hospital discharge-was defined as the ability to perform six activities of daily living and the ability to walk independently. Therapists who undertook patient assessments were blinded to treatment assignment. Secondary endpoints included duration of delirium and ventilator-free days during the first 28 days of hospital stay. Analysis was by intention to treat. This trial is registered with ClinicalTrials.gov, number NCT00322010.<h4>Findings</h4>All 104 patients were included in the analysis. Return to independent functional status at hospital discharge occurred in 29 (59%) patients in the intervention group compared with 19 (35%) patients in the control group (p=0.02; odds ratio 2.7 [95% CI 1.2-6.1]). Patients in the intervention group had shorter duration of delirium (median 2.0 days, IQR 0.0-6.0 vs 4.0 days, 2.0-8.0; p=0.02), and more ventilator-free days (23.5 days, 7.4-25.6 vs 21.1 days, 0.0-23.8; p=0.05) during the 28-day follow-up period than did controls. There was one serious adverse event in 498 therapy sessions (desaturation less than 80%). Discontinuation of therapy as a result of patient instability occurred in 19 (4%) of all sessions, most commonly for perceived patient-ventilator asynchrony.<h4>Interpretation</h4>A strategy for whole-body rehabilitation-consisting of interruption of sedation and physical and occupational therapy in the earliest days of critical illness-was safe and well tolerated, and resulted in better functional outcomes at hospital discharge, a shorter duration of delirium, and more ventilator-free days compared with standard care.<h4>Funding</h4>None.",
+    "publicationStatus": "ppublish",
+    "language": "eng",
+    "pubModel": "Print-Electronic",
+    "pubTypeList": {
+     "pubType": [
+      "research-article",
+      "Multicenter Study",
+      "Randomized Controlled Trial",
+      "Journal Article"
+     ]
+    },
+    "fullTextUrlList": {
+     "fullTextUrl": [
+      {
+       "availability": "Subscription required",
+       "availabilityCode": "S",
+       "documentStyle": "doi",
+       "site": "DOI",
+       "url": "https://doi.org/10.1016/S0140-6736(09)60658-9"
+      },
+      {
+       "availability": "Open access",
+       "availabilityCode": "OA",
+       "documentStyle": "html",
+       "site": "Europe_PMC",
+       "url": "https://europepmc.org/articles/PMC9906655"
+      },
+      {
+       "availability": "Open access",
+       "availabilityCode": "OA",
+       "documentStyle": "pdf",
+       "site": "Europe_PMC",
+       "url": "https://europepmc.org/articles/PMC9906655?pdf=render"
+      }
+     ]
+    },
+    "isOpenAccess": "Y",
+    "inEPMC": "Y",
+    "inPMC": "Y",
+    "citedByCount": 2112,
+    "hasReferences": "Y",
+    "hasTextMinedTerms": "Y",
+    "hasDbCrossReferences": "N",
+    "hasPDF": "Y",
+    "hasBook": "N",
+    "hasSuppl": "N",
+    "hasLabsLinks": "Y",
+    "hasData": "Y",
+    "authMan": "N",
+    "epmcAuthMan": "N",
+    "nihAuthMan": "N",
+    "hasTMAccessionNumbers": "Y",
+    "tmAccessionTypeList": {
+     "accessionType": [
+      "nct"
+     ]
+    },
+    "dateOfCompletion": "2009-06-12",
+    "dateOfCreation": "2009-05-19",
+    "dateOfRevision": "2026-01-28",
+    "electronicPublicationDate": "2009-05-14",
+    "firstPublicationDate": "2009-05-14",
+    "firstIndexDate": "2010-09-28",
+    "fullTextReceivedDate": "2025-02-04",
+    "hasEvaluations": "N"
+   }
+  ]
+ }
+}

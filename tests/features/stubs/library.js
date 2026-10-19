@@ -1,13 +1,16 @@
 // Stub Library (SPEC 3.3 subset used by features). Data persists in sessionStorage so a page
-// reload in the harness behaves like reopening the paper.
+// reload in the harness behaves like reopening the paper. `others` / `folders` let a test put the
+// open paper in a folder with other papers (관련 논문 "이 폴더 기준 추천").
 
 const KEY = 'pf-test-library';
 
 export class StubLibrary extends EventTarget {
-  constructor({ paper }) {
+  constructor({ paper, others = [], folders = [] }) {
     super();
     const saved = JSON.parse(sessionStorage.getItem(KEY) || 'null');
     this.paper = saved?.paper ?? paper;
+    this.others = saved?.others ?? others;
+    this.folderList = saved?.folders ?? folders;
     this.data = saved?.data ?? {};
     this.saves = [];          // every savePaperData call: { kind, obj }
     this.updates = [];        // every updatePaper call
@@ -15,18 +18,27 @@ export class StubLibrary extends EventTarget {
     this.sync = new EventTarget();
   }
 
-  persist() { sessionStorage.setItem(KEY, JSON.stringify({ paper: this.paper, data: this.data })); }
+  persist() {
+    sessionStorage.setItem(KEY, JSON.stringify({ paper: this.paper, others: this.others, folders: this.folderList, data: this.data }));
+  }
 
   static reset() { sessionStorage.removeItem(KEY); }
 
-  getPaper(id) { return id === this.paper.id ? this.paper : null; }
+  get papers() { return [this.paper, ...this.others]; }
+
+  get folders() { return this.folderList; }
+
+  getFolder(id) { return this.folderList.find((f) => f.id === id) ?? null; }
+
+  getPaper(id) { return this.papers.find((p) => p.id === id) ?? null; }
 
   updatePaper(id, patch) {
     this.updates.push({ id, patch });
     if (id === this.paper.id) this.paper = { ...this.paper, ...patch, updatedAt: Date.now() };
+    else this.others = this.others.map((p) => (p.id === id ? { ...p, ...patch, updatedAt: Date.now() } : p));
     this.persist();
     this.dispatchEvent(new CustomEvent('change', { detail: { reason: 'paper' } }));
-    return this.paper;
+    return this.getPaper(id);
   }
 
   async getPaperData(id, kind) {

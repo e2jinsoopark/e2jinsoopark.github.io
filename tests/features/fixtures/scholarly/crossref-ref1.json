@@ -1,0 +1,298 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "message": {
+  "facets": {},
+  "total-results": 29425,
+  "items": [
+   {
+    "short-container-title": [
+     "JAMA"
+    ],
+    "DOI": "10.1001/jama.291.14.1753",
+    "type": "journal-article",
+    "is-referenced-by-count": 2547,
+    "title": [
+     "Delirium as a Predictor of Mortality in Mechanically Ventilated Patients in the Intensive Care Unit"
+    ],
+    "author": [
+     {
+      "given": "E. Wesley",
+      "family": "Ely",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "JAMA"
+    ],
+    "score": 112.40323,
+    "issued": {
+     "date-parts": [
+      [
+       2004,
+       4,
+       14
+      ]
+     ]
+    }
+   },
+   {
+    "short-container-title": [
+     "Intensive Care Med"
+    ],
+    "DOI": "10.1007/s00134-007-0846-1",
+    "type": "journal-article",
+    "is-referenced-by-count": 3,
+    "title": [
+     "Motoric subtypes of delirium in mechanically ventilated surgical and trauma intensive care unit patients"
+    ],
+    "author": [
+     {
+      "given": "Pratik",
+      "family": "Pandharipande",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Bryan A.",
+      "family": "Cotton",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Ayumi",
+      "family": "Shintani",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Jennifer",
+      "family": "Thompson",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Sean",
+      "family": "Costabile",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Brenda",
+      "family": "Truman Pun",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Robert",
+      "family": "Dittus",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "E. Wesley",
+      "family": "Ely",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Intensive Care Medicine"
+    ],
+    "score": 73.076866,
+    "issued": {
+     "date-parts": [
+      [
+       2007,
+       8,
+       18
+      ]
+     ]
+    }
+   },
+   {
+    "short-container-title": [
+     "Intensive Care Med"
+    ],
+    "DOI": "10.1007/s00134-007-0687-y",
+    "type": "journal-article",
+    "is-referenced-by-count": 236,
+    "title": [
+     "Motoric subtypes of delirium in mechanically ventilated surgical and trauma intensive care unit patients"
+    ],
+    "author": [
+     {
+      "given": "Pratik",
+      "family": "Pandharipande",
+      "sequence": "first",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Bryan A.",
+      "family": "Cotton",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Ayumi",
+      "family": "Shintani",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Jennifer",
+      "family": "Thompson",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Sean",
+      "family": "Costabile",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Brenda",
+      "family": "Truman Pun",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Robert",
+      "family": "Dittus",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "E. Wesley",
+      "family": "Ely",
+      "sequence": "additional",
+      "affiliation": [],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Intensive Care Medicine"
+    ],
+    "score": 73.06143,
+    "issued": {
+     "date-parts": [
+      [
+       2007,
+       6,
+       5
+      ]
+     ]
+    }
+   }
+  ],
+  "items-per-page": 3,
+  "query": {
+   "start-index": 0,
+   "search-terms": null
+  }
+ }
+}
