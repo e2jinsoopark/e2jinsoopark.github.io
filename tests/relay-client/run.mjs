@@ -109,7 +109,8 @@ const stored = (page) => page.evaluate((key) => JSON.parse(localStorage.getItem(
 const posts = (fake, path = '/v1/messages') => fake.calls.filter((c) => c.method === 'POST' && c.path === path);
 
 async function booted(page) {
-  await page.waitForFunction(() => document.querySelector('.library, .reader, .settings, .message-screen'), null, { timeout: 30000 });
+  // .start: the first screen a fresh visitor gets (no key, no code) — docs/notes/onboarding.md
+  await page.waitForFunction(() => document.querySelector('.library, .reader, .settings, .message-screen, .start'), null, { timeout: 30000 });
 }
 
 /** Set settings inside the page (the app's own settings module). */
@@ -169,15 +170,17 @@ try {
       settings.set({ relay: { allowedModels: [], assistModel: '' } });
       out.unknown = [settings.model('translate'), settings.model('assist')];
       out.csp = ['https://relay.test', 'https://evil.example', 'http://127.0.0.1:8787'].map((u) => R.isRelayOriginAllowed(u));
-      settings.set({ relay: { url: '' } });
-      out.noUrl = [settings.relayUrl(), settings.isAiReady()];
+      // Without the code as well: a saved code + the deployed address would make 공용 서재 ask the real relay
+      // (GET /shared), which this test must never reach.
+      settings.set({ relay: { url: '', code: '' } });
+      out.noUrl = [settings.relayUrl(), Boolean(settings.relayUrl())];
       out.defaultUrl = (await import('/js/core/config.js')).RELAY_DEFAULT_URL.replace(/\/+$/, '');
       return out;
     });
-    assertEqual(r.norm, ['PR-7K3M-9QXA:true', 'PR-7K3M-9QXA:true', 'PR-7K3M-0QX1:true', 'PR-7K3M-9QXA:true', 'PR-7K3M-9QXA:true', 'HELLO:false'], 'normalize');
+    // 'hello' can be the spelling of a code the owner chose (custom codes, docs/notes/onboarding.md); the Worker decides.
+    assertEqual(r.norm, ['PR-7K3M-9QXA:true', 'PR-7K3M-9QXA:true', 'PR-7K3M-0QX1:true', 'PR-7K3M-9QXA:true', 'PR-7K3M-9QXA:true', 'HELLO:true'], 'normalize');
     assertEqual(r.link, 'https://e2jinsoopark.github.io/#/join/PR-7K3M-9QXA', 'invite link');
-    assert(r.msg.includes('https://e2jinsoopark.github.io/#/join/PR-7K3M-9QXA') && r.msg.includes('홍길동님') && r.msg.includes('키 없이 쓰기')
-      && r.msg.split('\n').length === 3, `invite message: ${r.msg}`);
+    assertEqual(r.msg, '[갈피 초대] 홍길동님\nhttps://e2jinsoopark.github.io/#/join/PR-7K3M-9QXA\n코드: PR-7K3M-9QXA', 'invite message (title, link, 코드:)');
     assertEqual(r.readyNoCode, false, 'ready without a code');
     assertEqual(r.haikuOnly, ['claude-haiku-5-5', 'claude-haiku-5-5', true], 'Haiku-only code (saved Sonnet ignored)');
     assertEqual(r.both, ['claude-haiku-5-5', 'claude-sonnet-5-5'], 'Haiku + Sonnet code defaults');
@@ -382,58 +385,61 @@ try {
     return `cards [${cards.join(' | ')}]; 서버 주소 prefilled “${url}”; typed pr-7k3m-9qxa → ${codeValue}; “${ok}”; Haiku-only: both selects disabled [${HAIKU_LABEL}], hint “${hint.slice(0, 40)}…”; usage “${usageText.slice(0, 90)}…”; Sonnet code → assist ${both[1].value}`;
   });
 
-  await test('join link #/join/<CODE>: welcome with the name → library; code saved, removed from the address bar', async () => {
+  // Since the first screen (docs/notes/onboarding.md): a join link registers and goes straight to the library — no
+  // welcome step; a code that does not work shows the first screen with the code and one error line.
+  await test('join link #/join/<CODE>: registered → straight to the library (no welcome); code saved, out of the address bar', async () => {
     const d = await device({ seed: { relay: { url: RELAY_URL }, claude: { apiKey: 'sk-ant-own-key' } } });
     const { page } = d;
+    await page.addInitScript(() => {
+      window.__welcome = false;
+      new MutationObserver(() => { if (document.querySelector('.message-screen.tone-success')) window.__welcome = true; })
+        .observe(document, { childList: true, subtree: true });
+    });
     await page.goto(`${APP}#/join/${CODES.haiku.toLowerCase()}`);
-    await page.waitForSelector('.message-screen.tone-success');
-    const title = await page.locator('.message-title').innerText();
-    const text = await page.locator('.message-text').innerText();
-    const hash = await page.evaluate(() => location.hash);
-    assertEqual(title, '환영합니다, 홍길동님', 'title');
-    assert(text.startsWith('홍길동님, 초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다.'), text);
-    assert(text.includes('하루 한도 $0.50') && text.includes('Haiku 5.5') && text.includes('원래 쓰던 API 키는 그대로'), text);
-    assertEqual(hash, '#/', 'address bar after joining');
-    const s = await stored(page);
-    assertEqual([s.provider, s.relay.code, s.relay.name, s.claude.apiKey], ['relay', CODES.haiku, '홍길동', 'sk-ant-own-key'], 'stored');
-    await shot(page, 'relay-join-welcome');
-    await page.locator('.message-actions .btn', { hasText: '논문 읽으러 가기' }).click();
     await page.waitForSelector('.library');
+    const hash = await page.evaluate(() => location.hash);
+    const welcome = await page.evaluate(() => window.__welcome);
+    const s = await stored(page);
+    assertEqual(hash, '#/', 'address bar after joining');
+    assertEqual(welcome, false, 'welcome screen shown');
+    assertEqual([s.provider, s.relay.code, s.relay.name, s.claude.apiKey], ['relay', CODES.haiku, '홍길동', 'sk-ant-own-key'], 'stored');
+    await page.waitForSelector('.toast >> text=초대 코드를 등록했어요.');
+    await shot(page, 'relay-join-library');
     const step1 = await page.locator('.step').first().getAttribute('class');
     assert(/is-done/.test(step1), `onboarding step 1: ${step1}`);
     await d.done();
-    return `“${title}” / “${text.split('\n')[0]}”; hash → ${hash}; stored provider=relay code=${s.relay.code}; own Claude key kept; 논문 읽으러 가기 → library (step 1 done)`;
+    return `#/join/${CODES.haiku.toLowerCase()} → library at ${hash}, no welcome screen, toast “초대 코드를 등록했어요.”; stored provider=relay code=${s.relay.code} (${s.relay.name}); own Claude key kept; step 1 done`;
   });
 
-  await test('join link: unknown code → Korean error, settings untouched, 다시 시도 succeeds once the code exists; malformed code → no request', async () => {
+  await test('join link: unknown code → first screen with the code + one error line, settings untouched, 시작 succeeds once the code exists; too short → no request', async () => {
     const d = await device();
     const { page, fake } = d;
     await page.goto(`${APP}#/join/PR-ZZZZ-ZZZZ`);
-    await page.waitForSelector('.message-screen.tone-error');
-    const title = await page.locator('.message-title').innerText();
-    const text = await page.locator('.message-text').innerText();
-    const actions = await page.locator('.message-actions .btn').allInnerTexts();
-    assertEqual(title, '초대 코드를 확인하지 못했습니다', 'title');
-    assert(text.startsWith('초대 코드가 올바르지 않거나 사용이 중지되었습니다.'), text);
-    assertEqual(actions, ['다시 시도', '코드 직접 입력', '라이브러리로'], 'actions');
+    await page.waitForFunction(() => document.querySelector('.start-error')?.textContent);
+    const value = await page.inputValue('.start-input');
+    const error = await page.locator('.start-error').innerText();
+    const link = await page.locator('.start-link').innerText();
+    assertEqual([value, error, link], ['PR-ZZZZ-ZZZZ', '코드를 찾을 수 없어요', '내 API 키로 쓰기'], 'first screen');
     const s = await stored(page);
     assert(s.provider !== 'relay' && !s.relay?.code, `settings changed by a bad code: ${JSON.stringify(s)}`);
     await shot(page, 'relay-join-error');
     fake.db.set('PR-ZZZZ-ZZZZ', { ...fake.db.get(CODES.haiku), code: 'PR-ZZZZ-ZZZZ', name: '새동료', todayUsd: 0, todayRequests: 0 });
-    await page.locator('.message-actions .btn', { hasText: '다시 시도' }).click();
-    await page.waitForSelector('.message-screen.tone-success');
-    const retried = await page.locator('.message-title').innerText();
-    assertEqual(retried, '환영합니다, 새동료님', 'after retry');
+    await page.locator('.start-go').click();
+    await page.waitForSelector('.library');
+    const retried = (await stored(page)).relay;
+    assertEqual([retried.code, retried.name], ['PR-ZZZZ-ZZZZ', '새동료'], 'after 시작');
 
-    const before = fake.calls.length;
-    await page.goto(`${APP}#/join/hello`);
-    await page.waitForSelector('.message-screen.tone-error');
-    const bad = await page.locator('.message-title').innerText();
-    assertEqual(bad, '초대 링크가 올바르지 않습니다', 'malformed title');
-    const relayCallsForBad = fake.calls.slice(before).filter((c) => c.path === '/relay/me' && c.headers['x-api-key'] === 'HELLO').length;
-    assertEqual(relayCallsForBad, 0, 'requests for a malformed code');
+    const d2 = await device();
+    const before = d2.fake.calls.length;
+    await d2.page.goto(`${APP}#/join/abc`);
+    await d2.page.waitForFunction(() => document.querySelector('.start-error')?.textContent);
+    const bad = await d2.page.locator('.start-error').innerText();
+    assertEqual(bad, '코드를 찾을 수 없어요', 'too-short code');
+    const relayCallsForBad = d2.fake.calls.slice(before).filter((c) => c.path === '/relay/me').length;
+    assertEqual(relayCallsForBad, 0, 'requests for a code that cannot exist');
     await d.done();
-    return `“${title}” — “${text.split('\n')[0]}” [${actions.join(' | ')}], settings untouched; 다시 시도 → “${retried}”; #/join/hello → “${bad}” without a request`;
+    await d2.done();
+    return `PR-ZZZZ-ZZZZ → input “${value}”, “${error}”, link “${link}”, settings untouched; 시작 once the code exists → library (${retried.name}); #/join/abc → “${bad}” without a request`;
   });
 
   await test('admin: 초대 코드 관리 collapsed; token checked, saved, never shown; codes with today/month usage; create, copy, disable, edit limit, usage, 지우기', async () => {
@@ -481,8 +487,8 @@ try {
     const newCode = await page.locator('#set-invites .relay-created code').innerText();
     await page.locator('#set-invites .relay-created .btn', { hasText: '초대 메시지 복사' }).click();
     await page.waitForSelector('.toast >> text=초대 메시지를 복사했습니다');
-    const invite = await page.evaluate(() => navigator.clipboard.readText());
-    assert(invite.includes(`https://e2jinsoopark.github.io/#/join/${newCode}`) && invite.includes('최간호님') && invite.includes('설정 → AI 번역'), `invite: ${invite}`);
+    const invite = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'); // the Windows clipboard says CRLF
+    assertEqual(invite, `[갈피 초대] 최간호님\nhttps://e2jinsoopark.github.io/#/join/${newCode}\n코드: ${newCode}`, 'invite message');
     await page.locator(`.relay-code[data-code="${CODES.haiku}"] .btn`, { hasText: '코드 복사' }).click();
     await page.waitForFunction(async (code) => (await navigator.clipboard.readText()) === code, CODES.haiku);
     await page.waitForFunction((c) => document.querySelector(`.relay-code[data-code="${c}"]`), newCode);
@@ -529,7 +535,7 @@ try {
   await test('narrow screen (375 px): relay card, admin list and join screens have no horizontal overflow', async () => {
     const d = await device({ seed: { provider: 'relay', relay: { url: RELAY_URL, code: CODES.haiku, adminToken: ADMIN_TOKEN } }, viewport: { width: 375, height: 800 } });
     const { page } = d;
-    const overflow = () => page.evaluate(() => [document.scrollingElement, ...document.querySelectorAll('.settings, .message-screen')]
+    const overflow = () => page.evaluate(() => [document.scrollingElement, ...document.querySelectorAll('.settings, .message-screen, .start')]
       .filter((e) => e && e.scrollWidth > e.clientWidth + 1).map((e) => `${e.className || e.nodeName} ${e.scrollWidth}>${e.clientWidth}`));
     await page.goto(`${APP}#/settings`);
     await page.waitForSelector('#set-ai .test-result.is-ok');
@@ -538,7 +544,7 @@ try {
     const settingsOverflow = await overflow();
     await shot(page, 'relay-narrow-settings', { fullPage: false });
     await page.goto(`${APP}#/join/PR-ZZZZ-ZZZZ`);
-    await page.waitForSelector('.message-screen.tone-error');
+    await page.waitForFunction(() => document.querySelector('.start-error')?.textContent);
     const joinOverflow = await overflow();
     assertEqual([...settingsOverflow, ...joinOverflow], [], 'horizontal overflow');
     await d.done();

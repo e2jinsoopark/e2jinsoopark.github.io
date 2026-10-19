@@ -147,6 +147,11 @@ async function device(name, { clipboard = false, viewport = { width: 1440, heigh
     document.addEventListener('securitypolicyviolation', (e) => {
       console.error(`[csp] ${e.violatedDirective} blocked ${e.blockedURI}`);
     });
+    // Since the first screen (2026-10-19) a join link goes straight to the library: record any welcome screen.
+    window.__welcome = false;
+    new MutationObserver(() => {
+      if (document.querySelector('.message-screen.tone-success')) window.__welcome = true;
+    }).observe(document, { childList: true, subtree: true });
   });
   const page = await ctx.newPage();
   const relayLog = [];
@@ -341,7 +346,7 @@ try {
     await page.waitForFunction((codes) => codes.every((c) => document.querySelector(`.relay-code[data-code="${c}"]`)), [state.code1, state.code2]);
     const link = `https://e2jinsoopark.github.io/#/join/${state.code1}`;
     assert(/^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/.test(state.code1) && state.code1 !== state.code2, `codes ${state.code1} ${state.code2}`);
-    assert(state.invite.includes(link) && state.invite.includes('김동료님') && state.invite.includes('하루 한도 $0.05'), `invite message: ${state.invite}`);
+    assertEqual(state.invite.replace(/\r\n/g, '\n').split('\n'), ['[갈피 초대] 김동료님', link, `코드: ${state.code1}`], 'invite message (title, link, 코드: line)');
     const c1 = await codeRecord(state.code1);
     const c2 = await codeRecord(state.code2);
     assertEqual([c1.name, c1.active, c1.allowedModels, c1.dailyLimitUsd], ['김동료', true, ['claude-haiku-5-5'], 0.05], 'code 1 in the Worker');
@@ -349,26 +354,22 @@ try {
     return `${state.code1} (Haiku만, $0.05) and ${state.code2} (Haiku + Sonnet, $0.50) stored in D1 as created; invite message:\n        ${state.invite.replace(/\n/g, '\n        ')}`;
   });
 
-  await step('colleague: a fresh browser (no API key) opens the join link → welcome by name → library', async () => {
+  await step('colleague: a fresh browser (no API key) opens the join link → straight to the library (no welcome screen)', async () => {
     const { page } = colleague;
     const fragment = state.invite.match(/#\/join\/\S+/)[0];
     await page.goto(`${APP_ORIGIN}/${fragment}`); // the invite link's fragment on the local copy of the app
-    await page.waitForSelector('.message-screen.tone-success', { timeout: 30000 });
-    const title = await page.locator('.message-title').innerText();
-    const text = await page.locator('.message-text').innerText();
+    await page.waitForSelector('.library', { timeout: 30000 });
     const hash = await page.evaluate(() => location.hash);
-    assertEqual(title, '환영합니다, 김동료님', 'welcome title');
-    assert(text.startsWith('김동료님, 초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다.') && text.includes('하루 한도 $0.05') && text.includes('Haiku 5.5'), text);
-    assertEqual(hash, '#/', 'address bar after joining');
+    const welcome = await page.evaluate(() => window.__welcome);
+    const toastText = await page.locator('.toast').first().innerText().catch(() => '');
+    assertEqual([hash, welcome], ['#/', false], 'address bar after joining (code out of it), no welcome screen');
     const s = await stored(page);
     assertEqual([s.provider, s.relay.code, s.relay.name, s.relay.allowedModels, s.claude?.apiKey || '', s.gemini?.apiKey || ''],
       ['relay', state.code1, '김동료', ['claude-haiku-5-5'], '', ''], 'stored settings');
-    await shot(page, 'e2e-relay-01-join-welcome');
-    await page.locator('.message-actions .btn', { hasText: '논문 읽으러 가기' }).click();
-    await page.waitForSelector('.library');
+    await shot(page, 'e2e-relay-01-join-library');
     const step1 = await page.locator('.step').first().innerText();
     assert(step1.includes('초대 코드로 연결되어 있습니다') && /is-done/.test(await page.locator('.step').first().getAttribute('class')), `onboarding step 1: ${step1}`);
-    return `“${title}” — “${text.split('\n')[0]}”; hash → ${hash}; stored provider=relay, code=${s.relay.code}, no Claude/Gemini key; library step 1: “${step1.replace(/\s+/g, ' ')}”`;
+    return `join link → library at ${hash} (toast “${toastText.trim()}”, no welcome screen); stored provider=relay, code=${s.relay.code} (${s.relay.name}), no Claude/Gemini key; library step 1: “${step1.replace(/\s+/g, ' ')}”`;
   });
 
   await step('colleague: upload lu2025.pdf, 이 페이지만 번역 (1쪽) → sentences fill through the relay (Haiku, owner key upstream)', async () => {
@@ -596,9 +597,11 @@ try {
     const other = await device('colleague-2');
     const { page } = other;
     await page.goto(`${APP_ORIGIN}/#/join/${state.code2}`);
-    await page.waitForSelector('.message-screen.tone-success', { timeout: 30000 });
-    const text = await page.locator('.message-text').innerText();
-    assert(text.includes('Haiku 5.5, Sonnet 5.5') && text.includes('하루 한도 $0.50'), text);
+    await page.waitForSelector('.library', { timeout: 30000 });
+    const joined = await stored(page);
+    assertEqual([joined.relay?.code, joined.relay?.name, joined.relay?.allowedModels, await page.evaluate(() => window.__welcome)],
+      [state.code2, '박동료', ['claude-haiku-5-5', 'claude-sonnet-5-5'], false], 'joined with code 2 (no welcome screen)');
+    const text = `박동료 · ${joined.relay.allowedModels.join(', ')}`;
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.waitForSelector('#set-ai .test-result.is-ok', { timeout: 15000 });
     const selects = await page.$$eval('#set-ai select', (els) => els.map((s) => ({ disabled: s.disabled, value: s.value, n: s.options.length })));
@@ -623,7 +626,7 @@ try {
       return days[0].byModel['claude-sonnet-5-5'] ? days[0] : null;
     }, { what: 'Sonnet usage booked for code 2' });
     await other.ctx.close();
-    return `welcome “${text.split('\n')[1]}”; selectors Haiku/Sonnet enabled, assist = ${r.model}; stream → upstream ${call.path}${call.search} anthropic-beta=${call.headers['anthropic-beta']}; booked ${JSON.stringify(usage.byModel)}`;
+    return `joined ${text} (no welcome screen); selectors Haiku/Sonnet enabled, assist = ${r.model}; stream → upstream ${call.path}${call.search} anthropic-beta=${call.headers['anthropic-beta']}; booked ${JSON.stringify(usage.byModel)}`;
   }, { always: true });
 
   await step('admin: 날짜별 사용량 lists today with Haiku and Sonnet', async () => {

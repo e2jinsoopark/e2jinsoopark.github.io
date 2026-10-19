@@ -3,12 +3,14 @@
 // forwards to Anthropic with the owner's key, streams the reply through unchanged and records usage in D1.
 // The same codes open the shared team library (공용 서재) through a GitHub-compatible proxy (src/shared.js).
 // Contracts: docs/RELAY.md §1, docs/SHARED.md §2.
-import { generateCode, normalizeCode, validateCodeInput } from './codes.js';
+import { checkAdminToken, checkInviteCode } from './auth.js';
+import { codeKey, generateCode, validateCodeInput } from './codes.js';
 import { KNOWN_MODELS, MAX_ADMIN_BODY_BYTES, MAX_BODY_BYTES, MIN_ADMIN_TOKEN_LENGTH, MODEL_NAMES, readConfig } from './config.js';
-import { codesWithUsage, codeWithBudget, insertCode, parseModels, recordUsage, updateCode, usageByDay } from './db.js';
+import { codesWithUsage, findCodeByKey, insertCode, parseModels, recordUsage, updateCode, usageByDay } from './db.js';
 import {
   ALLOW_METHODS, apiError, bearer, isOriginAllowed, json, parseJson, preflight, readBody, SHARED_ALLOW_METHODS, withCors,
 } from './http.js';
+import { tooManyAttempts } from './limiter.js';
 import { meterBody } from './meter.js';
 import { costUsd } from './pricing.js';
 import { handleShared, handleSharedAdmin } from './shared.js';
@@ -24,6 +26,7 @@ const MSG = {
   noCode: '초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.',
   badCode: '초대 코드가 올바르지 않거나 사용이 중지되었습니다.',
   badAdmin: '관리자 토큰이 올바르지 않습니다.',
+  takenCode: '이미 있는 코드입니다(대소문자와 하이픈은 구분하지 않습니다). 다른 코드를 정해 주세요.',
   noAdmin: `중계 서버에 관리자 토큰(ADMIN_TOKEN)이 없거나 너무 짧습니다(${MIN_ADMIN_TOKEN_LENGTH}자 이상).`,
   noKey: '중계 서버에 Anthropic API 키가 설정되지 않았습니다. 관리자에게 알려 주세요.',
   badOrigin: '이 웹사이트(Origin)에서는 중계 서버를 쓸 수 없습니다.',
@@ -91,18 +94,20 @@ function notAllowed(method) {
 // ───────────────────────────── invite-code endpoints ─────────────────────────────
 
 /**
- * Resolve the invite code (x-api-key, or Authorization: Bearer) with today's budgets.
+ * Resolve the invite code (x-api-key, or Authorization: Bearer) with today's budgets, behind the failed-attempt
+ * limiter (auth.js). `code` is the code as stored ("PR-XXXX-XXXX" or a custom "EICU-2026"), whatever was typed.
  * @returns {Promise<{ code: string, row: import('./db.js').CodeBudgetRow, models: string[], day: string }
  *                   | { error: Response }>}
  */
 async function authenticate(request, { env, now }) {
   const raw = request.headers.get('x-api-key') || bearer(request);
-  if (!raw) return { error: apiError(401, 'authentication_error', MSG.noCode) };
-  const code = normalizeCode(raw);
   const day = kstDay(now);
-  const row = code ? await codeWithBudget(env.DB, code, day) : null;
-  if (!row || !row.active) return { error: apiError(401, 'authentication_error', MSG.badCode) };
-  return { code, row, day, models: allowedModels(row) };
+  const check = await checkInviteCode(request, { db: env.DB, raw, now, day });
+  if (check.missing) return { error: apiError(401, 'authentication_error', MSG.noCode) };
+  if (check.limited) return { error: tooManyAttempts(check.retryAfter) };
+  if (!check.row) return { error: apiError(401, 'authentication_error', MSG.badCode) };
+  const { row } = check;
+  return { code: row.code, row, day, models: allowedModels(row) };
 }
 
 /** POST /v1/messages (also ?beta=true): check, forward, stream back, record usage. */
@@ -254,7 +259,9 @@ async function handleMe(request, deps) {
 async function handleAdmin(request, url, deps) {
   const { config } = deps;
   if (config.adminToken.length < MIN_ADMIN_TOKEN_LENGTH) return apiError(401, 'authentication_error', MSG.noAdmin);
-  if (!(await sameSecret(bearer(request), config.adminToken))) return apiError(401, 'authentication_error', MSG.badAdmin);
+  const admin = await checkAdminToken(request, { db: deps.env.DB, given: bearer(request), expected: config.adminToken, now: deps.now });
+  if (admin.limited) return tooManyAttempts(admin.retryAfter);
+  if (!admin.ok) return apiError(401, 'authentication_error', MSG.badAdmin);
   const path = url.pathname.slice('/relay/admin'.length);
   const method = request.method;
   if (path === '/codes') {
@@ -289,7 +296,13 @@ async function createCode(request, { env, config, now }) {
     defaults: { allowedModels: config.defaultModels, dailyLimitUsd: config.defaultDailyLimitUsd },
   });
   if (checked.error) return apiError(400, 'invalid_request_error', checked.error);
-  const { name, allowedModels, dailyLimitUsd, active = true } = checked.value;
+  const { name, allowedModels, dailyLimitUsd, active = true, code: chosen } = checked.value;
+  if (chosen) {
+    if (await insertCode(env.DB, { code: chosen, name, active, allowedModels, dailyLimitUsd, createdAt: now })) {
+      return json(await codeReport(env.DB, chosen, now), 201);
+    }
+    return apiError(409, 'invalid_request_error', MSG.takenCode);
+  }
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = generateCode();
     if (await insertCode(env.DB, { code, name, active, allowedModels, dailyLimitUsd, createdAt: now })) {
@@ -300,24 +313,27 @@ async function createCode(request, { env, config, now }) {
 }
 
 async function patchCode(request, rawCode, { env, now }) {
-  const code = normalizeCode(rawCode);
-  if (!code) return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${rawCode}`);
+  const parsed = codeKey(rawCode);
+  const found = parsed ? await findCodeByKey(env.DB, parsed.key) : null;
+  if (!found) return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${parsed?.code ?? rawCode}`);
   const body = await readAdminJson(request);
   if (body.error) return body.error;
   const checked = validateCodeInput(body.value, { partial: true });
   if (checked.error) return apiError(400, 'invalid_request_error', checked.error);
-  if (!(await updateCode(env.DB, code, checked.value))) {
-    return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${code}`);
+  if (!(await updateCode(env.DB, found.code, checked.value))) {
+    return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${found.code}`);
   }
-  return json(await codeReport(env.DB, code, now));
+  return json(await codeReport(env.DB, found.code, now));
 }
 
-/** GET /relay/admin/usage?days=30[&code=PR-…]: every KST day in the window (newest first), zeros included. */
+/** GET /relay/admin/usage?days=30[&code=PR-… or a custom code]: every KST day in the window (newest first), zeros included. */
 async function usageReport(url, { env, now }) {
   const count = clampInt(url.searchParams.get('days'), 30, 1, 366);
   const rawCode = url.searchParams.get('code');
-  const code = rawCode ? normalizeCode(rawCode) : null;
-  if (rawCode && !code) return apiError(400, 'invalid_request_error', `초대 코드 형식이 아닙니다: ${rawCode}`);
+  const parsed = rawCode ? codeKey(rawCode) : null;
+  if (rawCode && !parsed) return apiError(400, 'invalid_request_error', `초대 코드 형식이 아닙니다: ${rawCode}`);
+  // A code nobody has is reported with zero days, as before.
+  const code = parsed ? (await findCodeByKey(env.DB, parsed.key))?.code ?? parsed.code ?? parsed.key : null;
   const dayList = kstDaysBack(now, count);
   const rows = await usageByDay(env.DB, { fromDay: dayList.at(-1), toDay: dayList[0], code });
   const byDay = new Map(dayList.map((day) => [day, { day, usd: 0, requests: 0, byModel: {} }]));
@@ -397,20 +413,6 @@ function safeDecode(text) {
   } catch {
     return text;
   }
-}
-
-/** Constant-time comparison: both sides are hashed first, so neither length nor content leaks through timing. */
-async function sameSecret(given, expected) {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest('SHA-256', enc.encode(given)),
-    crypto.subtle.digest('SHA-256', enc.encode(expected)),
-  ]);
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0 && given.length > 0;
 }
 
 /** The code's models, limited to KNOWN_MODELS (a hand-edited row cannot unlock anything else). */

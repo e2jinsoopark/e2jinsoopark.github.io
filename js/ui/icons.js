@@ -91,6 +91,9 @@ const ICONS = {
   inbox: [poly('22 12 16 12 14 15 10 15 8 12 2 12'), p('M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z')],
   copy: [rect(8, 8, 14, 14, 2), p('M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2')],
   'scroll-sync': [p('m7 15 5 5 5-5'), p('m7 9 5-5 5 5')],
+  // 홈 화면에 추가 (the square-plus of iOS's own menu item) and the iOS share glyph (a box with an arrow up).
+  'square-plus': [rect(3, 3, 18, 18, 2), p('M8 12h8'), p('M12 8v8')],
+  share: [p('M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8'), poly('16 6 12 2 8 6'), line(12, 2, 12, 15)],
 };
 
 /** All available icon names. */

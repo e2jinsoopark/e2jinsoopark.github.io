@@ -184,6 +184,10 @@ async function device(name, seed = null, { viewport = { width: 1440, height: 900
     document.addEventListener('securitypolicyviolation', (e) => {
       console.error(`[csp] ${e.violatedDirective} blocked ${e.blockedURI}`);
     });
+    window.__welcome = false; // a join link goes straight to the library since 2026-10-19: record any welcome screen
+    new MutationObserver(() => {
+      if (document.querySelector('.message-screen.tone-success')) window.__welcome = true;
+    }).observe(document, { childList: true, subtree: true });
   }, { key: SETTINGS_KEY, seed });
   const page = await ctx.newPage();
   const relayLog = [];
@@ -256,12 +260,11 @@ async function syncShared(page) {
 /** Open the join link (`#/join/<CODE>`, a fragment no server sees) and continue to the library. */
 async function joinWithLink(page, code, name) {
   await page.goto(`${APP_ORIGIN}/#/join/${code}`);
-  await page.waitForSelector('.message-screen.tone-success', { timeout: 30000 });
-  const title = (await page.locator('.message-title').innerText()).trim();
-  assertEqual(title, `환영합니다, ${name}님`, 'welcome title');
-  await page.locator('.message-actions .btn', { hasText: '논문 읽으러 가기' }).click();
+  // Since the first screen (2026-10-19): straight to the library, no welcome screen (window.__welcome, init script).
   await page.waitForSelector('.library', { timeout: 30000 });
-  return title;
+  const s = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) || '{}'), SETTINGS_KEY);
+  assertEqual([s.relay?.code, s.relay?.name, await page.evaluate(() => window.__welcome)], [code, name, false], 'joined (no welcome screen)');
+  return `${name}님 → library`;
 }
 
 async function waitForReader(page) {

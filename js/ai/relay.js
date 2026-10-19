@@ -20,18 +20,42 @@ export const MODEL_SETS = Object.freeze([
 ]);
 export const NAME_MAX = 40;
 export const DAILY_LIMIT_MAX = 20;
+/** Length of a code the owner chooses, hyphens included (relay/src/codes.js CUSTOM_CODE_MIN/MAX). */
+export const CUSTOM_CODE_MIN = 6;
+export const CUSTOM_CODE_MAX = 24;
+/**
+ * Words a chosen code may not be, compared without hyphens — the same list as relay/src/codes.js RESERVED_CODES
+ * (checked here only to say so before a request; the Worker has the final say with a 400).
+ */
+export const RESERVED_CODES = Object.freeze([
+  'ADMIN', 'ADMINS', 'ADMINISTRATOR', 'ROOT', 'SYSTEM', 'MASTER', 'RELAY', 'PAPERRELAY', 'SHARED', 'SHARE', 'JOIN',
+  'INVITE', 'INVITES', 'INVITECODE', 'CODE', 'CODES', 'SETTINGS', 'LIBRARY', 'TEAM', 'GALPI', 'PAPER', 'PAPERS',
+  'TEST', 'TESTS', 'TESTING', 'TESTER', 'DEMO', 'SAMPLE', 'EXAMPLE', 'GUEST', 'ANONYMOUS', 'USER', 'USERS', 'LOGIN',
+  'SIGNIN', 'PUBLIC', 'PRIVATE', 'PASSWORD', 'PASSWD', 'SECRET', 'TOKEN', 'APIKEY', 'DEFAULT', 'NULL', 'UNDEFINED',
+  'NONE', 'TRUE', 'FALSE', 'ANTHROPIC', 'CLAUDE', 'OPENAI', 'GEMINI', 'GITHUB', 'WELCOME', 'LETMEIN', 'HELLO',
+]);
+// Keyboard rows and counting runs: a code that is a piece of one of these is too easy to guess (relay/src/codes.js).
+const RUNS = ['01234567890', '09876543210', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZYXWVUTSRQPONMLKJIHGFEDCBA', 'QWERTYUIOP',
+  'ASDFGHJKL', 'ZXCVBNM'];
 
 const REQUEST_TIMEOUT_MS = 20_000;
 const HANGUL = /[가-힣]/;
-const CODE_RE = /^PR-[0-9A-Z]{4}-[0-9A-Z]{4}$/;
-const STATUS_CODES = { 400: 'bad_request', 401: 'auth', 403: 'permission', 404: 'not_found', 413: 'bad_request', 429: 'quota' };
+// Crockford base32 (no I, L, O, U), as relay/src/codes.js generates and reads it.
+const CODE_RE = /^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+// A chosen code as stored: A–Z 0–9 and single hyphens, starting and ending with a letter or digit.
+const CUSTOM_RE = /^[0-9A-Z]+(?:-[0-9A-Z]+)*$/;
+/** The shortest chosen code ("A-B-CD", 6 characters) has 4 letters and digits: what a presented code needs at least. */
+const KEY_MIN = 4;
+// Every dash look-alike a phone keyboard or a messenger may produce.
+const DASHES = /[‐-―−﹘﹣－]/g;
+const STATUS_CODES = { 400: 'bad_request', 401: 'auth', 403: 'permission', 404: 'not_found', 409: 'conflict', 413: 'bad_request', 429: 'quota' };
 // A new code starts on 자동 선택 (models picked from the code's allowed ones).
 const NO_MODEL_CHOICE = Object.freeze({ translateModel: '', assistModel: '', autoModels: { translate: '', assist: '' } });
 
 const NO_URL_MESSAGE = '초대 코드 서버 주소가 없습니다. 설정 → AI 번역 → 키 없이 쓰기에서 서버 주소를 입력해 주세요.';
 const NO_CODE_MESSAGE = '초대 코드가 없습니다. 설정 → AI 번역 → 키 없이 쓰기에서 초대 코드를 입력해 주세요.';
 const BAD_CODE_MESSAGE = '초대 코드가 올바르지 않거나 사용이 중지되었습니다.';
-const FORMAT_MESSAGE = '초대 코드 형식이 올바르지 않습니다. PR-XXXX-XXXX 형식(예: PR-7K3M-9QXA)인지 확인해 주세요.';
+const FORMAT_MESSAGE = '초대 코드 형식이 올바르지 않습니다. 받은 코드(예: PR-7K3M-9QXA)를 그대로 넣었는지 확인해 주세요.';
 const CONNECT_MESSAGE = '초대 코드 서버에 연결할 수 없습니다. 인터넷 연결을 확인하고, 계속되면 설정의 서버 주소를 확인해 주세요.';
 const CSP_MESSAGE = '이 앱의 보안 정책(CSP)이 초대 코드 서버 주소로의 연결을 막았습니다. 설정의 서버 주소를 확인해 주세요. '
   + '다른 서버를 쓰려면 관리자가 index.html의 connect-src에 그 주소를 추가해야 합니다.';
@@ -43,24 +67,118 @@ const NO_ADMIN_MESSAGE = '관리자 토큰을 먼저 저장해 주세요.';
 
 // ───────────────────────────── invite codes ─────────────────────────────
 
+/*
+ * Two kinds of code (relay/src/codes.js decides; this mirrors it so that mistakes are caught before a request):
+ * - generated  PR-XXXX-XXXX (Crockford base32). Anything that is "PR" + 8 letters/digits once every other character
+ *              is dropped (spaces, dashes, dots, Hangul…) is this kind: upper case, PR-XXXX-XXXX dashes, and the
+ *              look-alikes the generator never emits read as digits (O → 0, I/L → 1). A U left over means no code.
+ * - chosen     by the owner: 6–24 of A–Z, 0–9 and hyphens ("ICU-2TEAM"), stored in upper case with the owner's
+ *              hyphens. No letter is ever replaced (an O stays an O). The generated shape is reserved for generated
+ *              codes, so the O/I/L reading never touches a chosen code. The Worker matches a presented code by its KEY
+ *              (letters and digits only): "icu 2team", "ICU2TEAM" and "Icu-2team" all open "ICU-2TEAM".
+ * In this app a typed chosen code is kept as typed, folded: upper case, full-width letters as ASCII, spaces and dash
+ * look-alikes as one hyphen, no hyphen at either end.
+ */
+
+/** Upper case, ASCII (full-width letters from a Korean keyboard folded), dash look-alikes as '-'. */
+function fold(raw) {
+  let s = String(raw ?? '');
+  try { s = s.normalize('NFKC'); } catch { /* keep */ }
+  return s.toUpperCase().replace(DASHES, '-').trim();
+}
+
 /**
- * Canonical form of a typed or pasted code (or a whole pasted invite link): upper case, no spaces, PR-XXXX-XXXX
- * dashes, and the Crockford base32 look-alikes the generator never emits read as digits (O → 0, I/L → 1).
+ * "PR" + 8 letters/digits once everything that is not A–Z/0–9 is dropped (the generated shape, exactly as
+ * relay/src/codes.js codeKey reads it) → PR-XXXX-XXXX with O → 0 and I/L → 1, else ''. The result may still not be a
+ * code (a U is not Crockford); isInviteCode decides. The same rules are pinned by relay/test/code-vectors.json.
+ */
+function generatedForm(folded) {
+  const compact = folded.replace(/[^0-9A-Z]/g, '');
+  const m = /^PR([0-9A-Z]{4})([0-9A-Z]{4})$/.exec(compact);
+  if (!m) return '';
+  const digits = (x) => x.replace(/O/g, '0').replace(/[IL]/g, '1');
+  return `PR-${digits(m[1])}-${digits(m[2])}`;
+}
+
+/**
+ * Canonical form of a typed or pasted code (or a whole pasted invite link): see the two kinds above.
  * @param {unknown} raw
  */
 export function normalizeInviteCode(raw) {
   let s = String(raw ?? '').trim();
   const link = /#\/join\/([^/?#\s]+)/i.exec(s);
   if (link) s = safeDecode(link[1]);
-  s = s.toUpperCase().replace(/\s+/g, '').replace(/[‐‑‒–—―−]/g, '-');
-  const parts = /^PR-?([0-9A-Z]{4})-?([0-9A-Z]{4})$/.exec(s);
-  const digits = (x) => x.replace(/O/g, '0').replace(/[IL]/g, '1');
-  return parts ? `PR-${digits(parts[1])}-${digits(parts[2])}` : s;
+  const folded = fold(s);
+  return generatedForm(folded) || folded.replace(/[\s-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/** True for a code in the PR-XXXX-XXXX format (after normalizeInviteCode). */
-export function isInviteCode(code) {
+/** True for a generated PR-XXXX-XXXX code (after normalizeInviteCode). */
+export function isGeneratedCode(code) {
   return CODE_RE.test(String(code || ''));
+}
+
+/**
+ * What the Worker matches a code by: its letters and digits ("ICU-2TEAM" and "ICU2TEAM" are one code). Two spellings
+ * of one code are the same code here too (the saved code vs a join link).
+ */
+export function inviteCodeKey(code) {
+  return normalizeInviteCode(code).replace(/-/g, '');
+}
+
+/** True for a code that can exist (after normalizeInviteCode): generated, or a chosen code's spelling. */
+export function isInviteCode(code) {
+  const c = String(code || '');
+  if (CODE_RE.test(c)) return true;
+  const key = c.replace(/-/g, '');
+  return CUSTOM_RE.test(c) && key.length >= KEY_MIN && key.length <= CUSTOM_CODE_MAX && !generatedForm(c);
+}
+
+/**
+ * The owner's own code for a new invite (설정 → 초대 코드 관리 → 코드 직접 정하기), checked like the Worker does.
+ * '' = none (a random one is made).
+ * @returns {{ code: string, error?: undefined } | { code?: undefined, error: string }}
+ */
+export function checkCustomCode(raw) {
+  const folded = fold(raw);
+  if (!folded) return { code: '' };
+  if (/[^0-9A-Z\s-]/.test(folded)) return { error: '코드는 영문·숫자·하이픈(-)만 쓸 수 있어요.' };
+  if (generatedForm(folded)) return { error: 'PR-XXXX-XXXX 모양은 자동으로 만드는 코드용이에요. 다른 모양으로 정해 주세요.' };
+  const code = folded.replace(/[\s-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (code.length < CUSTOM_CODE_MIN || code.length > CUSTOM_CODE_MAX || !CUSTOM_RE.test(code)) {
+    return { error: `코드는 하이픈을 포함해 ${CUSTOM_CODE_MIN}~${CUSTOM_CODE_MAX}자로 정해 주세요.` };
+  }
+  const key = code.replace(/-/g, '');
+  if (RESERVED_CODES.includes(key)) return { error: '이 단어는 코드로 쓸 수 없어요. 다른 코드를 정해 주세요.' };
+  if (/^(.)\1+$/.test(key) || RUNS.some((run) => run.includes(key))) {
+    return { error: '너무 쉬운 코드예요(같은 글자 반복이나 123456·ABCDEF·QWERTY 같은 순서). 다른 코드를 정해 주세요.' };
+  }
+  return { code };
+}
+
+/**
+ * The invite code in whatever was pasted or typed: a bare code (any case, with or without hyphens), a whole invite
+ * link, or the whole invite message from a messenger. In this order: '#/join/<code>' in a link → a line
+ * '코드: <code>' → a PR-XXXX-XXXX pattern → the trimmed text itself as a chosen code. '' when nothing can be a code.
+ * @param {unknown} text
+ */
+export function extractInviteCode(text) {
+  const s = String(text ?? '');
+  const take = (raw) => {
+    const code = normalizeInviteCode(raw);
+    return isInviteCode(code) ? code : '';
+  };
+  // A pasted message can lose its line breaks (single-line inputs strip them), so a code is read only as far as
+  // letters, digits, hyphens and %-escapes go.
+  const link = /#\/join\/((?:[0-9A-Za-z\-‐-―−－]|%[0-9A-Fa-f]{2})+)/.exec(s);
+  const line = /코드\s*[:：]\s*([0-9A-Za-z０-９Ａ-Ｚａ-ｚ\-‐-―−－]+)/.exec(s);
+  const generated = /(?<![0-9A-Za-z-])P\s*R[\s\-‐-―−－]*[0-9A-Za-z]{4}[\s\-‐-―−－]*[0-9A-Za-z]{4}(?![0-9A-Za-z-])/i.exec(s);
+  const bare = s.trim();
+  const candidates = [link && safeDecode(link[1]), line?.[1], generated?.[0], bare && !/[\r\n]/.test(bare) ? bare : ''];
+  for (const raw of candidates) {
+    const code = raw ? take(raw) : '';
+    if (code) return code;
+  }
+  return '';
 }
 
 /** Join link for a code; the code travels in the fragment, which browsers never send to a server. */
@@ -69,17 +187,16 @@ export function inviteLink(code) {
 }
 
 /**
- * Korean invite text to paste into a chat: greeting, the join link, one line of fallback instructions.
- * @param {{ code: string, name?: string, dailyLimitUsd?: number }} info
+ * Korean invite text to paste into a messenger: a short title, the join link, and the code on its own line (for a
+ * home-screen app or another browser, where it is pasted into the first screen).
+ *   [갈피 초대] 김간호사님
+ *   https://e2jinsoopark.github.io/#/join/PR-7K3M-Q9XD
+ *   코드: PR-7K3M-Q9XD
+ * @param {{ code: string, name?: string }} info
  */
-export function inviteMessage({ code, name = '', dailyLimitUsd }) {
-  const who = name ? `${name}님, ` : '';
-  const limit = Number.isFinite(dailyLimitUsd) ? `하루 한도 ${formatUsd(dailyLimitUsd)}, ` : '';
-  return [
-    `[갈피 초대] ${who}아래 링크를 열면 API 키 없이 영어 논문 번역·요약·채팅을 쓸 수 있습니다.`,
-    inviteLink(code),
-    `링크가 안 열리면 갈피 → 설정 → AI 번역 → ‘키 없이 쓰기’에 코드 ${code}를 넣고 테스트를 누르세요. (${limit}코드는 본인만 써 주세요)`,
-  ].join('\n');
+export function inviteMessage({ code, name = '' }) {
+  const who = String(name || '').trim();
+  return [who ? `[갈피 초대] ${who}님` : '[갈피 초대]', inviteLink(code), `코드: ${code}`].join('\n');
 }
 
 /** 'Haiku 5.5' for a known Claude model id; other ids as they are. */
@@ -183,7 +300,8 @@ function describeRelayError(err, sdk, info = {}) {
     if (code === 'permission' && info.model && detail.includes(info.model)) {
       return aiError(detail, { code: 'not_found', status, model: info.model, cause: err });
     }
-    const message = code === 'quota' && !/내일/.test(detail) ? `${detail} 내일 다시 시도해 주세요.` : detail;
+    // "내일 다시" belongs to the daily budget only, not to the relay's too-many-tries refusal ("잠시 후 다시…").
+    const message = code === 'quota' && /한도/.test(detail) && !/내일|잠시 후/.test(detail) ? `${detail} 내일 다시 시도해 주세요.` : detail;
     return aiError(message, { code, status, cause: err });
   }
   if (err instanceof sdk.APIConnectionTimeoutError) return null;
@@ -257,6 +375,16 @@ export async function refreshMe({ signal } = {}) {
 export async function registerInviteCode(raw, { signal } = {}) {
   const code = normalizeInviteCode(raw);
   if (!isInviteCode(code)) throw aiError(FORMAT_MESSAGE, { code: 'bad_request' });
+  // The code this browser already has (a join link opened twice, an iPhone home-screen app that starts at its join
+  // link every time): nothing to check or change — only an AI setup that is no longer usable falls back to it.
+  const saved = settings.get().relay || {};
+  if (saved.code && inviteCodeKey(saved.code) === inviteCodeKey(code)) {
+    if (!settings.isAiReady()) settings.set({ provider: 'relay' });
+    return {
+      name: saved.name || '', allowedModels: modelList(saved.allowedModels), dailyLimitUsd: 0, todayUsd: 0, todayRequests: 0,
+      resetsAt: '', code: normalizeInviteCode(saved.code), unchanged: true,
+    };
+  }
   const me = await fetchMe({ code, signal });
   settings.set({ provider: 'relay', relay: { code, name: me.name, allowedModels: me.allowedModels, ...NO_MODEL_CHOICE } });
   applyModelList(relayProvider, me.allowedModels);
@@ -382,9 +510,18 @@ export async function listCodes({ token, signal } = {}) {
   };
 }
 
-/** Create a code. @param {{ name: string, allowedModels?: string[], dailyLimitUsd?: number }} fields */
+/**
+ * Create a code: a random PR-XXXX-XXXX, or `code` when the owner chose one (checkCustomCode; the Worker answers 409
+ * when it is taken, 400 when it is not allowed — both with Korean messages, shown as they are).
+ * @param {{ name: string, code?: string, allowedModels?: string[], dailyLimitUsd?: number }} fields
+ */
 export async function createCode(fields, { token, signal } = {}) {
   const body = codeFields(fields, { requireName: true });
+  if (fields.code !== undefined && String(fields.code).trim()) {
+    const chosen = checkCustomCode(fields.code);
+    if (chosen.error) throw aiError(chosen.error, { code: 'bad_request' });
+    body.code = chosen.code;
+  }
   return toCode(await adminFetch('/relay/admin/codes', { method: 'POST', body, token, signal }));
 }
 
@@ -500,6 +637,7 @@ function httpError(status, data, admin) {
   if (typeof detail === 'string' && HANGUL.test(detail)) message = detail;
   else if (status === 401 || (admin && status === 403)) message = admin ? ADMIN_AUTH_MESSAGE : BAD_CODE_MESSAGE;
   else if (status === 404) message = NOT_FOUND_MESSAGE;
+  else if (status === 409) message = '이미 있는 코드입니다. 다른 코드를 정해 주세요.';
   else if (status === 429) message = '오늘 사용 한도를 모두 썼습니다. 내일 다시 시도해 주세요.';
   else message = `초대 코드 서버에서 오류가 발생했습니다(HTTP ${status}). 잠시 후 다시 시도해 주세요.`;
   console.warn('[relay] HTTP', status, detail || '');

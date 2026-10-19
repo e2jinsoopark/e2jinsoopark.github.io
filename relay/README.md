@@ -2,7 +2,7 @@
 
 동료가 **자기 API 키 없이** 논문 리더의 번역·요약·채팅을 쓰게 해 주는 작은 Cloudflare Worker입니다.
 
-- 동료는 앱 설정에 **초대 코드**(`PR-XXXX-XXXX`)를 넣거나 초대 링크를 엽니다.
+- 동료는 앱 설정에 **초대 코드**(`PR-XXXX-XXXX`, 또는 소유자가 직접 정한 `EICU-2026` 같은 코드)를 넣거나 초대 링크를 엽니다.
 - 앱은 Claude 요청을 이 서버로 보냅니다. 서버는 코드를 확인하고, 하루 사용 한도를 지키게 하고, **소유자의 Anthropic API 키**(Cloudflare 비밀값)로 Anthropic에 전달한 뒤, 응답을 그대로(스트리밍은 실시간으로) 돌려주고 사용량을 D1 데이터베이스에 기록합니다.
 - 초대 코드는 소유자가 앱 설정의 **초대 코드 관리(관리자)** 에서 관리자 토큰으로 만들고, 끄고, 한도를 바꿉니다.
 
@@ -13,6 +13,8 @@ API 계약(엔드포인트·오류 형식·CORS)은 `docs/RELAY.md` §1, 공용 
 | 파일 | 내용 |
 |---|---|
 | `src/index.js` | 라우터와 엔드포인트 (`/v1/messages`, `/v1/models`, `/relay/me`, `/relay/admin/*`, `/shared*`로 넘김) |
+| `src/codes.js` | 초대 코드 두 종류(자동 `PR-XXXX-XXXX` / 직접 정한 코드): 만들기, 입력 정규화, 검사 |
+| `src/auth.js`, `src/limiter.js` | 초대 코드·관리자 토큰 확인과 잘못된 시도 제한(IP별) |
 | `src/shared.js` | 공용 서재: GitHub 호환 중계(`/shared/<서재>/gh/...`), `/shared`, `/shared/<서재>/activity`, 관리자 통계·휴지통 비우기 |
 | `src/shared-paths.js` | 공용 서재 규칙(누가 어떤 경로를 보고·쓰고·지울 수 있는지, 커밋 메시지) — 입출력 없는 순수 함수 |
 | `src/github.js` | 팀 저장소용 GitHub 호출(서버 토큰)과 짧은 캐시 |
@@ -66,6 +68,11 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 코드만 고친 뒤에는 `npx wrangler deploy`만 다시 하면 됩니다. 데이터베이스와 비밀값은 그대로 남습니다.
 (단, `schema.sql`에 테이블이 새로 생긴 버전으로 올릴 때는 3번을 한 번 더 합니다. 이미 있는 테이블은 건드리지 않습니다.)
 
+> **2026-10-19 업데이트(직접 정하는 코드 + 잘못된 시도 제한)를 올릴 때는 순서가 중요합니다.**
+> 먼저 `npx wrangler d1 execute paper-relay --remote --file schema.sql`(새 `auth_failures` 테이블과 `codes_by_key` 색인 추가),
+> **그다음** `npx wrangler deploy`. 거꾸로 하면 새 서버가 없는 테이블을 찾느라 모든 초대 코드 요청이 500 오류가 됩니다.
+> 이미 있는 `PR-XXXX-XXXX` 코드·사용량·공용 서재(personId)는 그대로입니다.
+
 ## 공용 서재 켜기 (한 번만)
 
 공용 서재는 초대 코드를 가진 모든 사람이 **똑같은 권한**으로 쓰는 서재입니다(폴더·논문 추가/이동/삭제 모두 가능, 삭제는 휴지통으로).
@@ -110,7 +117,7 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 
 앱은 공용 서재를 `apiBase = <서버>/shared/team/gh`, 저장소 `team/library`로 보고, 개인 서재와 똑같은 GitHub 동기화 코드로 씁니다. 서버는 그중 정해진 요청만 통과시킵니다(그 밖의 주소는 모두 404).
 
-- **볼 수 있는 것**: 공유 파일 전부. `people/<다른 사람>/` 아래(다른 사람의 하이라이트·메모·AI 기록)는 목록에서 빠지고, 그 폴더를 직접 요청해도 404입니다. `personId`는 초대 코드의 SHA-256 앞 16자리이며 다른 사람에게 보이지 않게 커밋 메시지에서도 지웁니다.
+- **볼 수 있는 것**: 공유 파일 전부. `people/<다른 사람>/` 아래(다른 사람의 하이라이트·메모·AI 기록)는 목록에서 빠지고, 그 폴더를 직접 요청해도 404입니다. `personId`는 저장된 초대 코드(`PR-XXXX-XXXX` 또는 `EICU-2026`)의 SHA-256 앞 16자리(`PERSON_ID_SECRET`이 있으면 HMAC)이며 다른 사람에게 보이지 않게 커밋 메시지에서도 지웁니다. 직접 정한 코드는 어떻게 입력하든(대소문자·하이픈) 같은 personId이고, **그 코드를 함께 쓰는 사람들은 한 사람으로 취급**됩니다(메모·하이라이트를 같이 씀).
 - **쓸 수 있는 경로**: `library.json`, `papers/<id>/paper.pdf`(새 PDF만 — 이미 있는 PDF는 바꿀 수 없음), `papers/<id>/translation.json`, `people/<나>/papers/<id>/annotations.json`·`ai.json`. `<id>`는 영문·숫자·`_`·`-` 1~64자.
 - **지울 수 있는 것**: 내 `people/<나>/` 파일만. 논문·번역은 지워지지 않고 앱의 휴지통(묘비 기록)으로만 갑니다. PDF는 30일이 지나 관리자가 비울 때까지 남습니다.
 - **현재 상태 위에만 저장**: 트리는 현재 커밋의 트리(또는 10분 안에 현재였던 트리) 위에서만, 커밋은 현재 커밋을 부모로, 이 사람이 이 서버를 거쳐 그 트리 위에 만든 트리로만 만들 수 있습니다. 그사이 다른 사람이 저장했으면 409를 돌려주고, 앱은 새로 받아 합친 뒤 다시 저장합니다. 강제 덮어쓰기(`force`)는 403, 빨리감기가 아닌 브랜치 갱신은 GitHub의 422가 그대로 갑니다.
@@ -147,6 +154,8 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 - **금액 계산**: 앱과 같은 가격표(`src/pricing.js`)로 입력·출력·캐시 읽기·캐시 쓰기 토큰을 계산합니다(Haiku 5.5는 프롬프트 10만 토큰 초과 시 장문 요금). 가격표에 없는 모델은 Sonnet 5.5 요금으로 칩니다. Anthropic의 실제 청구서와 조금 다를 수 있으니 정확한 금액은 Claude Console에서 확인하세요.
 - 실패한 호출(Anthropic이 4xx/5xx로 답한 경우)은 요청 수에는 들어가지만 토큰·금액은 0입니다. 스트리밍 도중 연결이 끊기면 그때까지 받은 사용량을 기록합니다.
 
+- **잘못된 시도 제한**: 같은 IP에서 없는 초대 코드로 20번 실패하면(관리자 토큰은 따로 10번) 첫 실패부터 10분이 지날 때까지 429 "시도가 너무 많습니다. 잠시 후 다시 시도해 주세요."를 돌려줍니다. 아래 "직접 정하는 코드와 잘못된 시도 제한"을 보세요.
+
 설정값(`vars`)을 바꾸려면 `wrangler.jsonc`를 고치고 `npx wrangler deploy`를 다시 합니다. (Cloudflare 대시보드의 Worker 설정에서 바꿀 수도 있지만, 다음 `wrangler deploy` 때 `wrangler.jsonc`의 값으로 되돌아갑니다.)
 
 | 설정값 | 기본값 | 뜻 |
@@ -160,7 +169,7 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 | `GITHUB_API_BASE` | `https://api.github.com` | 공용 서재 저장소가 있는 GitHub API(테스트에서만 바꿈) |
 | `SHARED_LIBRARIES` | `[{ "id": "team", "name": "공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000 }]` | 공용 서재 목록(JSON). `id`는 영문 소문자·숫자·`-`, `maxBytes`는 저장소 전체 파일 크기 상한 |
 
-무료 요금제에 맞춰, 요청 하나마다 D1 읽기 1번(코드+오늘 사용액)과 쓰기 1번(사용량 기록)만 합니다. 다만 그림이 많이 든 아주 큰 요청은 무료 요금제의 요청당 CPU 시간 한도를 넘을 수 있습니다.
+무료 요금제에 맞춰, 요청 하나마다 D1 호출 1번(코드+오늘 사용액+잘못된 시도 횟수, 있는 코드면 아무것도 쓰지 않음)과 쓰기 1번(사용량 기록)만 합니다. 다만 그림이 많이 든 아주 큰 요청은 무료 요금제의 요청당 CPU 시간 한도를 넘을 수 있습니다.
 
 ## 관리자 API (앱의 관리 화면이 쓰는 것)
 
@@ -169,9 +178,9 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 | 요청 | 내용 |
 |---|---|
 | `GET /relay/admin/codes` | 코드 목록(최근 것 먼저)과 오늘·이번 달(KST)·누적 사용액, `todayTotalUsd`, `monthTotalUsd`, `globalDailyLimitUsd` |
-| `POST /relay/admin/codes` `{ name, allowedModels?, dailyLimitUsd? }` | 새 코드(201). 이름 1~40자 |
-| `PATCH /relay/admin/codes/PR-XXXX-XXXX` `{ name?, active?, allowedModels?, dailyLimitUsd? }` | 고친 코드 |
-| `GET /relay/admin/usage?days=30[&code=PR-XXXX-XXXX]` | 날짜별(최근 날 먼저, 쓴 적 없는 날도 0으로 포함)·모델별 사용량 |
+| `POST /relay/admin/codes` `{ name, code?, allowedModels?, dailyLimitUsd? }` | 새 코드(201). 이름 1~40자. `code`를 주면 그 코드로(아래 규칙), 비우면 무작위 `PR-XXXX-XXXX`. 이미 있는 코드면 409 |
+| `PATCH /relay/admin/codes/<코드>` `{ name?, active?, allowedModels?, dailyLimitUsd? }` | 고친 코드. `<코드>`는 대소문자·하이픈 상관없음. 코드 자체(`code`)는 바꿀 수 없음(400) |
+| `GET /relay/admin/usage?days=30[&code=<코드>]` | 날짜별(최근 날 먼저, 쓴 적 없는 날도 0으로 포함)·모델별 사용량 |
 
 예 (PowerShell이나 터미널의 `curl`):
 ```
@@ -186,6 +195,31 @@ CP949로 보내는 일이 있어, 받는 쪽에서는 이름이 `�����
 
 초대 코드를 쓰는 쪽(`x-api-key: <코드>` 또는 `Authorization: Bearer <코드>`): `POST /v1/messages`(Anthropic과 같은 형식, `?beta=true` 포함), `GET /v1/models`(허용 모델만), `GET /relay/me`(이름·허용 모델·한도·오늘 사용액·초기화 시각).
 
+## 직접 정하는 코드와 잘못된 시도 제한
+
+**직접 정하는 코드(그룹 코드)** — 관리 화면의 "코드 직접 정하기" 칸, 또는 `POST /relay/admin/codes`의 `code`.
+
+- 영문·숫자·하이픈(-)으로 **6~24자**(하이픈 포함). 대문자로 저장합니다: `eicu-2026` → `EICU-2026`. 띄어쓰기와 여러 개의 하이픈은 하이픈 하나로, 앞뒤 하이픈은 지웁니다. 전각 글자(한글 키보드의 ＡＢＣ)도 받습니다.
+- 동료가 입력할 때는 **대소문자와 하이픈·띄어쓰기를 구분하지 않습니다**: `eicu 2026`, `EICU2026`, `Eicu-2026` 모두 `EICU-2026`입니다. 그래서 하이픈만 다른 코드(`EICU2026`와 `EICU-2026`)는 함께 만들 수 없습니다(409 "이미 있는 코드입니다").
+- 자동 코드와 달리 글자를 바꿔 읽지 않습니다(O는 O, I는 I). 자동 코드 모양(`PR` + 영문·숫자 8자)은 자동 코드용이라 쓸 수 없습니다.
+- 쓸 수 없는 코드(400): 예약어(ADMIN, TEST, PASSWORD, TEAM, GALPI 등 — 목록은 `src/codes.js`의 `RESERVED_CODES`), 같은 글자 반복(`AAAAAA`), `123456`·`ABCDEF`·`QWERTY` 같은 순서.
+- **여러 명이 같은 코드를 쓰면 메모와 사용 한도도 함께 씁니다**: 하루 한도는 코드 하나에 걸리고, 공용 서재에서는 한 사람으로 취급됩니다(personId가 같음). 사람마다 따로 쓰게 하려면 자동 코드를 사람마다 만드세요.
+- 짧고 쉬운 단어일수록 남이 맞히기 쉽습니다. 아래 제한이 추측을 느리게 하지만, 새어 나간 코드는 관리 화면에서 **사용 중지**하세요.
+
+**잘못된 시도 제한** — 직접 정한 코드는 추측될 수 있어서, IP마다 실패 횟수를 셉니다(D1 `auth_failures` 테이블).
+
+| | 초대 코드 | 관리자 토큰 |
+|---|---|---|
+| 허용 실패 | 10분에 20번 | 10분에 10번 |
+| 세는 곳 | `/v1/messages`, `/v1/models`, `/relay/me`, `/shared`, `/shared/<서재>/activity`, 공용 서재 GitHub 중계 — 모두 합쳐서 | `/relay/admin/*` |
+| 다 쓰면 | 429 "시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." (`x-should-retry: false`, `retry-after`: 남은 초) | 같음 — 맞는 토큰도 10분 동안 거절 |
+
+- 10분은 그 IP의 **첫 실패부터** 셉니다. 지나면 다시 처음부터입니다.
+- 세지 않는 것: 코드를 아예 안 보낸 요청, **사용 중지된 코드**(예전 기기가 계속 접속해도 병원 네트워크 전체가 막히지 않게), 바로 앞 실패와 똑같은 잘못된 코드(멈춘 앱이 같은 값을 계속 보내는 경우). 성공한 요청은 세지도, 횟수를 지우지도 않습니다.
+- 막힌 동안에도 **자동 코드(`PR-XXXX-XXXX`)는 그대로 됩니다**(무작위 40비트라 추측이 불가능하므로, 같은 와이파이의 동료를 막을 이유가 없음). **직접 정한 코드는 막힙니다** — 그렇지 않으면 "이 단어는 200, 저 단어는 429"로 어떤 단어가 코드인지 알려 주게 됩니다. 그래서 병원처럼 여러 명이 한 IP를 쓰는 곳에서 누군가 틀린 코드를 20번 넣으면, 그 IP의 그룹 코드 사용자는 최대 10분 기다려야 합니다.
+- IPv6 주소는 앞 64비트(/64)를 한 사람으로 봅니다. 동시에 여러 요청을 보내도 20번을 넘겨 확인할 수 없습니다(실패 기록과 코드 조회를 한 번의 D1 트랜잭션으로 처리).
+- 예산 초과 429에는 `retry-after`가 없고, 이 제한의 429에는 있습니다(앱이 "내일"과 "잠시 후"를 구분하는 데 씀).
+
 ## 로컬에서 실행·테스트
 
 ```
@@ -196,14 +230,17 @@ npx wrangler dev                      # http://127.0.0.1:8787
 
 자동 테스트(실제 Anthropic API는 부르지 않습니다 — 가짜 Anthropic 서버를 씁니다):
 ```
-node relay/test/run.mjs               # 전부 (unit, http, sdk, shared, shared-client)
+node relay/test/run.mjs               # 전부 (unit, http, codes, sdk, shared, shared-client)
+node relay/test/run.mjs codes         # 직접 정하는 코드와 잘못된 시도 제한
 node relay/test/run.mjs unit          # 서버 없이 도는 것만
 node relay/test/run.mjs shared shared-client   # 공용 서재만
 ```
 - wrangler와 Playwright는 `C:/Users/dindoo/Projects/pr-tools`에서 가져옵니다(다른 위치면 환경변수 `PR_TOOLS`). SDK 테스트는 Edge와 jsDelivr 접속이 필요합니다.
 - 포트: Worker 8787, 가짜 Anthropic 8788, 테스트 페이지 8789, 가짜 GitHub 8792(`tests/store/fake-github.mjs`). 결과는 `pr-tools/out/relay/results.json`, 로그는 같은 폴더의 `run.log`·`wrangler.log`.
 - 공용 서재 테스트: `shared`는 중계의 허용·거절 규칙(경로, 다른 사람 파일, PDF 삭제·교체, base_tree·parents·force, 경로 조작, 용량, 비활성 코드), 목록 숨김, 최근 활동, 관리자 통계·비우기, 토큰·코드가 새지 않는지를 HTTP로 확인합니다. `shared-client`는 앱의 `GitHubClient`(`js/store/github.js`)를 Node와 Edge에서 그대로 써서 빈 저장소 시작·커밋·304·충돌(409/422)까지 확인합니다. 실제 GitHub에는 접속하지 않습니다.
-- 테스트는 `TEST_MODE=1`로 띄워 `x-relay-test-now` 헤더로 시계를 옮깁니다(날짜 바뀜·한도 초기화 확인용). **운영 환경에는 `TEST_MODE`를 절대 넣지 마세요** — 넣으면 누구나 날짜를 바꿔 하루 한도를 피할 수 있습니다.
+- 테스트는 `TEST_MODE=1`로 띄워 `x-relay-test-now` 헤더로 시계를 옮깁니다(날짜 바뀜·한도 초기화·10분 제한 확인용). **운영 환경에는 `TEST_MODE`를 절대 넣지 마세요** — 넣으면 누구나 날짜를 바꿔 하루 한도와 잘못된 시도 제한을 피할 수 있습니다.
+- 잘못된 시도 제한 테스트는 IP마다 따로 셉니다: `wrangler dev`는 요청에 넣은 `CF-Connecting-IP`를 그대로 Worker에 넘기므로(wrangler 4.145에서 확인) 테스트가 IP를 골라 보냅니다. 운영 환경에서는 Cloudflare가 이 값을 실제 접속 IP로 채웁니다.
+- 결과·로그·임시 D1을 다른 폴더에 두려면 환경변수 `RELAY_OUT_DIR`.
 
 앱과 Worker를 함께 돌리는 끝-대-끝 테스트(실제 앱 + `wrangler dev` + 가짜 Anthropic, 포트 8160·8787·8788 — 위 테스트와 동시에 돌리지 마세요):
 ```

@@ -4,10 +4,11 @@
 // of the layout (everyone may change the shared files, nobody another person's people/<id>/ files), hides other
 // people's files from tree listings, rewrites commit messages with the code's name and calls GitHub with its own
 // token (TEAM_GITHUB_TOKEN). Also GET /shared, GET /shared/<lib>/activity and the admin stats / purge.
-import { normalizeCode } from './codes.js';
-import { findCode, hasSharedTree, insertSharedTree } from './db.js';
+import { checkInviteCode } from './auth.js';
+import { hasSharedTree, insertSharedTree } from './db.js';
 import { encodeBranch, JSON_MEDIA, RAW_MEDIA, TeamRepo, UpstreamError } from './github.js';
 import { apiError, bearer, json, parseJson, readBody } from './http.js';
+import { TOO_MANY_MESSAGE, tooManyAttempts } from './limiter.js';
 import {
   checkTreeEntries, classifyPath, commitMessageFor, compareLibraries, confirmedPurgeIds, describeSharedChange,
   filterEntries, LIBRARY_PATH, paperFiles, parseCommitLine, parseLibrary, PERSONAL_SUMMARY, personIdFor,
@@ -98,22 +99,38 @@ function notAllowed(method) {
 }
 
 /**
- * The invite code (Authorization: Bearer, as GitHubClient sends its token; or x-api-key) → its row and personId.
- * @returns {Promise<{ code: string, row: import('./db.js').CodeRow, personId: string } | { error: string }>}
+ * The invite code (Authorization: Bearer, as GitHubClient sends its token; or x-api-key) → its row and personId,
+ * behind the same failed-attempt limiter as the Claude endpoints (auth.js). personId is keyed on the code as stored
+ * ("PR-XXXX-XXXX", or a custom code such as "EICU-2026"), so every way of typing it is the same person.
+ * @returns {Promise<{ code: string, row: import('./db.js').CodeRow, personId: string }
+ *                   | { error: { status: 401 | 429, message: string, retryAfter?: number } }>}
  */
-async function identify(request, { env }) {
+async function identify(request, { env, now }) {
   const raw = bearer(request) || request.headers.get('x-api-key') || '';
-  if (!raw) return { error: MSG.noCode };
-  const code = normalizeCode(raw);
-  const row = code ? await findCode(env.DB, code) : null;
-  if (!row || !row.active) return { error: MSG.badCode };
-  return { code, row, personId: await personIdFor(code, env.PERSON_ID_SECRET || '') };
+  const check = await checkInviteCode(request, { db: env.DB, raw, now });
+  if (check.missing) return { error: { status: 401, message: MSG.noCode } };
+  if (check.limited) return { error: { status: 429, message: TOO_MANY_MESSAGE, retryAfter: check.retryAfter } };
+  if (!check.row) return { error: { status: 401, message: MSG.badCode } };
+  const { row } = check;
+  return { code: row.code, row, personId: await personIdFor(row.code, env.PERSON_ID_SECRET || '') };
+}
+
+/** identify()'s refusal in Anthropic's error shape (/shared, /shared/<lib>/activity). */
+function refusal(error) {
+  return error.status === 429 ? tooManyAttempts(error.retryAfter) : apiError(401, 'authentication_error', error.message);
+}
+
+/** identify()'s refusal in GitHub's error shape (the proxy); GitHubClient waits for retry-after on a 429. */
+function ghRefusal(error) {
+  return error.status === 429
+    ? ghError(429, error.message, { 'retry-after': String(error.retryAfter), 'x-should-retry': 'false' })
+    : ghError(401, error.message);
 }
 
 /** GET /shared → { libraries: [{ id, name }], personId, name } for the calling code. */
 async function sharedInfo(request, deps) {
   const who = await identify(request, deps);
-  if (who.error) return apiError(401, 'authentication_error', who.error);
+  if (who.error) return refusal(who.error);
   const libraries = deps.config.teamToken ? librariesFor(who.row, deps.config) : [];
   return json({ libraries: libraries.map(({ id, name }) => ({ id, name })), personId: who.personId, name: who.row.name });
 }
@@ -121,7 +138,7 @@ async function sharedInfo(request, deps) {
 /** GET /shared/<lib>/activity?limit=50 → { items: [{ ts, who, summary }] } from the branch's latest commits. */
 async function activity(request, url, libId, deps) {
   const who = await identify(request, deps);
-  if (who.error) return apiError(401, 'authentication_error', who.error);
+  if (who.error) return refusal(who.error);
   const lib = librariesFor(who.row, deps.config).find((l) => l.id === libId);
   if (!lib) return apiError(404, 'not_found_error', '공용 서재를 찾을 수 없습니다.');
   if (!deps.config.teamToken) return apiError(503, 'api_error', MSG.noToken);
@@ -161,7 +178,7 @@ function ghError(status, message, headers = {}) {
 /** /shared/<lib>/gh/<sub>: only the routes of SHARED.md §2.1 on /repos/team/library; everything else is 404. */
 async function proxy(request, url, libId, sub, deps) {
   const who = await identify(request, deps);
-  if (who.error) return ghError(401, who.error);
+  if (who.error) return ghRefusal(who.error);
   const lib = librariesFor(who.row, deps.config).find((l) => l.id === libId);
   const m = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/.exec(sub);
   if (!lib || !m || m[1] !== PROXY_OWNER || m[2] !== PROXY_REPO) return ghError(404, MSG.notFound);

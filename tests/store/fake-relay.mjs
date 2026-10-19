@@ -9,6 +9,7 @@
 //   → openSharedLibrary({ relayUrl: relay.url, code: 'PR-AAAA-BBBB', ... })
 import { createHash } from 'node:crypto';
 import http from 'node:http';
+import { codeKey, validateCustomCode } from '../../relay/src/codes.js';
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -20,19 +21,27 @@ const CORS = {
 const ID = '[A-Za-z0-9_-]{1,64}';
 const PASS_HEADERS = ['etag', 'content-type', 'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'];
 
-/** Same normalisation as relay/src/codes.js normalizeCode. */
+/** A GENERATED code's canonical form ("PR-XXXX-XXXX"), or '' (relay/src/codes.js normalizeCode). */
 export function normalizeCode(raw) {
-  const compact = String(raw || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
-  if (compact.length !== 10 || !compact.startsWith('PR')) return '';
-  const body = compact.slice(2).replace(/O/g, '0').replace(/[IL]/g, '1');
-  const code = `PR-${body.slice(0, 4)}-${body.slice(4)}`;
-  return /^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/.test(code) ? code : '';
+  const parsed = codeKey(raw);
+  return parsed?.generated ? parsed.code : '';
 }
 
-export const personIdOf = (code) => createHash('sha256').update(normalizeCode(code)).digest('hex').slice(0, 16);
+/**
+ * The stored form of a code, as the Worker keeps it: a generated code canonical, a custom (owner-chosen) code as
+ * validateCustomCode spells it ("eicu2 2026" → "EICU2-2026"). '' when it cannot be a code.
+ */
+export function storedCode(raw) {
+  const parsed = codeKey(raw);
+  if (!parsed) return '';
+  return parsed.generated ? parsed.code : (validateCustomCode(String(raw)).code || '');
+}
+
+/** personId (SHARED.md §1, without PERSON_ID_SECRET): SHA-256 of the stored code, first 16 hex characters. */
+export const personIdOf = (code) => createHash('sha256').update(storedCode(code)).digest('hex').slice(0, 16);
 
 export async function startFakeRelay({ github, owner, repo, token, branch = 'main', lib = 'team', libName = '공용 서재', port = 0, host = '127.0.0.1' }) {
-  const codes = new Map(); // normalised code → { name, personId, active }
+  const codes = new Map(); // code key (letters and digits, relay/src/codes.js codeKey) → { code, name, personId, active }
   const recentTrees = new Map(); // tree sha → time it was handed to a client
   const log = [];
   const ghBase = `${github.url}/repos/${owner}/${repo}`;
@@ -58,7 +67,7 @@ export async function startFakeRelay({ github, owner, repo, token, branch = 'mai
     if (req.method === 'OPTIONS') { res.writeHead(204, CORS); res.end(); return; }
     const body = await readBody(req);
     const raw = /^Bearer (.+)$/i.exec(req.headers.authorization || '')?.[1]?.trim() || '';
-    const who = codes.get(normalizeCode(raw));
+    const who = codes.get(codeKey(raw)?.key ?? '');
     const entry = { method: req.method, path: url.pathname, query: url.search, status: 0, code: raw, at: Date.now(), bytesIn: body.length };
     log.push(entry);
     const reply = (status, data, headers) => { entry.status = status; json(res, status, data, headers); };
@@ -192,13 +201,15 @@ export async function startFakeRelay({ github, owner, repo, token, branch = 'mai
     log,
     /** Register an invite code; returns its personId. */
     addCode(code, name, { active = true } = {}) {
-      const normal = normalizeCode(code);
-      if (!normal) throw new Error(`not an invite code: ${code}`);
-      const personId = personIdOf(normal);
-      codes.set(normal, { name, personId, active });
+      const stored = storedCode(code);
+      if (!stored) throw new Error(`not an invite code: ${code}`);
+      const personId = personIdOf(stored);
+      codes.set(codeKey(stored).key, { code: stored, name, personId, active });
       return personId;
     },
-    setActive(code, active) { codes.get(normalizeCode(code)).active = active; },
+    setActive(code, active) { codes.get(codeKey(code).key).active = active; },
+    /** Is this code (any spelling) registered here? */
+    has(code) { return codes.has(codeKey(code)?.key ?? ''); },
     clearLog() { log.length = 0; },
     close() {
       for (const s of sockets) s.destroy();

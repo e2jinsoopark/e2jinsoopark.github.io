@@ -83,8 +83,10 @@ is unaffected because its relay (`https://relay.test`) is route-intercepted too.
 | `node relay/test/run.mjs` | 8787, 8788, 8789 | Worker: unit (prices = app prices, KST calendar, codes, SSE meter), HTTP against `wrangler dev` with a fake upstream and `TEST_MODE=1` clock, real SDK in Edge |
 | `node tests/relay-client/run.mjs` | 8150 | App against a contract fake reached by route interception of `https://relay.test` |
 | `node tests/relay-e2e/run.mjs [--headed]` | 8160, 8787, 8788 | Real app + real Worker (`wrangler dev`, fresh local D1) + fake Anthropic (`tests/relay-e2e/fake-anthropic.mjs`) |
+| `node tests/onboarding/worker-e2e.mjs [--headed]` | 8222–8224, 8787 | First screen, custom codes, 홈 화면에 추가 and the failed-attempt limiter with the real Worker, Edge + WebKit (iPhone 15) ([`onboarding.md`](onboarding.md)) |
 
-`relay/test` and `tests/relay-e2e` both use 8787/8788: run them one after the other. Neither calls the real API;
+`relay/test`, `tests/relay-e2e`, `tests/shared-e2e` and `tests/onboarding/worker-e2e.mjs` all start `wrangler dev` on
+8787 (inspector 9339): run them one after the other. Neither calls the real API;
 `wrangler dev` needs no Cloudflare login. Secrets for the tests are fake and passed as `--var`, so no
 `relay/.dev.vars` is needed (`.dev.vars` and `.wrangler/` are git-ignored in `relay/.gitignore` and the root
 `.gitignore`). The e2e test refuses to start when something already listens on 8160.
@@ -95,7 +97,8 @@ is unaffected because its relay (`https://relay.test`) is route-intercepted too.
    the right one is checked against the Worker, saved and not shown again.
 2. Owner creates 김동료 (Haiku만, $0.05/day) and 박동료 (Haiku + Sonnet, $0.50/day) in the UI and copies the invite
    message (`https://e2jinsoopark.github.io/#/join/<CODE>`).
-3. Colleague, fresh browser context with no key: the join link's fragment → "환영합니다, 김동료님" → library.
+3. Colleague, fresh browser context with no key: the join link's fragment → straight to the library (no welcome screen
+   since 2026-10-19), provider = relay, code and name stored.
 4. Upload `lu2025.pdf` (from `pr-fixtures`, read in the browser) → 이 페이지만 번역 (1쪽): the fake answers each batch
    with schema-valid JSON (`〔중계 번역〕 ` + source); one browser POST and one upstream call per batch.
 5. Hover sync pane → PDF and PDF → pane on a relay-translated sentence.
@@ -141,6 +144,12 @@ Then run `node tests/relay-client/run.mjs` (its first test fails unless `connect
 origin), `node tests/shell/run.mjs` and `node tests/relay-e2e/run.mjs` (it stages its own copy with the local
 Worker, whatever `RELAY_DEFAULT_URL` holds). Commit and push to `main`: the Pages workflow publishes `index.html`,
 `css`, `js` and `vendor` only (`relay/`, `tests/`, `docs/` are never published).
+
+**Updating a deployed Worker** (e.g. custom codes and the failed-attempt limiter, 2026-10-19): run
+`npx wrangler d1 execute paper-relay --remote --file schema.sql` **first** (it is idempotent: adds the `auth_failures`
+table and the `codes_by_key` index), **then** `npx wrangler deploy`. The other way round, every invite-code request
+answers 500 until the schema is applied. Then check `https://paper-relay.<account>.workers.dev/` and one `/relay/me`
+with a real code.
 
 **First use** — on the owner's device: 설정 → 초대 코드 관리 (관리자) → 관리 화면 열기 → admin token → create a code
 → 초대 메시지 복사 → open the link in a private window → translate one page → the code's row shows the spend.

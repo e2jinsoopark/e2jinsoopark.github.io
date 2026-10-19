@@ -11,11 +11,14 @@
   <meta name="description" content="갈피 — 영어 논문 PDF를 원문과 한국어 번역으로 나란히 읽는 논문 뷰어">
   <meta name="application-name" content="갈피">
   <meta name="apple-mobile-web-app-title" content="갈피">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>갈피</title>
   <link rel="icon" type="image/png" sizes="32x32" href="assets/brand/icon-32.png">
   <link rel="icon" type="image/png" sizes="64x64" href="assets/brand/icon-64.png">
   <link rel="apple-touch-icon" sizes="180x180" href="assets/brand/icon-180.png">
-  <link rel="manifest" href="manifest.webmanifest">
+  <!-- The web app manifest is added by js/ui/install.js, except on iOS: a home-screen app there must start at the
+       address it was saved from (#/join/<CODE>), and with a manifest iOS may use its start_url instead. -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="css/app.css">

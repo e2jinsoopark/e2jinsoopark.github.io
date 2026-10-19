@@ -27,6 +27,9 @@ people/<personId>/papers/<paperId>/ai.json            per person
 README.md
 ```
 `personId` = first 16 hex chars of SHA-256(invite code, normalised). Never put the code itself in a path.
+(As built: HMAC-SHA-256 with `PERSON_ID_SECRET` when that secret is set; "normalised" = the code as stored — `PR-XXXX-XXXX`,
+or an owner-chosen code as the owner spelled it, e.g. `EICU2-2026` — so every spelling of a code, and everyone sharing a
+group code, is one person. `docs/RELAY.md` §4.)
 
 ## 2. Relay additions (`relay/`)
 

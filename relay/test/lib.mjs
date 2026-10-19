@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const PR_TOOLS = process.env.PR_TOOLS || 'C:/Users/dindoo/Projects/pr-tools';
-export const OUT_DIR = path.join(PR_TOOLS, 'out/relay');
+// RELAY_OUT_DIR: another place for results, logs and the throwaway D1 state (default pr-tools/out/relay).
+export const OUT_DIR = process.env.RELAY_OUT_DIR || path.join(PR_TOOLS, 'out/relay');
 export const RELAY_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WRANGLER = path.join(PR_TOOLS, 'node_modules/wrangler/bin/wrangler.js');
 
@@ -104,11 +105,13 @@ export async function waitFor(fn, { timeout = 8000, interval = 100, what = 'cond
 }
 
 /**
- * Call the Worker. `code` → x-api-key, `admin` → Bearer admin token (true = the right one), `now` → test clock.
+ * Call the Worker. `code` → x-api-key, `admin` → Bearer admin token (true = the right one), `now` → test clock,
+ * `ip` → CF-Connecting-IP (wrangler dev passes a client-sent one through; Cloudflare sets it itself in production).
  * @returns {Promise<{ status: number, headers: Headers, text: string, json: any }>}
  */
-export async function call(pathname, { method = 'GET', code, admin, headers = {}, body, now, origin, signal } = {}) {
+export async function call(pathname, { method = 'GET', code, admin, headers = {}, body, now, origin, signal, ip } = {}) {
   const h = { ...headers };
+  if (ip) h['cf-connecting-ip'] = ip;
   if (code) h['x-api-key'] = code;
   if (admin) h.authorization = `Bearer ${admin === true ? ADMIN_TOKEN : admin}`;
   if (now) h['x-relay-test-now'] = now;

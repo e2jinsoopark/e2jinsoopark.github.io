@@ -8,6 +8,7 @@ import {
   brandImage, button, confirmDialog, contextMenu, iconButton, modal, progressBar, promptDialog, spinner, toast, uiState,
 } from './components.js';
 import { icon } from './icons.js';
+import { installButton } from './install.js';
 
 const PAPER_MIME = 'application/x-pr-paper';
 const FOLDER_MIME = 'application/x-pr-folder';
@@ -183,6 +184,11 @@ class LibraryView {
       contextMenu([{ label: '새 폴더', icon: 'folder-plus', onClick: () => this.#createFolder(src, null) }], e.clientX, e.clientY);
     });
 
+    // 홈 화면에 추가 (ui/install.js): in the sidebar footer; on phones, where the sidebar is a drawer, in the header.
+    const installSide = installButton({ className: 'lib-install-side' });
+    const installHead = installButton({ className: 'lib-install-head' });
+    this.#cleanup.push(() => { installSide.destroy(); installHead.destroy(); });
+
     const sidebar = el('aside', { class: 'lib-sidebar', 'aria-label': '라이브러리 탐색' },
       el('div', { class: 'lib-brand', title: '갈피 — 논문을 나란히 읽다' },
         brandImage('mark', { size: 34, className: 'lib-brand-mark' }),
@@ -191,6 +197,7 @@ class LibraryView {
           el('div', { class: 'lib-brand-sub', lang: 'en', 'aria-hidden': 'true' }, 'GALPI'))),
       els.nav,
       el('div', { class: 'lib-sidebar-footer' },
+        installSide.el,
         button('설정', { icon: 'settings', kind: 'ghost', className: 'lib-settings-btn', onClick: () => this.#navigate('#/settings') })));
 
     els.crumbs = el('div', { class: 'lib-crumbs' });
@@ -225,6 +232,7 @@ class LibraryView {
     const header = el('header', { class: 'lib-header' },
       iconButton('menu', '폴더 목록 열기', () => this.#toggleDrawer(true), { className: 'lib-menu-btn' }),
       el('div', { class: 'lib-title-wrap' }, els.crumbs, els.title),
+      installHead.el,
       el('div', { class: 'lib-actions' }, els.searchWrap, els.sort, els.syncChip, els.uploadBtn, els.fileInput));
 
     els.content = el('div', { class: 'lib-content' });

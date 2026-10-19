@@ -150,7 +150,8 @@ The 20 original browser scenarios run unchanged.
 - `shared: true` hardening: the engine never falls back to `settings.github`, and its client always runs in **proxy
   mode** (even when `getConfig` omits `proxy`); no README.md is added to commits (the proxy allows only data paths).
 - `openSharedLibrary({ relayUrl, code, lib = 'team', personId?, personName | name, label })` → apiBase
-  `<relay>/shared/<lib>/gh`, owner `team`, repo `library`, token = normalised code, prefix `people/<personId>/`,
+  `<relay>/shared/<lib>/gh`, owner `team`, repo `library`, token = normalised code (an owner-chosen code such as
+  `EICU2-2026` is passed as saved; the relay matches it by key), prefix `people/<personId>/`,
   `retainPdfOnDelete`, IndexedDB `sharedDbName(lib, personId)` = `paper-reader-shared-<lib>-<personId>` (one per person:
   switching codes on a device never mixes two people's notes or pushes one person's files with the other's code),
   `carryOver` = its own target (a changed relay address carries the data over without asking). It also accepts the

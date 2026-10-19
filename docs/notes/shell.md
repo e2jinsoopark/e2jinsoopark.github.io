@@ -3,6 +3,10 @@
 Files: `index.html`, `css/app.css`, `js/app.js`, `js/ui/{components,icons,library-view,reader-view,translation-pane,settings-view}.js`.
 Tests: `tests/shell/` (stubs, harness pages, Playwright runners). Nothing outside these was touched.
 
+Since 2026-10-19 also `js/ui/start-view.js` (the first screen a fresh visitor gets, and the join link's screen) and
+`js/ui/install.js` (홈 화면에 추가) — see [`onboarding.md`](onboarding.md). `popover()` / `contextMenu()` measure their node
+with `opacity: 0` instead of `visibility: hidden` (WebKit left the children hidden: blank popovers on an iPhone).
+
 ## How app.js talks to the views
 
 ```js
@@ -111,8 +115,8 @@ a Mocha Mousse text selection (`--pdfv-selection`, instead of pdf.js's system Ac
 - Owner-made artwork in `assets/brand/` (full-bleed squares on mocha #8C6250): `icon-{32,64,180,192,512}.png`,
   `icon-maskable-512.png`, `galpi-wordmark-1254.webp` / `wordmark-600.png`, `galpi-g-1254.webp`. `index.html` links the
   favicons, the apple-touch icon and `manifest.webmanifest`; the Pages workflow publishes `assets/` and the manifest.
-- `brandImage(kind, { size, className, alt })` (components.js) — `'mark'` (sidebar), `'mark-lg'`, `'wordmark'`
-  (onboarding hero, join welcome); URLs are resolved from the module, so harness pages under `/tests/` work too.
+- `brandImage(kind, { size, className, alt })` (components.js) — `'mark'` (sidebar), `'mark-lg'` (first screen), `'wordmark'`
+  (onboarding hero; the join welcome screen is gone since 2026-10-19); URLs are resolved from the module, so harness pages under `/tests/` work too.
   `messageScreen({ brand: 'wordmark'|'mark' })` shows the artwork instead of the icon.
 - Theme: warm paper + mocha ink. One accent (`--accent` = the icon's mocha; latte `#cc9c83` in dark) for primary
   buttons, the current place, links, focus (`--focus-ring` = Pantone Mocha Mousse #A47864) and progress. Bookmark

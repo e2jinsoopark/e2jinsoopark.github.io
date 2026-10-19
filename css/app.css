@@ -976,6 +976,66 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .btn-row-inline { display: flex; gap: 6px; flex-wrap: wrap; }
 .shared-admin-stats { margin-top: 10px; display: grid; gap: 10px; }
 
+/* ============================================================ FIRST SCREEN */
+/* The gate a fresh visitor sees and the join link's screen (js/ui/start-view.js): the mark, one input, 시작, one link.
+   16px text in the input so iOS Safari does not zoom in on focus. */
+.start {
+  display: grid; place-items: center; min-height: 0; overflow-y: auto; background: var(--bg);
+  padding: max(32px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom));
+}
+.start-card {
+  width: min(360px, 100%); display: grid; justify-items: center; gap: 30px; text-align: center;
+  animation: pr-pop 0.32s ease-out;
+}
+.start-brand { display: grid; justify-items: center; gap: 14px; }
+.start-mark {
+  display: block; width: 76px; height: 76px; border-radius: 20px; background: var(--mocha);
+  box-shadow: 0 14px 30px -12px rgba(60, 38, 22, 0.45), 0 0 0 1px rgba(60, 38, 22, 0.06);
+}
+.start-name { margin: 0; font-size: 30px; font-weight: 800; line-height: 1.1; letter-spacing: -0.04em; color: var(--text); }
+.start-form { width: 100%; display: grid; gap: 8px; text-align: left; }
+.start-label { font-size: 13px; font-weight: 600; color: var(--text-2); padding-left: 2px; }
+.start-input { height: 52px; padding: 0 16px; border-radius: 12px; font-size: 16px; letter-spacing: 0.02em; box-shadow: var(--shadow-sm); }
+.start-input::placeholder { letter-spacing: 0; font-size: 15px; }
+.start-input[aria-invalid='true'] { border-color: var(--danger); }
+.start-input[aria-invalid='true']:focus { box-shadow: 0 0 0 3px var(--danger-soft); }
+.start-input:read-only { color: var(--text-2); }
+.start-error { margin: 0; min-height: 21px; padding-left: 2px; font-size: 13.5px; line-height: 1.55; color: var(--danger); word-break: keep-all; }
+.start-go { width: 100%; height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; }
+.start-go:disabled { opacity: 0.85; cursor: progress; }
+.start-link {
+  margin-top: -10px; padding: 6px 10px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  color: var(--text-3); font-size: 14px; text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: var(--border-strong);
+}
+.start-link:hover { color: var(--accent-text); text-decoration-color: currentColor; }
+/* A home-screen app opening at its join link: the mark and a spinner until the code is registered. */
+.start-wait { display: none; color: var(--text-3); }
+.start.is-quiet .start-wait { display: grid; place-items: center; min-height: 52px; }
+.start.is-quiet .start-form, .start.is-quiet .start-link { display: none; }
+
+/* 홈 화면에 추가 (js/ui/install.js): the sidebar footer; on phones the library header (the sidebar is a drawer). */
+.install-btn .icon { color: var(--accent); }
+.lib-install-head { display: none; }
+.install-popover { min-width: 0; padding: 6px 6px 6px 12px; }
+.install-tip { display: flex; align-items: center; gap: 10px; font-size: 14px; white-space: nowrap; }
+.install-tip-text { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--text); }
+.install-tip-share { color: var(--accent); }
+.install-tip-hide {
+  padding: 5px 8px; border: 0; border-radius: 6px; background: none; cursor: pointer;
+  font-size: 12.5px; color: var(--text-3);
+}
+.install-tip-hide:hover { background: var(--hover-bg); color: var(--text); }
+
+/* 초대 코드 관리 → 코드 직접 정하기 */
+.relay-custom { margin-top: 14px; max-width: 440px; }
+.field-optional { font-weight: 400; color: var(--text-3); }
+.field-error { font-size: 13px; line-height: 1.5; color: var(--danger); }
+.field-error:empty { display: none; }
+.relay-custom-code { font-family: var(--font-mono); letter-spacing: 0.03em; }
+.relay-custom-code::placeholder { font-family: var(--font); letter-spacing: 0; }
+.relay-custom-code[aria-invalid='true'] { border-color: var(--danger); }
+
 /* ============================================================ RESPONSIVE */
 @media (max-width: 1680px) {
   /* 공용 서재 badge: the note moves to its tooltip, so the paper title keeps its room. */
@@ -1012,6 +1072,9 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
   .lib-search { width: 100%; }
   .lib-actions { width: 100%; }
   .lib-actions .input-with-icon { flex: 1; }
+  .lib-title-wrap { flex-basis: 0; }
+  .lib-install-side { display: none; }
+  .lib-install-head { display: inline-flex; flex: none; }
   .paper-row { grid-template-columns: 34px minmax(0, 1fr); }
   .paper-thumb { width: 34px; height: 42px; }
   .paper-side { grid-column: 2; justify-content: flex-start; }

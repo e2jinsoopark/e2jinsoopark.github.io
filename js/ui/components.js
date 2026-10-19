@@ -390,10 +390,12 @@ export function popover(anchorRect, content, { placement = 'bottom', onClose, cl
   const layer = { el: node, close, ignore: ignoreOutside };
   const reposition = () => placeNode(node, rect, placement);
 
-  node.style.visibility = 'hidden';
+  // Measured while transparent. Not `visibility: hidden`: WebKit (iOS Safari's engine) kept the children of a node
+  // whose visibility was switched back during the same task hidden — a blank popover on an iPhone.
+  node.style.opacity = '0';
   document.body.append(node);
   reposition();
-  node.style.visibility = '';
+  node.style.opacity = '';
   window.addEventListener('resize', reposition);
   pushLayer(layer);
   return {
@@ -490,7 +492,7 @@ export function contextMenu(items, x, y) {
   });
   menu.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  menu.style.visibility = 'hidden';
+  menu.style.opacity = '0'; // measured while transparent (see popover(): not visibility, for WebKit)
   document.body.append(menu);
   const w = menu.offsetWidth;
   const h = menu.offsetHeight;
@@ -498,7 +500,7 @@ export function contextMenu(items, x, y) {
   const top = y + h > window.innerHeight - EDGE ? y - h : y;
   menu.style.left = `${Math.round(clamp(left, EDGE, Math.max(EDGE, window.innerWidth - w - EDGE)))}px`;
   menu.style.top = `${Math.round(clamp(top, EDGE, Math.max(EDGE, window.innerHeight - h - EDGE)))}px`;
-  menu.style.visibility = '';
+  menu.style.opacity = '';
   pushLayer(layer);
   activeMenu = handle;
   /** @type {HTMLElement|null} */ (menu.querySelector('.menu-item:not([disabled])'))?.focus({ preventScroll: true });

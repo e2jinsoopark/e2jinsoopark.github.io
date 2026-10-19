@@ -1,11 +1,11 @@
 // Settings view (#/settings): AI provider & keys (incl. the invite-code relay), GitHub sync, 공용 서재 status,
-// translation options, display, usage, secrets, invite-code admin. Also the invite join screen (#/join/<CODE>, mountJoinView).
+// translation options, display, usage, secrets, invite-code admin. (The join link #/join/<CODE> is ui/start-view.js.)
 // The relay helpers (js/ai/relay.js) arrive as deps.relay with the dynamically loaded AI modules.
 import { APP_VERSION, CLAUDE_MODELS, DEFAULT_MODELS, PRICES, STORAGE_KEYS } from '../core/config.js';
 import { bus } from '../core/bus.js';
 import { settings } from '../core/settings.js';
 import { debounce, el, formatBytes, formatUsd, safeStorage } from '../core/util.js';
-import { button, confirmDialog, iconButton, messageScreen, modal, progressBar, spinner, toast } from './components.js';
+import { button, confirmDialog, iconButton, modal, progressBar, spinner, toast } from './components.js';
 import { icon } from './icons.js';
 import { sharedIcon } from './library-view.js';
 
@@ -463,7 +463,8 @@ class SettingsView {
       urlResult,
       el('div', { style: { marginTop: '14px' } }, this.#secretField({
         label: '초대 코드', value: r.code || '', placeholder: 'PR-XXXX-XXXX', result: codeResult, emptyMessage: '초대 코드를 먼저 입력하세요.',
-        normalize: (v) => relay.normalizeInviteCode(v),
+        // A pasted invite link or message works too (relay.extractInviteCode).
+        normalize: (v) => (relay.extractInviteCode ? relay.extractInviteCode(v) : '') || relay.normalizeInviteCode(v),
         onSave: (v) => {
           if (v === (settings.get().relay?.code || '')) return;
           relay.saveInviteCode(v);
@@ -476,7 +477,7 @@ class SettingsView {
         },
         onTest: async () => {
           const code = settings.get().relay?.code || '';
-          if (!relay.isInviteCode(code)) return { ok: false, message: '초대 코드 형식이 올바르지 않습니다. PR-XXXX-XXXX 형식인지 확인해 주세요.' };
+          if (!relay.isInviteCode(code)) return { ok: false, message: '초대 코드 형식이 올바르지 않습니다. 받은 코드를 그대로 넣었는지 확인해 주세요.' };
           try {
             const me = await this.#loadMe(true);
             renderModels();
@@ -1254,24 +1255,54 @@ class SettingsView {
     const name = el('input', { class: 'input', type: 'text', maxlength: String(relay.NAME_MAX), placeholder: '예: 김간호', 'aria-label': '이름', autocomplete: 'off' });
     const limit = el('input', { class: 'input', type: 'number', min: '0', max: String(relay.DAILY_LIMIT_MAX), step: '0.1', value: '0.5', 'aria-label': '하루 한도 (달러)' });
     const pick = modelSetPicker(relay, relay.MODEL_SETS[0].models);
+    // 코드 직접 정하기 (optional): blank = a random PR-XXXX-XXXX. Checked as typed; the Worker has the final say
+    // (409 when the code is taken, 400 when it is not allowed).
+    const customMax = relay.CUSTOM_CODE_MAX || 24;
+    const custom = el('input', {
+      class: 'input relay-custom-code', type: 'text', maxlength: String(customMax + 8), placeholder: '비워 두면 자동 (예: ICU-2TEAM)',
+      'aria-label': '코드 직접 정하기', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'aria-describedby': 'relay-custom-hint',
+    });
+    const customHint = el('span', { class: 'field-hint', id: 'relay-custom-hint' }, '여러 명이 같은 코드를 쓰면 메모와 사용 한도도 함께 씁니다.');
+    const customError = el('span', { class: 'field-error', role: 'alert' });
+    const checkCustom = () => {
+      const r = relay.checkCustomCode ? relay.checkCustomCode(custom.value) : { code: custom.value.trim() };
+      customError.textContent = r.error || '';
+      if (r.error) custom.setAttribute('aria-invalid', 'true');
+      else custom.removeAttribute('aria-invalid');
+      return r;
+    };
+    custom.addEventListener('input', () => { if (customError.textContent) checkCustom(); });
+    custom.addEventListener('blur', () => {
+      const r = checkCustom();
+      if (!r.error && r.code) custom.value = r.code; // shown as it will be saved (upper case, hyphens)
+    });
     const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
     const submit = button('코드 만들기', { icon: 'plus', kind: 'primary', onClick: async () => {
+      const chosen = checkCustom();
+      if (chosen.error) { custom.focus(); return; }
       submit.disabled = true;
       setResult(result, 'busy', '초대 코드를 만드는 중…');
       try {
         const v = limit.value.trim();
-        const code = await relay.createCode({ name: name.value, dailyLimitUsd: v === '' ? undefined : Number(v), allowedModels: pick.value() });
+        const code = await relay.createCode({
+          name: name.value, dailyLimitUsd: v === '' ? undefined : Number(v), allowedModels: pick.value(),
+          ...(chosen.code ? { code: chosen.code } : {}),
+        });
         clearResult(result);
         name.value = '';
+        custom.value = '';
         this.#showCreated(created, code);
         await this.#loadCodes(list);
       } catch (err) {
         setResult(result, 'error', err?.message || '초대 코드를 만들지 못했습니다.');
+        if (err?.status === 409) custom.focus();
       } finally {
         submit.disabled = false;
       }
     } });
-    name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit.click(); } });
+    for (const input of [name, custom]) {
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit.click(); } });
+    }
     const ratio = Math.round(PRICES['claude-sonnet-5-5'].input / PRICES['claude-haiku-5-5'].input);
     return el('div', { class: 'subsection' },
       el('h3', { class: 'subsection-title' }, icon('plus', { size: 16 }), '새 초대 코드'),
@@ -1279,6 +1310,9 @@ class SettingsView {
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '이름'), name),
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '하루 한도 ($)'), limit),
         el('div', { class: 'field' }, el('span', { class: 'field-label' }, '모델'), pick.el)),
+      el('label', { class: 'field relay-custom' },
+        el('span', { class: 'field-label' }, '코드 직접 정하기', el('span', { class: 'field-optional' }, ' (선택)')),
+        custom, customError, customHint),
       el('p', { class: 'field-hint' }, `하루 한도는 $0~$${relay.DAILY_LIMIT_MAX}이며 한국 시간 0시에 초기화됩니다. Sonnet은 요금이 Haiku의 약 ${ratio}배라 한도가 빨리 찹니다.`),
       el('div', { class: 'btn-row' }, submit),
       result);
@@ -1418,74 +1452,6 @@ class SettingsView {
     });
     return details;
   }
-}
-
-// ------------------------------------------------------------------- join
-
-/**
- * #/join/<CODE>: check the invite code, switch this browser to it, welcome the person by name. The code is taken
- * out of the address bar once registered; an invalid code leaves the settings as they were.
- * @param {HTMLElement} container
- * @param {{ code: string, deps: object, navigate: (hash: string) => void }} opts
- * @returns {{ destroy: () => void }}
- */
-export function mountJoinView(container, { code, deps, navigate }) {
-  document.title = '초대 코드 · 갈피';
-  const controller = new AbortController();
-  let alive = true;
-  const show = (node) => { if (alive) container.replaceChildren(node); };
-  const toLibrary = { label: '라이브러리로', icon: 'arrow-left', onClick: () => navigate('#/') };
-  const toSettings = { label: '코드 직접 입력', icon: 'key', onClick: () => navigate('#/settings/ai') };
-  const run = async () => {
-    show(el('div', { class: 'boot' }, el('div', { class: 'boot-inner' }, spinner(18), '초대 코드를 확인하는 중…')));
-    const relay = deps.relay;
-    if (!relay) {
-      show(messageScreen({
-        title: '초대 코드 기능을 불러오지 못했습니다',
-        message: '페이지를 새로 고친 뒤 다시 시도해 주세요. 계속되면 초대해 준 분에게 알려 주세요.',
-        actions: [{ label: '새로 고침', kind: 'primary', icon: 'refresh', onClick: () => location.reload() }, toLibrary],
-      }));
-      return;
-    }
-    const normalized = relay.normalizeInviteCode(code);
-    if (!relay.isInviteCode(normalized)) {
-      show(messageScreen({
-        title: '초대 링크가 올바르지 않습니다',
-        message: `링크에 들어 있는 코드(${code || '없음'})가 초대 코드 형식(PR-XXXX-XXXX)이 아닙니다.\n받은 링크 전체가 복사되었는지 확인하거나, 설정에서 코드를 직접 입력해 주세요.`,
-        actions: [{ ...toSettings, kind: 'primary' }, toLibrary],
-      }));
-      return;
-    }
-    const s = settings.get();
-    const hadKey = Boolean(s.claude?.apiKey || s.openai?.apiKey || s.gemini?.apiKey);
-    try {
-      const me = await relay.registerInviteCode(normalized, { signal: controller.signal });
-      if (!alive) return;
-      history.replaceState(null, '', '#/');
-      const who = me.name ? `${me.name}님, ` : '';
-      const models = me.allowedModels.map(relay.modelShortName).join(', ') || '-';
-      document.title = '환영합니다 · 갈피';
-      show(messageScreen({
-        iconName: 'check-circle', tone: 'success', brand: 'wordmark',
-        title: me.name ? `환영합니다, ${me.name}님` : '환영합니다',
-        message: [
-          `${who}초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다.`,
-          `하루 한도 ${formatUsd(me.dailyLimitUsd)} · 모델: ${models} · 한도는 매일 0시(한국 시간)에 초기화됩니다.`,
-          hadKey ? '원래 쓰던 API 키는 그대로 있어 설정 → AI 번역에서 언제든 다시 고를 수 있습니다.' : '',
-        ].filter(Boolean).join('\n'),
-        actions: [{ label: '논문 읽으러 가기', kind: 'primary', icon: 'arrow-right', onClick: () => navigate('#/') }],
-      }));
-    } catch (err) {
-      if (!alive || err?.code === 'aborted') return;
-      show(messageScreen({
-        title: '초대 코드를 확인하지 못했습니다',
-        message: `${err?.message || '초대 코드를 확인하지 못했습니다.'}\n코드: ${normalized}`,
-        actions: [{ label: '다시 시도', kind: 'primary', icon: 'refresh', onClick: run }, toSettings, toLibrary],
-      }));
-    }
-  };
-  run();
-  return { destroy: () => { alive = false; controller.abort(); } };
 }
 
 // ------------------------------------------------------------------ helpers

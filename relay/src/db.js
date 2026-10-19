@@ -1,4 +1,6 @@
-// D1 access. Per proxied request: one read (code + today's budgets) and one batched write (usage upsert).
+// D1 access. Per proxied request: one batch to look the code up (the failed-attempt count, which writes nothing
+// for a code that exists, + the code, today's budgets and the caller's counter; auth.js) and one batched write
+// (usage upsert).
 
 /**
  * @typedef {{ code: string, name: string, active: number, allowed_models: string, daily_limit_usd: number,
@@ -7,17 +9,40 @@
  * @typedef {CodeRow & { today_usd: number, month_usd: number, total_usd: number, total_requests: number }} CodeUsageRow
  */
 
+/** SQL for a code's lookup key (upper-case letters and digits): what the unique index codes_by_key is built on. */
+const KEY_OF = (column) => `replace(${column}, '-', '')`;
+
 /**
- * A code with today's spend for it and for all codes, in one query. Null for an unknown code.
- * @returns {Promise<CodeBudgetRow | null>}
+ * @typedef {{ code: string | null, name: string | null, active: number | null, allowed_models: string | null,
+ *             daily_limit_usd: number | null, created_at: number | null, last_used_at: number | null,
+ *             fail_count: number | null, fail_window_start: number | null }} CodeLookupRow
  */
-export function codeWithBudget(db, code, day) {
+
+/**
+ * The statement that reads the code whose key is `key` (codes.js codeKey; '' matches nothing) and the caller's
+ * invite-code failure counter; with `day`, also today's spend for the code and for all codes. Always one row of
+ * CodeLookupRow (+ today_usd, today_requests, global_today_usd with `day`): `code` is null when no code has this key,
+ * `fail_count` null when the caller has no counter. Run in one batch with the failure count (auth.js).
+ */
+export function lookupCodeStatement(db, { key, ip, day = null }) {
+  const budget = day === null ? '' : `,
+      COALESCE((SELECT SUM(u.usd) FROM usage u WHERE u.code = c.code AND u.day = ?3), 0) AS today_usd,
+      COALESCE((SELECT SUM(u.requests) FROM usage u WHERE u.code = c.code AND u.day = ?3), 0) AS today_requests,
+      COALESCE((SELECT SUM(g.usd) FROM usage g WHERE g.day = ?3), 0) AS global_today_usd`;
+  const args = day === null ? [key, ip] : [key, ip, day];
   return db.prepare(`
-    SELECT c.*,
-      COALESCE((SELECT SUM(u.usd) FROM usage u WHERE u.code = c.code AND u.day = ?2), 0) AS today_usd,
-      COALESCE((SELECT SUM(u.requests) FROM usage u WHERE u.code = c.code AND u.day = ?2), 0) AS today_requests,
-      COALESCE((SELECT SUM(g.usd) FROM usage g WHERE g.day = ?2), 0) AS global_today_usd
-    FROM codes c WHERE c.code = ?1`).bind(code, day).first();
+    SELECT c.*, f.failures AS fail_count, f.window_start AS fail_window_start${budget}
+    FROM (SELECT 1) AS one
+    LEFT JOIN codes c ON ${KEY_OF('c.code')} = ?1
+    LEFT JOIN auth_failures f ON f.ip = ?2 AND f.kind = 'code'`).bind(...args);
+}
+
+/**
+ * A code by its lookup key (admin paths: PATCH, usage filter). Null when unknown.
+ * @returns {Promise<CodeRow | null>}
+ */
+export function findCodeByKey(db, key) {
+  return db.prepare(`SELECT * FROM codes WHERE ${KEY_OF('code')} = ?1`).bind(key).first();
 }
 
 /**
@@ -63,11 +88,14 @@ export async function codesWithUsage(db, { day, month, code = null }) {
   return results;
 }
 
-/** Insert a new code; false when the code already exists. */
+/**
+ * Insert a new code; false when a code with the same key already exists ("EICU2026" is taken by "EICU-2026": the
+ * untargeted ON CONFLICT covers the primary key and the unique index codes_by_key).
+ */
 export async function insertCode(db, { code, name, active, allowedModels, dailyLimitUsd, createdAt }) {
   const res = await db.prepare(`
     INSERT INTO codes (code, name, active, allowed_models, daily_limit_usd, created_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (code) DO NOTHING`)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT DO NOTHING`)
     .bind(code, name, active ? 1 : 0, JSON.stringify(allowedModels), dailyLimitUsd, createdAt).run();
   return res.meta.changes === 1;
 }
@@ -111,14 +139,6 @@ export function parseModels(text) {
     if (Array.isArray(v)) return v.map(String);
   } catch { /* comma list */ }
   return String(text || '').split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-/**
- * One code by its canonical form (no usage sums: the shared library only needs who it is). Null when unknown.
- * @returns {Promise<CodeRow | null>}
- */
-export function findCode(db, code) {
-  return db.prepare('SELECT * FROM codes WHERE code = ?1').bind(code).first();
 }
 
 /** How long a tree created through the shared-library proxy may be committed (and how long rows are kept). */

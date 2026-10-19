@@ -3,7 +3,7 @@
 -- Deploy: npx wrangler d1 execute paper-relay --remote --file schema.sql
 
 CREATE TABLE IF NOT EXISTS codes (
-  code TEXT PRIMARY KEY,               -- "PR-XXXX-XXXX"
+  code TEXT PRIMARY KEY,               -- "PR-XXXX-XXXX", or a custom code chosen by the owner ("EICU-2026", upper case)
   name TEXT NOT NULL,                  -- who the code was given to
   active INTEGER NOT NULL DEFAULT 1,   -- 0 = disabled
   allowed_models TEXT NOT NULL,        -- JSON array, e.g. ["claude-haiku-5-5"]
@@ -27,6 +27,24 @@ CREATE TABLE IF NOT EXISTS usage (
 
 -- Today's total across all codes is read on every request; without this it would scan the whole history.
 CREATE INDEX IF NOT EXISTS usage_by_day ON usage (day);
+
+-- Codes are looked up by their key: the code without hyphens ("eicu 2026", "EICU2026" and "EICU-2026" all find
+-- "EICU-2026"). Unique, so "EICU2026" cannot be created next to "EICU-2026". (Added with custom codes, 2026-10-19:
+-- running this file again on an existing database adds it; existing PR-XXXX-XXXX codes never collide.)
+CREATE UNIQUE INDEX IF NOT EXISTS codes_by_key ON codes (replace(code, '-', ''));
+
+-- Failed-attempt limiter (src/limiter.js): per client IP (IPv6: its /64) and kind ('code' = invite-code lookups,
+-- 'admin' = admin tokens), the failures in a 10-minute window that starts at the first failure. Written only on a
+-- failure; rows of finished windows are pruned on every write.
+CREATE TABLE IF NOT EXISTS auth_failures (
+  ip TEXT NOT NULL,                    -- CF-Connecting-IP ("203.0.113.7", "2001:0db8:0001:0002::/64")
+  kind TEXT NOT NULL,                  -- 'code' | 'admin'
+  window_start INTEGER NOT NULL,       -- epoch ms of the window's first failure
+  failures INTEGER NOT NULL,           -- failures counted in this window
+  last_guess TEXT NOT NULL DEFAULT '', -- 16-hex SHA-256 fingerprint of the last failed value (a repeat is not counted)
+  PRIMARY KEY (ip, kind)
+);
+CREATE INDEX IF NOT EXISTS auth_failures_by_window ON auth_failures (window_start);
 
 -- Shared library ("공용 서재", docs/SHARED.md §2): trees created through the GitHub proxy, with the base tree they were
 -- built on. POST git/commits accepts a tree only on top of its own base (so a commit cannot revert other people's

@@ -63,8 +63,9 @@ allowed models only (the app's Claude "test key" and model list use this).
 ### Admin
 - `GET /relay/admin/codes` → `{ codes: [{ code, name, active, allowedModels, dailyLimitUsd, createdAt, lastUsedAt,
   todayUsd, monthUsd /* KST calendar month */, totalUsd, totalRequests }], todayTotalUsd, monthTotalUsd, globalDailyLimitUsd }`
-- `POST /relay/admin/codes` `{ name, allowedModels?, dailyLimitUsd? }` → `{ code, ... }`. Code format: `PR-XXXX-XXXX`
-  (Crockford base32, crypto-random, no ambiguous chars). Defaults from `DEFAULT_MODELS` / `DEFAULT_DAILY_LIMIT_USD`.
+- `POST /relay/admin/codes` `{ name, code?, allowedModels?, dailyLimitUsd? }` → `{ code, ... }`. Code format: `PR-XXXX-XXXX`
+  (Crockford base32, crypto-random, no ambiguous chars), or the owner's own `code` (custom code, §4).
+  Defaults from `DEFAULT_MODELS` / `DEFAULT_DAILY_LIMIT_USD`.
 - `PATCH /relay/admin/codes/:code` `{ name?, active?, allowedModels?, dailyLimitUsd? }` → updated record.
 - `GET /relay/admin/usage?days=30` → `{ days: [{ day, usd, requests, byModel: {...} }] }`.
 - Validation: name 1–40 chars; dailyLimitUsd 0–20; allowedModels ⊆ `KNOWN_MODELS`
@@ -101,10 +102,12 @@ Free-plan friendly: one D1 read for code+budget per request, one upsert per fini
   "홍길동님 · 오늘 $0.03 / $0.50 · 모델: Haiku 5.5". Usage panel shows relay usage from `/relay/me` (not local estimates).
 - **Join link**: `#/join/<CODE>` (fragment, never sent to a server) → sets provider `relay` + code, calls `/relay/me`,
   shows a Korean welcome ("○○님, 초대 코드가 등록되었습니다. 이제 키 없이 번역·요약·채팅을 쓸 수 있습니다."), then goes to
-  the library. Invalid code → clear Korean error and a way to retry.
+  the library. Invalid code → clear Korean error and a way to retry. *(Superseded 2026-10-19: no welcome screen — the join
+  link and the first screen go straight to the library; `docs/notes/onboarding.md`.)*
 - **초대 코드 관리 (관리자)** section in settings (collapsed; visible always, usable only with an admin token): list codes
   with today/month usage, totals; create (name, daily limit $, models: "Haiku만" / "Haiku + Sonnet"); copy code; copy
-  invite message (Korean text with the join link `https://e2jinsoopark.github.io/#/join/<CODE>` and one-line instructions);
+  invite message (Korean text with the join link `https://e2jinsoopark.github.io/#/join/<CODE>` and one-line instructions;
+  since 2026-10-19 exactly `[갈피 초대] ○○님` / the link / `코드: <CODE>`);
   disable/enable; edit limit. Never show the admin token after saving (password field + 지우기).
 - Errors from the relay (401/403/429 with Korean messages) are shown as-is; a 429 quota stops a translation run once
   (fatal for the run, like Gemini's daily quota) with "내일 다시" guidance — no failed-sentence spam.
@@ -126,3 +129,57 @@ Additions and precisions on top of §1–§2, verified end to end with the real 
 - Admin is refused (401) while `ADMIN_TOKEN` is shorter than 16 characters. `TEST_MODE=1` (tests only) lets the
   `x-relay-test-now` header move the clock — never set in production.
 - App: the 초대 코드 관리 section is `#set-invites` (deep link `#/settings/invites`), separate from the AI section.
+
+## 4. Custom codes and the failed-attempt limiter (2026-10-19)
+
+**Two kinds of code** (`relay/src/codes.js`):
+
+| | generated | custom |
+|---|---|---|
+| made by | `POST /relay/admin/codes` without `code` (or `""`, spaces, `null`) | `POST … { "code": "eicu-2026" }` |
+| shape | `PR-XXXX-XXXX`, Crockford base32, 40 random bits | 6–24 characters of A–Z, 0–9 and single hyphens |
+| stored as | `PR-XXXX-XXXX` | upper case with the owner's hyphens: `EICU-2026` (NFKC first, so full-width input works; spaces and dash look-alikes → one hyphen; leading/trailing hyphens dropped) |
+| typed I / L / O | read as 1 / 1 / 0 | never replaced (an O stays an O) |
+
+- **Matching** (both kinds): by the key = letters and digits only, case-insensitive, NFKC-folded, hyphens / spaces / dash
+  look-alikes ignored. `eicu 2026`, `EICU2026` and `Eicu-2026` all open `EICU-2026`. Header values must be Latin-1
+  (fetch refuses others), so clients send the folded form; path segments and `?code=` may be full-width.
+- **Reserved shape**: anything that is `PR` + 8 letters/digits once spaces and hyphens are dropped is a generated code
+  (looked up with the O/I/L reading) and is refused as a custom code — so the O/I/L reading never touches a custom code.
+- **Create errors** (400 `invalid_request_error`, Korean): characters other than A–Z/0–9/hyphen/space, length, the
+  generated shape, a reserved word (`RESERVED_CODES`, compared without hyphens: ADMIN…, TEST, PASSWORD, TEAM, GALPI, …),
+  too easy (one repeated character, or a piece of 0123456789 / A–Z / QWERTY rows, forwards or backwards).
+  Same key as an existing code, in any case or hyphenation → **409** `invalid_request_error` "이미 있는 코드입니다…"
+  (unique index `codes_by_key` on `replace(code, '-', '')`). `PATCH` with `code` → 400: a code cannot be renamed.
+- Admin `PATCH /relay/admin/codes/:code` and `GET /relay/admin/usage?code=` accept any spelling of either kind.
+- **personId** = first 16 hex chars of HMAC-SHA-256(`PERSON_ID_SECRET`, stored code) (plain SHA-256 without the secret):
+  unchanged for generated codes; for a custom code keyed on its stored form, so every spelling — and everyone sharing
+  a group code — is one person in 공용 서재 (shared notes) and shares one daily limit.
+
+**Failed-attempt limiter** (`relay/src/limiter.js`, `relay/src/auth.js`):
+
+- Caller = `CF-Connecting-IP` (an IPv6 address counts as its /64; IPv4-mapped IPv6 as the IPv4). Two buckets per caller:
+  invite codes (every endpoint that takes one: `/v1/messages`, `/v1/models`, `/relay/me`, `/shared`,
+  `/shared/<lib>/activity`, `/shared/<lib>/gh/*` — one shared counter) **20** failures, admin token **10** failures.
+  Fixed window of **10 minutes** from the first failure.
+- Counted: a presented code that matches no code (malformed ones included); a wrong admin token. Not counted: nothing
+  presented; a code that exists but is disabled (still 401 — a stopped colleague's old device keeps polling and must
+  not lock out the hospital network); the same wrong value as the previous failure (a stuck client). Successes never
+  count and never reset the counter.
+- Bucket full → **429** `rate_limit_error` "시도가 너무 많습니다. 잠시 후 다시 시도해 주세요." with `x-should-retry: false` and
+  `retry-after: <seconds until the window ends>`; the GitHub proxy answers the same in GitHub's shape
+  (`{ message, documentation_url }`). Budget 429s never carry `retry-after` — that is how a client tells
+  "wait a few minutes" from "tomorrow". Nothing is forwarded upstream or to GitHub.
+- While the bucket is full, an existing active **generated** code keeps working (guessing 40 random bits is hopeless, so
+  colleagues behind the same NAT are not locked out); a **custom** code is refused like a guess (otherwise 200-vs-429
+  would reveal which word is a code). Admin: even the right token is refused until the window ends.
+- Atomic: the failure count and the code lookup are one D1 batch (one transaction, D1 runs one at a time), so a burst
+  of parallel guesses gets exactly 20 answers (tested with 60 parallel requests). A successful lookup writes nothing;
+  one D1 round trip per request as before.
+- Storage: D1 table `auth_failures` (`schema.sql`). **Deploy order: run `schema.sql` on the remote database first, then
+  `wrangler deploy`** — the new Worker's lookup query needs the table (without it every code request is a 500).
+- Tests: `node relay/test/run.mjs codes` (wrangler dev passes a client-sent `CF-Connecting-IP` through — checked with
+  wrangler 4.145 — and the clock is moved with `x-relay-test-now` under `TEST_MODE=1`); unit tests in
+  `relay/test/codes-unit.test.mjs`.
+- App note: `js/ai/relay.js` adds "내일 다시" only to a 429 whose message mentions 한도 and not "잠시 후", so keep the
+  limiter's message containing "잠시 후" (or tell 429s apart by `retry-after`, which CORS exposes).

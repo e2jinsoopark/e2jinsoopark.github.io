@@ -12,7 +12,7 @@ API key. The worker (`relay/`) is documented in `relay/README.md`.
 | `js/ai/claude.js` | `makeClaudeProvider({ id, label, auth, missingKeyMessage, describeError })`. `claudeProvider` is one instance (requests unchanged); per-provider client cache and fallback-beta memory. `auth()` may return `baseURL` and `fetch`. |
 | `js/ai/relay.js` | `relayProvider` = the Claude provider with `baseURL = settings.relayUrl()`, `apiKey = code`. `fetchMe` / `refreshMe` / `registerInviteCode` / `saveInviteCode` / `saveRelayUrl`, admin client `listCodes` / `createCode` / `updateCode` / `usage`, `inviteLink` / `inviteMessage`, `normalizeInviteCode` / `isInviteCode`, `isRelayOriginAllowed` (reads the page CSP). |
 | `js/ai/providers.js` | Registers `relay`; `export * as relay from './relay.js'`, so `app.js` gets the helpers with the dynamically loaded AI modules (`deps.relay`) — no static import of AI code from the UI. |
-| `js/ui/settings-view.js` | AI section: 초대 코드 card first (“키 없이 쓰기 (초대 코드)”): 서버 주소, 초대 코드 (테스트 → “홍길동님 · 오늘 $0.03 / $0.50 · 모델: Haiku 5.5”), model selects limited to the code's models. For an invitee (code saved) the invite card shows the name and today's usage and the own-key cards (Claude · GPT · Gemini) sit under **내 API 키 쓰기**; switching keeps the code, the invite card switches back in one click (`models.md`). 사용량 shows `/relay/me` while the relay is selected. New section **초대 코드 관리 (관리자)** (`#set-invites`, collapsed). `mountJoinView` for `#/join/<CODE>`. |
+| `js/ui/settings-view.js` | AI section: 초대 코드 card first (“키 없이 쓰기 (초대 코드)”): 서버 주소, 초대 코드 (테스트 → “홍길동님 · 오늘 $0.03 / $0.50 · 모델: Haiku 5.5”), model selects limited to the code's models. For an invitee (code saved) the invite card shows the name and today's usage and the own-key cards (Claude · GPT · Gemini) sit under **내 API 키 쓰기**; switching keeps the code, the invite card switches back in one click (`models.md`). 사용량 shows `/relay/me` while the relay is selected. New section **초대 코드 관리 (관리자)** (`#set-invites`, collapsed). (`#/join/<CODE>` is `js/ui/start-view.js` since the first screen, [`onboarding.md`](onboarding.md).) |
 | `js/app.js` | Route `#/join/<CODE>`; `deps.relay`; one quiet `/relay/me` per visit for relay users (keeps allowed models current). |
 
 ## Behaviour
@@ -24,11 +24,13 @@ API key. The worker (`relay/`) is documented in `relay/README.md`.
   자동 선택. A 403 from the relay re-reads `/relay/me` in the background. Anthropic's 404 "model: …" passed through
   the relay is `not_found` with `err.model` (self-healing retries once on the code's other model); the relay's own
   404s keep the server-address message.
-- **Join link** `#/join/<CODE>` (code normalized: case, spaces, dashes, a pasted whole link, Crockford O→0 / I,L→1):
+- **Join link** `#/join/<CODE>` (code read like a pasted one: case, spaces, dashes, a whole link or invite message,
+  generated codes with Crockford O→0 / I,L→1, chosen codes as spelled — [`onboarding.md`](onboarding.md) §2–3; the rules are one table shared with the Worker's tests, `relay/test/code-vectors.json`):
   the code is checked with `/relay/me` *before* anything is saved; then provider = `relay`, the code, name and models
-  are stored, the hash is replaced by `#/` (the code leaves the address bar and history) and a welcome screen
-  names the person. Bad code → error screen with 다시 시도 / 코드 직접 입력 / 라이브러리로, settings untouched.
-  Malformed code → format error, no request.
+  are stored, the hash is replaced by `#/` (the code leaves the address bar and history) and the library opens
+  (공용 서재 for invitees) — **no welcome screen** since 2026-10-19. The code already saved (same key) → straight to
+  the library, no request. Bad code → the first screen with the code and one error line ("코드를 찾을 수 없어요"),
+  settings untouched; a code that cannot exist → the same line, no request.
 - **Errors.** The relay's own answers have Korean messages and are shown as they are: 401 → `auth` (fatal),
   403 → `permission` (fatal), 429 → `quota` (stops a translation run once, like Gemini's daily quota; “내일 다시” is
   added if the message lacks it). A 403 that names the requested model (“이 초대 코드로는 <model>을 쓸 수
@@ -43,7 +45,8 @@ API key. The worker (`relay/`) is documented in `relay/README.md`.
 - **Admin.** The token field is a password field; the token is checked with `GET /relay/admin/codes` before it is
   saved, the input is cleared, and afterwards only “관리자 토큰 저장됨 · 지우기” is shown. Nothing is requested
   until the panel is opened. List (today / this month / total per code, totals), create (이름, 하루 한도, Haiku만 /
-  Haiku + Sonnet), copy code, copy invite message (3 lines with `https://e2jinsoopark.github.io/#/join/<CODE>`),
+  Haiku + Sonnet, optional **코드 직접 정하기**), copy code, copy invite message (`[갈피 초대] ○○님` / the join link /
+  `코드: <CODE>`),
   중지 / 다시 사용 (confirm on 중지), 한도·모델 수정 (dialog; validated like the worker: name 1–40, $0–20),
   날짜별 사용량 (30 days). The 키·토큰 지우기 button also clears the invite code and admin token.
 
@@ -77,5 +80,5 @@ Anthropic-shaped Korean errors, `x-should-retry: false`, JSON + SSE, admin API) 
 `https://relay.test`. `index.html` is answered with a test copy whose `connect-src` adds `https://relay.test`; every
 other external request is aborted and fails the test (the SDK bundle passes, the font stylesheet is stubbed).
 Covered: strict production CSP, helpers, request shape (x-api-key = code, beta stream), error mapping and no 429
-retry, translator stop on 429, settings card + usage panel, join welcome / error / retry / malformed, admin flows,
+retry, translator stop on 429, settings card + usage panel, join link → library / error / retry / malformed, admin flows,
 reader toast on the daily limit. Results and screenshots: `C:/Users/dindoo/Projects/pr-tools/out/relay-client/`.

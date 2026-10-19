@@ -251,15 +251,26 @@ export function installSelectionMenu(ctx, session, { signal }) {
   }, { signal });
 
   // Follow the selection while the PDF scrolls; detached popovers (note/translate) stay put.
+  // A highlight's menu sits on the PDF, so only the PDF scrolling closes it — not the translation pane, which scrolls
+  // to the clicked sentence right after the click that opened the menu (that closed it at once before).
+  const pdfScroller = viewer.container instanceof Element ? viewer.container : null;
+  const movesPdf = (target) => !pdfScroller || !(target instanceof Element)
+    || target === pdfScroller || pdfScroller.contains(target) || target.contains(pdfScroller);
+  let pdfMoved = false;
   const onScroll = rafThrottle((target) => {
+    const moved = pdfMoved;
+    pdfMoved = false;
     if (!current || current.pop.el?.contains(target)) return;
-    if (current.kind === 'mark') { close(); return; }
+    if (current.kind === 'mark') { if (moved) close(); return; }
     if (current.kind !== 'selection') return;
     const rect = toRect(viewer.getSelectionAnchor?.()?.rect);
     if (rect) current.pop.update?.(rect);
     else close();
   });
-  document.addEventListener('scroll', (e) => onScroll(e.target), { capture: true, passive: true, signal });
+  document.addEventListener('scroll', (e) => {
+    if (movesPdf(e.target)) pdfMoved = true;
+    onScroll(e.target);
+  }, { capture: true, passive: true, signal });
 
   signal.addEventListener('abort', close, { once: true });
 }

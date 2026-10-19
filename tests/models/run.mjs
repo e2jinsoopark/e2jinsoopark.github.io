@@ -486,7 +486,7 @@ try {
     const d = await device({ seed: { relay: { url: RELAY_URL } } });
     const { page, fakes } = d;
     await page.goto(`${APP}#/join/${CODES.sonnet}`);
-    await page.waitForSelector('.message-screen.tone-success');
+    await page.waitForSelector('.library', { timeout: 30000 }); // a join link goes straight to the library (no welcome screen since 2026-10-19)
     const s = await stored(page);
     assertEqual([s.provider, s.relay.translateModel, s.relay.assistModel, s.relay.autoModels], ['relay', '', '', { translate: 'claude-haiku-5-5', assist: 'claude-sonnet-5-5' }], 'after join');
     assertEqual(await effectiveModels(page), ['claude-haiku-5-5', 'claude-sonnet-5-5'], 'models used');
@@ -709,7 +709,7 @@ try {
     const d = await device({ seed: { relay: { url: RELAY_URL } }, viewport: { width: 1280, height: 1000 } });
     const { page, fakes } = d;
     await page.goto(`${APP}#/join/${CODES.haiku}`);
-    await page.waitForSelector('.message-screen.tone-success');
+    await page.waitForSelector('.library', { timeout: 30000 }); // a join link goes straight to the library (no welcome screen since 2026-10-19)
     await page.goto(`${APP}#/settings/ai`);
     await page.waitForSelector('#set-ai .radio-card[data-provider="relay"] .radio-desc >> text=홍길동님 · 오늘 $0.03 / $0.50');
     const relayCard = (await page.locator('#set-ai .radio-card[data-provider="relay"]').innerText()).replace(/\s+/g, ' ').trim();

@@ -1,15 +1,19 @@
 // App bootstrap: theme, module loading with graceful degradation, Library, hash router.
 // Routes: #/ (내 서재) · #/trash (내 서재 휴지통) · #/paper/<id> (reader) · #/settings[/<section>] · #/join/<CODE> (invite link)
 //         #/s/<lib> (공용 서재) · #/s/<lib>/trash · #/s/<lib>/activity · #/s/<lib>/paper/<id>   (docs/SHARED.md)
+// A fresh visitor (no AI, no invite code, nothing in 내 서재) sees the first screen (ui/start-view.js) instead of the
+// library; docs/notes/onboarding.md.
 import { bus } from './core/bus.js';
 import { APP_VERSION, STORAGE_KEYS } from './core/config.js';
 import { settings } from './core/settings.js';
 import { clamp, el, safeStorage } from './core/util.js';
 import { button, closeAllLayers, iconButton, messageScreen, modal, spinner, toast, uiState } from './ui/components.js';
 import { icon } from './ui/icons.js';
+import { isStandalone, setupInstall } from './ui/install.js';
 import { mountLibraryView } from './ui/library-view.js';
 import { mountReaderView } from './ui/reader-view.js';
-import { mountJoinView, mountSettingsView } from './ui/settings-view.js';
+import { mountSettingsView } from './ui/settings-view.js';
+import { mountStartView } from './ui/start-view.js';
 
 /** Modules owned by other builders, loaded dynamically so one broken module cannot blank the app. */
 const MODULES = [
@@ -45,6 +49,7 @@ boot().catch((err) => {
 });
 
 async function boot() {
+  setupInstall(); // first: the web app manifest (not on iOS) and the browser's install events (ui/install.js)
   applyTheme();
   applyFontSize();
   bus.on('settings:change', () => { applyTheme(); applyFontSize(); });
@@ -256,6 +261,11 @@ class SharedLibraries extends EventTarget {
     const ids = [...this.#entries.keys()];
     const id = typeof pref === 'string' && pref.startsWith('shared:') && ids.includes(pref.slice(7)) ? pref.slice(7) : ids[0];
     return id ? `#/s/${encodeURIComponent(id)}` : null;
+  }
+
+  /** Resolves when the latest (re)start has its list: the remembered one at once, else the first GET /shared answer. */
+  settled() {
+    return this.#starting;
   }
 
   /** (Re)open for the saved code and server: from the remembered list at once, then GET /shared. */
@@ -511,8 +521,17 @@ function startRouter(viewEl, deps) {
   };
   const route = () => {
     let r = parseRoute(location.hash);
+    // The join link of the code this browser already has (opened again; an iPhone home-screen app starts at it
+    // every time): no screen in between — straight to the library, the code out of the address bar.
+    if (r.name === 'join' && isSavedCode(deps, r.code)) {
+      deps.relay.registerInviteCode(r.code).catch((err) => console.warn('[app] join', err?.message || err)); // same code: no request
+      history.replaceState(null, '', '#/');
+      r = parseRoute('#/');
+    }
+    // A fresh visitor sees the first screen (one input for the invite code) instead of the library or a paper.
+    const gate = (r.name === 'library' || r.name === 'paper') && needsGate(deps);
     // #/ of an invitee: 공용 서재 (until they choose 내 서재 in the sidebar).
-    if (r.name === 'library' && !r.lib && !r.page) {
+    if (!gate && r.name === 'library' && !r.lib && !r.page) {
       const home = deps.shared?.homeHash?.();
       if (home) {
         history.replaceState(null, '', home);
@@ -522,8 +541,9 @@ function startRouter(viewEl, deps) {
       }
     }
     closeAllLayers();
+    if (gate && current?.kind === 'start' && current.gate) return; // already shown
     // Moving inside the library (내 서재 ↔ 공용 서재, 휴지통, 최근 활동) keeps the view: no flicker, no lost scroll.
-    if (r.name === 'library' && current?.kind === 'library' && current.update) {
+    if (!gate && r.name === 'library' && current?.kind === 'library' && current.update) {
       try {
         current.update(r);
         previousHash = location.hash || '#/';
@@ -536,12 +556,15 @@ function startRouter(viewEl, deps) {
     current = null;
     viewEl.replaceChildren();
     try {
-      if (r.name === 'paper') {
+      if (gate) {
+        current = mountStartView(viewEl, { deps, navigate, gate: true });
+      } else if (r.name === 'paper') {
         current = mountReaderView(viewEl, { paperId: r.id, lib: r.lib || null, deps, navigate });
       } else if (r.name === 'settings') {
         current = mountSettingsView(viewEl, { deps, navigate, backHref: previousHash, section: r.section });
       } else if (r.name === 'join') {
-        current = mountJoinView(viewEl, { code: r.code, deps, navigate });
+        // In a home-screen app (an iPhone one starts at its join link) the code is registered without the form.
+        current = mountStartView(viewEl, { deps, navigate, code: r.code || '', quiet: isStandalone() });
       } else {
         document.title = '갈피';
         current = mountLibraryView(viewEl, { deps, navigate, route: r });
@@ -559,7 +582,38 @@ function startRouter(viewEl, deps) {
     if (r.name !== 'settings') previousHash = r.name === 'join' ? '#/' : location.hash || '#/';
   };
   window.addEventListener('hashchange', () => route());
+  // The first screen goes away by itself when a code or a key arrives some other way (another tab, 설정).
+  bus.on('settings:change', () => {
+    // (Not while it registers a code itself: it waits for 공용 서재, then goes on.)
+    if (current?.kind === 'start' && current.gate && !current.busy() && !needsGate(deps)) route();
+  });
   route();
+}
+
+/**
+ * A fresh visitor: no usable AI (no saved API key, no invite code; ?mock=1 counts as AI), nothing in 내 서재 and no
+ * GitHub sync. Someone whose library has papers, or who syncs, always gets their library, AI or not.
+ */
+export function needsGate(deps) {
+  const s = settings.get();
+  if (settings.isAiReady() || String(s.relay?.code || '').trim()) return false;
+  if (['claude', 'openai', 'gemini'].some((id) => String(s[id]?.apiKey || '').trim())) return false;
+  if (settings.isSyncReady()) return false;
+  try {
+    const lib = deps.library;
+    if (lib?.papers?.length || lib?.folders?.length) return false;
+  } catch { return false; }
+  return true;
+}
+
+/** The join link's code is the one this browser already has. */
+function isSavedCode(deps, raw) {
+  const relay = deps.relay;
+  const saved = String(settings.get().relay?.code || '').trim();
+  if (!relay?.normalizeInviteCode || !relay.registerInviteCode || !saved || !raw) return false;
+  // One code, two spellings ("ICU-2TEAM" / "icu2team"): the relay matches codes by their letters and digits.
+  const key = (c) => (relay.inviteCodeKey ? relay.inviteCodeKey(c) : relay.normalizeInviteCode(c));
+  try { return Boolean(key(raw)) && key(raw) === key(saved); } catch { return false; }
 }
 
 // ------------------------------------------------------------- theme & font

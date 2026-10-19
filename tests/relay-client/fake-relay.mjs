@@ -2,7 +2,11 @@
 // allowed Origin, expose only request-id / x-relay-*), Anthropic-shaped errors with Korean messages, `x-should-retry:
 // false` on refusals, /v1/messages (JSON + SSE, ?beta=true), /v1/models, /relay/me and /relay/admin/*.
 // Used through Playwright route interception of RELAY_URL; nothing leaves the machine.
+// Codes as the Worker has them since custom codes (relay/src/codes.js, imported): a presented code is matched by its
+// key (letters and digits), the owner may choose a code (POST `code`; 409 when its key is taken, 400 when not allowed),
+// and more than CODE_FAIL_LIMIT unknown codes in a window → 429 "시도가 너무 많습니다…" (relay/src/limiter.js).
 import { parseTranslationUserMessage } from '../../js/ai/prompts.js';
+import { codeKey, validateCustomCode } from '../../relay/src/codes.js';
 
 export const RELAY_URL = 'https://relay.test';
 export const ADMIN_TOKEN = 'adm-test-token-0000';
@@ -12,6 +16,10 @@ const KNOWN_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'
 const HAIKU = ['claude-haiku-5-5'];
 const HAIKU_SONNET = ['claude-haiku-5-5', 'claude-sonnet-5-5'];
 const DAY = 86_400_000;
+export const CODE_FAIL_LIMIT = 20;
+const FAIL_WINDOW_MS = 10 * 60 * 1000;
+export const TOO_MANY_MESSAGE = '시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.';
+const TAKEN_MESSAGE = '이미 있는 코드입니다(대소문자와 하이픈은 구분하지 않습니다). 다른 코드를 정해 주세요.';
 
 /** Codes every test starts with (Crockford base32: no I, L, O, U). */
 export const CODES = Object.freeze({
@@ -57,6 +65,10 @@ export function createFakeRelay() {
   const calls = [];
   let seq = 0;
   let nextCode = 0;
+  /** Failed code lookups of this "network" (one fake = one IP): { at, guess }. */
+  const failures = [];
+  const keyOf = (code) => String(code).replace(/-/g, '');
+  const findByKey = (key) => [...db.values()].find((r) => keyOf(r.code) === key) || null;
 
   const toApi = (r) => ({
     code: r.code, name: r.name, active: r.active, allowedModels: [...r.allowedModels], dailyLimitUsd: r.dailyLimitUsd,
@@ -96,9 +108,17 @@ export function createFakeRelay() {
       const body = call.body || {};
       const problem = validate(body, false);
       if (problem) return anthropicError(400, 'invalid_request_error', problem);
-      const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-      const n = nextCode++;
-      const code = `PR-NEW${alphabet[n % 32]}-${'K9X7'}`;
+      let code;
+      if (body.code !== undefined && body.code !== null && String(body.code).trim()) {
+        const chosen = validateCustomCode(body.code);
+        if (chosen.error) return anthropicError(400, 'invalid_request_error', chosen.error);
+        if (findByKey(keyOf(chosen.code))) return anthropicError(409, 'invalid_request_error', TAKEN_MESSAGE);
+        code = chosen.code;
+      } else {
+        const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+        const n = nextCode++;
+        code = `PR-NEW${alphabet[n % 32]}-${'K9X7'}`;
+      }
       const r = {
         code, name: body.name.trim(), active: true, allowedModels: body.allowedModels || [...HAIKU],
         dailyLimitUsd: body.dailyLimitUsd ?? 0.5, todayUsd: 0, todayRequests: 0, monthUsd: 0, totalUsd: 0, totalRequests: 0,
@@ -109,7 +129,8 @@ export function createFakeRelay() {
     }
     const m = /^\/relay\/admin\/codes\/([^/]+)$/.exec(path);
     if (method === 'PATCH' && m) {
-      const r = db.get(decodeURIComponent(m[1]));
+      const parsed = codeKey(decodeURIComponent(m[1]));
+      const r = parsed ? findByKey(parsed.key) : null;
       if (!r) return anthropicError(404, 'not_found_error', '그런 초대 코드가 없습니다.');
       const body = call.body || {};
       const problem = validate(body, true);
@@ -193,7 +214,20 @@ export function createFakeRelay() {
   function respond(call) {
     if (call.path.startsWith('/relay/admin/')) return admin(call);
     const bearer = /^Bearer (.+)$/.exec(call.headers.authorization || '')?.[1];
-    const rec = db.get(call.headers['x-api-key'] || bearer || '');
+    const presented = call.headers['x-api-key'] || bearer || '';
+    if (!presented) return anthropicError(401, 'authentication_error', '초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.');
+    const parsed = codeKey(presented);
+    const rec = parsed ? findByKey(parsed.key) : null;
+    // The failed-attempt limiter: while it holds, only an existing, active GENERATED code still works.
+    const now = Date.now();
+    const recent = failures.filter((f) => now - f.at < FAIL_WINDOW_MS);
+    if (recent.length >= CODE_FAIL_LIMIT && !(parsed?.generated && rec?.active)) {
+      return anthropicError(429, 'rate_limit_error', TOO_MANY_MESSAGE, { 'x-should-retry': 'false', 'retry-after': '600' });
+    }
+    if (!rec) {
+      const guess = parsed ? parsed.key : presented.trim();
+      if (failures.at(-1)?.guess !== guess) failures.push({ at: now, guess }); // the same wrong value again is not counted
+    }
     if (!rec || !rec.active) return anthropicError(401, 'authentication_error', '초대 코드가 올바르지 않거나 사용이 중지되었습니다.');
     if (call.method === 'GET' && call.path === '/relay/me') {
       return {
@@ -242,5 +276,5 @@ export function createFakeRelay() {
     }).catch(() => {}); // the page may have aborted the request meanwhile
   }
 
-  return { db, calls, handle };
+  return { db, calls, failures, handle };
 }
