@@ -132,6 +132,10 @@ home-screen app starts. The code therefore travels in the saved address:
    library (공용 서재). Every later launch starts at the same address: the code is already saved → straight to the
    library, no screen, no request.
 
+**Confirmed on the owner's real iPhone (2026-10-19):** after 홈 화면에 추가 in Safari, the home-screen icon opened
+straight into 공용 서재 without asking for the code — the `#/join/<CODE>` web-clip address carries the code into the
+home-screen app's separate storage as designed.
+
 What only a real iPhone can confirm (WebKit in Playwright is Safari's engine, not Safari; `tests/onboarding/run.mjs`
 and `tests/onboarding/worker-e2e.mjs` stand in for the home-screen app with a fresh WebKit context (iPhone 15 profile),
 `navigator.standalone = true` and `display-mode: standalone`):
