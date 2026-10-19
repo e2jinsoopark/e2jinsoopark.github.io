@@ -3,16 +3,17 @@
 // 'library' and the invite code as its token. The Worker checks the code, allows only the routes and repo paths
 // of the layout (everyone may change the shared files, nobody another person's people/<id>/ files), hides other
 // people's files from tree listings, rewrites commit messages with the code's name and calls GitHub with its own
-// token (TEAM_GITHUB_TOKEN). Also GET /shared, GET /shared/<lib>/activity and the admin stats / purge.
+// token (TEAM_GITHUB_TOKEN). Also GET /shared, GET /shared/<lib>/activity, the admin stats / purge, and removing a
+// deleted invite code's people/<id>/ files (removePersonFiles, for DELETE /relay/admin/codes/<code> in index.js).
 import { checkInviteCode } from './auth.js';
 import { hasSharedTree, insertSharedTree } from './db.js';
 import { encodeBranch, JSON_MEDIA, RAW_MEDIA, TeamRepo, UpstreamError } from './github.js';
 import { apiError, bearer, json, parseJson, readBody } from './http.js';
 import { TOO_MANY_MESSAGE, tooManyAttempts } from './limiter.js';
 import {
-  checkTreeEntries, classifyPath, commitMessageFor, compareLibraries, confirmedPurgeIds, describeSharedChange,
-  filterEntries, LIBRARY_PATH, paperFiles, parseCommitLine, parseLibrary, PERSONAL_SUMMARY, personIdFor,
-  QUIET_LIBRARY_SUMMARY, QUIET_SUMMARIES, scrubText, visibleTo,
+  checkTreeEntries, classifyPath, CODE_DELETE_MESSAGE, commitMessageFor, compareLibraries, confirmedPurgeIds,
+  describeSharedChange, filterEntries, LIBRARY_PATH, paperFiles, parseCommitLine, parseLibrary, PERSONAL_SUMMARY,
+  personFiles, personIdForRow, QUIET_LIBRARY_SUMMARY, QUIET_SUMMARIES, scrubText, visibleTo,
 } from './shared-paths.js';
 
 /** "A tree the client got from this proxy in the last 10 min": heads (and trees made here) stay usable this long. */
@@ -59,6 +60,7 @@ const MSG = {
   badReadme: 'README.md 내용이 올바르지 않습니다(base64, 최대 64KB).',
   tooManyFiles: (max) => `공용 서재에 담을 수 있는 파일 수(${max.toLocaleString('en-US')}개)를 넘었습니다. 휴지통을 비우거나 관리자에게 알려 주세요.`,
   badLibrary: 'library.json 내용이 올바르지 않습니다(공용 서재 목록 형식이 아닙니다).',
+  noListing: 'GitHub에서 공용 서재의 파일 목록을 받지 못했습니다. 잠시 후 다시 시도해 주세요.',
   dropsRecords: (items) => `공용 서재에서는 폴더·논문을 목록에서 지울 수 없습니다(삭제는 휴지통으로만 합니다). 문제가 된 항목: ${items.join(', ')}`,
   unknownKeys: (keys) => `공용 서재에서는 다음 항목을 쓸 수 없습니다: ${keys.join(', ')}`,
   full: (used, max, size) => `공용 서재 저장 공간이 부족해 이 PDF(${mb(size)})를 올릴 수 없습니다 `
@@ -101,7 +103,8 @@ function notAllowed(method) {
 /**
  * The invite code (Authorization: Bearer, as GitHubClient sends its token; or x-api-key) → its row and personId,
  * behind the same failed-attempt limiter as the Claude endpoints (auth.js). personId is keyed on the code as stored
- * ("PR-XXXX-XXXX", or a custom code such as "EICU-2026"), so every way of typing it is the same person.
+ * ("PR-XXXX-XXXX", or a custom code such as "EICU-2026") and its person salt (personIdForRow), so every way of typing
+ * it is the same person, and a deleted code made again is a new one.
  * @returns {Promise<{ code: string, row: import('./db.js').CodeRow, personId: string }
  *                   | { error: { status: 401 | 429, message: string, retryAfter?: number } }>}
  */
@@ -112,7 +115,7 @@ async function identify(request, { env, now }) {
   if (check.limited) return { error: { status: 429, message: TOO_MANY_MESSAGE, retryAfter: check.retryAfter } };
   if (!check.row) return { error: { status: 401, message: MSG.badCode } };
   const { row } = check;
-  return { code: row.code, row, personId: await personIdFor(row.code, env.PERSON_ID_SECRET || '') };
+  return { code: row.code, row, personId: await personIdForRow(row, env.PERSON_ID_SECRET || '') };
 }
 
 /** identify()'s refusal in Anthropic's error shape (/shared, /shared/<lib>/activity). */
@@ -616,29 +619,52 @@ async function purge(repo, { now }) {
     const beforeLib = beforeIndex?.files.get(LIBRARY_PATH);
     if (beforeLib) before = (await loadLibrary(repo, beforeLib.sha)).value?.top ?? null;
   }
-  for (let attempt = 1; ; attempt++) {
-    const head = await repo.head(now, { maxAgeMs: 0 });
-    const index = head.state === 'ok' ? await repo.index(head.treeSha) : null;
+  const done = await deletionCommit(repo, now, async (head) => {
+    const index = await repo.index(head.treeSha);
     const libraryFile = index?.files.get(LIBRARY_PATH);
-    if (!index || !libraryFile) return json({ purged: [], files: 0, freedBytes: 0, commitSha: null });
+    if (!index || !libraryFile) return null;
     const res = await repo.call('GET', `/git/blobs/${libraryFile.sha}`, { accept: RAW_MEDIA });
     if (res.status !== 200) throw await repo.passThrough(res);
     const library = parseJson(new Uint8Array(await res.arrayBuffer()));
     const ids = confirmedPurgeIds(library, before, now, PURGE_AFTER_MS);
     const paths = paperFiles(index.files.keys(), ids);
-    if (!paths.length) return json({ purged: [], files: 0, freedBytes: 0, commitSha: null });
+    if (!paths.length) return null;
     const purged = ids.filter((id) => paths.some((p) => p.startsWith(`papers/${id}/`) || p.includes(`/papers/${id}/`)));
     const freedBytes = paths.reduce((sum, p) => sum + (index.files.get(p)?.size ?? 0), 0);
+    const message = `[관리자] 휴지통 비우기: 30일 지난 논문 ${purged.length}개의 파일 ${paths.length}개 삭제`;
+    return { paths, message, purged, freedBytes };
+  });
+  if (!done) return json({ purged: [], files: 0, freedBytes: 0, commitSha: null });
+  return json({ purged: done.purged, files: done.paths.length, freedBytes: done.freedBytes, commitSha: done.commitSha });
+}
 
+/**
+ * One server-side commit on the library's branch that deletes the files `plan(head)` picks — `{ paths, message, … }`,
+ * or null when there is nothing to delete — on top of the current head. When someone pushes in between (GitHub's 422
+ * on the ref update) it starts again from the new head, at most MAX_PURGE_ATTEMPTS times. Used by the 30-day purge
+ * and by code deletion. Throws UpstreamError when GitHub cannot be reached or refuses.
+ * @param {TeamRepo} repo
+ * @param {number} now
+ * @param {(head: { commitSha: string, treeSha: string }) => Promise<{ paths: string[], message: string } | null>} plan
+ * @returns {Promise<({ paths: string[], message: string, commitSha: string } & Record<string, any>) | null>}
+ */
+async function deletionCommit(repo, now, plan) {
+  for (let attempt = 1; ; attempt++) {
+    const head = await repo.head(now, { maxAgeMs: 0 });
+    if (head.state !== 'ok') return null; // an empty repo or a missing branch holds no files
+    const planned = await plan(head);
+    if (!planned?.paths.length) return null;
     const treeRes = await repo.call('POST', '/git/trees', {
-      json: { base_tree: head.treeSha, tree: paths.map((path) => ({ path, mode: '100644', type: 'blob', sha: null })) },
+      json: { base_tree: head.treeSha, tree: planned.paths.map((path) => ({ path, mode: '100644', type: 'blob', sha: null })) },
     });
     if (treeRes.status !== 201) throw await repo.passThrough(treeRes);
-    const tree = (await treeRes.json())?.sha;
-    const message = `[관리자] 휴지통 비우기: 30일 지난 논문 ${purged.length}개의 파일 ${paths.length}개 삭제`;
+    const tree = (await treeRes.json().catch(() => null))?.sha;
+    if (!SHA_RE.test(tree || '')) throw new UpstreamError(502, 'GitHub에서 트리 sha를 받지 못했습니다.');
+    const { message } = planned;
     const commitRes = await repo.call('POST', '/git/commits', { json: { message, tree, parents: [head.commitSha] } });
     if (commitRes.status !== 201) throw await repo.passThrough(commitRes);
-    const commitSha = (await commitRes.json())?.sha;
+    const commitSha = (await commitRes.json().catch(() => null))?.sha;
+    if (!SHA_RE.test(commitSha || '')) throw new UpstreamError(502, 'GitHub에서 커밋 sha를 받지 못했습니다.');
     repo.rememberCommit(commitSha, { tree, parents: [head.commitSha], message, date: now });
     const refRes = await repo.call('PATCH', `/git/refs/heads/${encodeBranch(repo.lib.branch)}`, {
       json: { sha: commitSha, force: false },
@@ -646,12 +672,69 @@ async function purge(repo, { now }) {
     if (refRes.status === 200) {
       await refRes.body?.cancel();
       await repo.noteHead(commitSha, now);
-      return json({ purged, files: paths.length, freedBytes, commitSha });
+      return { ...planned, commitSha };
     }
     repo.forgetHead();
     if (refRes.status !== 422 || attempt >= MAX_PURGE_ATTEMPTS) throw await repo.passThrough(refRes);
     await refRes.body?.cancel(); // someone pushed meanwhile: start again from the new head
   }
+}
+
+/**
+ * Code deletion (index.js): remove everything under people/<id>/ of `personIds` from every library in
+ * SHARED_LIBRARIES — one server-side commit per library that holds such files, with the 최근 활동 line
+ * "[관리자] 초대 코드 삭제에 따라 개인 기록 정리" (no person id in it); a library without them gets no commit. Shared
+ * files (library.json, papers/*) and other people's folders are never touched. Throws UpstreamError when GitHub
+ * cannot be reached or refuses, so the caller keeps the code; a retry skips the libraries already cleaned.
+ * Without TEAM_GITHUB_TOKEN the shared libraries are switched off (GET /shared lists none, the proxy answers 503), so
+ * nothing can be stored through this Worker: nothing to remove.
+ * @param {import('./index.js').Deps} deps
+ * @param {string[]} personIds
+ * @returns {Promise<{ files: number, commits: number }>}
+ */
+export async function removePersonFiles(deps, personIds) {
+  const { config, now } = deps;
+  if (!config.teamToken || !personIds.length) return { files: 0, commits: 0 };
+  let files = 0;
+  let commits = 0;
+  for (const lib of config.sharedLibraries) {
+    const repo = new TeamRepo(lib, config);
+    const done = await deletionCommit(repo, now, async (head) => {
+      const paths = await personPaths(repo, head, personIds);
+      return paths.length ? { paths, message: CODE_DELETE_MESSAGE } : null;
+    });
+    if (done) {
+      files += done.paths.length;
+      commits++;
+    }
+  }
+  return { files, commits };
+}
+
+/**
+ * The files under people/<id>/ of `personIds` in the head tree: from the (cached) recursive index or — when GitHub
+ * truncated that listing (a very large repo) — by walking root → people → <id>, each person's own folder listed
+ * recursively.
+ * @param {TeamRepo} repo
+ */
+async function personPaths(repo, head, personIds) {
+  const index = await repo.index(head.treeSha);
+  if (!index) throw new UpstreamError(502, MSG.noListing);
+  if (!index.truncated) return personFiles(index.files.keys(), personIds);
+  const root = await repo.listing(head.treeSha, false);
+  if (!root) throw new UpstreamError(502, MSG.noListing);
+  const people = root.tree.find((e) => e?.path === 'people' && e.type === 'tree');
+  if (!people) return [];
+  const level = await repo.listing(people.sha, false);
+  if (!level) throw new UpstreamError(502, MSG.noListing);
+  const found = [];
+  for (const dir of level.tree) {
+    if (dir?.type !== 'tree' || !personIds.includes(dir.path)) continue;
+    const sub = await repo.listing(dir.sha, true);
+    if (!sub || sub.truncated) throw new UpstreamError(502, MSG.noListing);
+    for (const f of sub.tree) if (f?.type === 'blob' && typeof f.path === 'string') found.push(`people/${dir.path}/${f.path}`);
+  }
+  return personFiles(found, personIds);
 }
 
 // ───────────────────────────── helpers ─────────────────────────────

@@ -9,11 +9,17 @@ CREATE TABLE IF NOT EXISTS codes (
   allowed_models TEXT NOT NULL,        -- JSON array, e.g. ["claude-haiku-5-5"]
   daily_limit_usd REAL NOT NULL,
   created_at INTEGER NOT NULL,         -- epoch ms
-  last_used_at INTEGER                 -- epoch ms of the last forwarded request
+  last_used_at INTEGER,                -- epoch ms of the last forwarded request
+  person_salt TEXT                     -- 32 hex (128 random bits) mixed into the personId of 공용 서재; NULL = a code made
+                                       -- before code deletion (2026-10-19), which keeps its saltless personId
 );
+-- person_salt and databases made before 2026-10-19: CREATE TABLE IF NOT EXISTS leaves an existing codes table as it
+-- is, and SQLite/D1 has no "ADD COLUMN IF NOT EXISTS" (a plain ALTER TABLE here would fail on the second run). So the
+-- Worker adds the column itself the first time it creates a code after the update (src/db.js ensureSaltColumn:
+-- PRAGMA table_info, then ALTER TABLE codes ADD COLUMN person_salt TEXT). Everything else reads it as optional.
 
 CREATE TABLE IF NOT EXISTS usage (
-  code TEXT NOT NULL,
+  code TEXT NOT NULL,                  -- the code; "deleted:<ISO time>:<code>" once that code was deleted (kept as history)
   day TEXT NOT NULL,                   -- Asia/Seoul calendar day, "YYYY-MM-DD"
   model TEXT NOT NULL,                 -- model that served (and billed) the tokens
   requests INTEGER NOT NULL DEFAULT 0,

@@ -4,16 +4,21 @@
 // The same codes open the shared team library (공용 서재) through a GitHub-compatible proxy (src/shared.js).
 // Contracts: docs/RELAY.md §1, docs/SHARED.md §2.
 import { checkAdminToken, checkInviteCode } from './auth.js';
-import { codeKey, generateCode, validateCodeInput } from './codes.js';
+import { codeKey, generateCode, newPersonSalt, validateCodeInput } from './codes.js';
 import { KNOWN_MODELS, MAX_ADMIN_BODY_BYTES, MAX_BODY_BYTES, MIN_ADMIN_TOKEN_LENGTH, MODEL_NAMES, readConfig } from './config.js';
-import { codesWithUsage, findCodeByKey, insertCode, parseModels, recordUsage, updateCode, usageByDay } from './db.js';
+import {
+  codesWithUsage, deleteCodeRecord, deletedCodesUsage, findCodeByKey, insertCode, parseModels, recordUsage, updateCode,
+  usageByDay,
+} from './db.js';
+import { UpstreamError } from './github.js';
 import {
   ALLOW_METHODS, apiError, bearer, isOriginAllowed, json, parseJson, preflight, readBody, SHARED_ALLOW_METHODS, withCors,
 } from './http.js';
 import { tooManyAttempts } from './limiter.js';
 import { meterBody } from './meter.js';
 import { costUsd } from './pricing.js';
-import { handleShared, handleSharedAdmin } from './shared.js';
+import { handleShared, handleSharedAdmin, removePersonFiles } from './shared.js';
+import { personIdsOfDeletedCode } from './shared-paths.js';
 import { kstDay, kstDaysBack, kstMonth, nextKstMidnight, requestNow } from './time.js';
 
 /** Upstream response headers the client may need (content type, ids, retry hints). */
@@ -35,6 +40,9 @@ const MSG = {
   badShape: '요청 형식이 올바르지 않습니다. model, max_tokens(1 이상의 정수), messages(배열)가 필요합니다.',
   tooLarge: `요청이 너무 큽니다(최대 ${MAX_BODY_BYTES / 1024 / 1024}MB). 더 짧은 내용으로 다시 시도해 주세요.`,
   upstreamDown: 'Anthropic 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  // Code deletion could not remove the person's files from 공용 서재: the code is kept (as it was), so nothing is
+  // left orphaned; the admin deletes again later.
+  deleteFailed: '공용 서재(GitHub)에 연결하지 못해 이 코드의 개인 기록을 지우지 못했습니다. 코드는 그대로 두었으니 잠시 후 다시 삭제해 주세요.',
   internal: '중계 서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.',
 };
 
@@ -270,21 +278,40 @@ async function handleAdmin(request, url, deps) {
     return notAllowed(method);
   }
   const one = /^\/codes\/([^/]+)$/.exec(path);
-  if (one) return method === 'PATCH' ? patchCode(request, safeDecode(one[1]), deps) : notAllowed(method);
+  if (one) {
+    if (method === 'PATCH') return patchCode(request, safeDecode(one[1]), deps);
+    if (method === 'DELETE') return deleteCode(safeDecode(one[1]), deps);
+    return notAllowed(method);
+  }
   if (path === '/usage') return method === 'GET' ? usageReport(url, deps) : notAllowed(method);
   const shared = path.startsWith('/shared/') ? await handleSharedAdmin(request, path, deps) : null;
   if (shared) return shared;
   return apiError(404, 'not_found_error', `요청한 관리자 주소를 찾을 수 없습니다: ${method} ${url.pathname}`);
 }
 
+/**
+ * GET /relay/admin/codes. The totals include the usage of deleted codes (their history stays in the usage table and
+ * the owner paid for it), which is also given on its own as `deletedUsage` for the list's "삭제된 코드" row.
+ */
 async function listCodes({ env, config, now }) {
-  const rows = await codesWithUsage(env.DB, { day: kstDay(now), month: kstMonth(now) });
+  const day = kstDay(now);
+  const month = kstMonth(now);
+  const [rows, deleted] = await Promise.all([
+    codesWithUsage(env.DB, { day, month }),
+    deletedCodesUsage(env.DB, { day, month }),
+  ]);
   const codes = rows.map(codeRecord);
   return json({
     codes,
-    todayTotalUsd: roundUsd(rows.reduce((s, r) => s + r.today_usd, 0)),
-    monthTotalUsd: roundUsd(rows.reduce((s, r) => s + r.month_usd, 0)),
+    todayTotalUsd: roundUsd(rows.reduce((s, r) => s + r.today_usd, 0) + deleted.today_usd),
+    monthTotalUsd: roundUsd(rows.reduce((s, r) => s + r.month_usd, 0) + deleted.month_usd),
     globalDailyLimitUsd: config.globalDailyLimitUsd,
+    deletedUsage: {
+      todayUsd: roundUsd(deleted.today_usd),
+      monthUsd: roundUsd(deleted.month_usd),
+      totalUsd: roundUsd(deleted.total_usd),
+      totalRequests: deleted.total_requests,
+    },
   });
 }
 
@@ -297,15 +324,17 @@ async function createCode(request, { env, config, now }) {
   });
   if (checked.error) return apiError(400, 'invalid_request_error', checked.error);
   const { name, allowedModels, dailyLimitUsd, active = true, code: chosen } = checked.value;
+  // Every new code gets its own person salt: a custom code deleted and made again is a new person in 공용 서재.
+  const fields = { name, active, allowedModels, dailyLimitUsd, createdAt: now, personSalt: newPersonSalt() };
   if (chosen) {
-    if (await insertCode(env.DB, { code: chosen, name, active, allowedModels, dailyLimitUsd, createdAt: now })) {
+    if (await insertCode(env.DB, { code: chosen, ...fields })) {
       return json(await codeReport(env.DB, chosen, now), 201);
     }
     return apiError(409, 'invalid_request_error', MSG.takenCode);
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = generateCode();
-    if (await insertCode(env.DB, { code, name, active, allowedModels, dailyLimitUsd, createdAt: now })) {
+    if (await insertCode(env.DB, { code, ...fields })) {
       return json(await codeReport(env.DB, code, now), 201);
     }
   }
@@ -324,6 +353,44 @@ async function patchCode(request, rawCode, { env, now }) {
     return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${found.code}`);
   }
   return json(await codeReport(env.DB, found.code, now));
+}
+
+/**
+ * DELETE /relay/admin/codes/<code> (any spelling, as PATCH): the code is gone for good.
+ * 1. The code is switched off first, so its owner cannot store anything new while the files go (every proxy request
+ *    checks the code; a push that raced past is caught by the ref update's fast-forward check).
+ * 2. Everything under people/<personId>/ (the person's highlights, notes, AI results) is removed from every shared
+ *    library — one "[관리자] 초대 코드 삭제에 따라 개인 기록 정리" commit per library that has any (shared.js).
+ * 3. Only then the code row and its shared_trees rows are deleted; its usage rows stay as history (db.js).
+ * If GitHub cannot be reached or refuses in step 2, nothing is deleted: the code gets its previous on/off state back
+ * and the answer is 502 with a Korean message, so the admin can simply delete again (libraries already cleaned are
+ * skipped). There is never a deleted code whose notes were silently left behind.
+ * → { deleted: true, purgedFiles }
+ */
+async function deleteCode(rawCode, deps) {
+  const { env, now } = deps;
+  const parsed = codeKey(rawCode);
+  const found = parsed ? await findCodeByKey(env.DB, parsed.key) : null;
+  if (!found) return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${parsed?.code ?? rawCode}`);
+  const personIds = await personIdsOfDeletedCode(found, env.PERSON_ID_SECRET || '');
+  const wasActive = Boolean(found.active);
+  if (wasActive) await updateCode(env.DB, found.code, { active: false });
+  let removed;
+  try {
+    removed = await removePersonFiles(deps, personIds);
+  } catch (err) {
+    if (wasActive) {
+      await updateCode(env.DB, found.code, { active: true })
+        .catch((e) => console.error('[relay] code not switched back on after a failed delete', e));
+    }
+    if (err instanceof UpstreamError) {
+      console.error('[relay] code delete: shared files not removed', err.status, err.message);
+      return apiError(502, 'api_error', MSG.deleteFailed);
+    }
+    throw err;
+  }
+  await deleteCodeRecord(env.DB, { code: found.code, personIds, now });
+  return json({ deleted: true, purgedFiles: removed.files });
 }
 
 /** GET /relay/admin/usage?days=30[&code=PR-… or a custom code]: every KST day in the window (newest first), zeros included. */

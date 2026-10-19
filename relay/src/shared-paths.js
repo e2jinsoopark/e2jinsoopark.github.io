@@ -26,12 +26,19 @@ const PERSON_IN_TEXT = /people\/[0-9a-f]{16}(?![0-9a-f])/gi;
 const CODE_IN_TEXT = /\bPR-?[0-9A-HJKMNP-TV-Z]{4}-?[0-9A-HJKMNP-TV-Z]{4}\b/g;
 
 /**
- * personId = first 16 hex chars of HMAC-SHA-256(secret, normalised invite code). Codes have only ~40 bits, so a plain
- * hash would let anyone who sees a personId (e.g. in the team repo) recover the code by brute force; the server-side
- * secret (PERSON_ID_SECRET) prevents that. Without a secret (local tests) it falls back to plain SHA-256.
+ * personId = first 16 hex chars of HMAC-SHA-256(secret, stored invite code), or of HMAC-SHA-256(secret,
+ * code + '\n' + salt) for a code that has a person salt (codes.person_salt: every code made since code deletion
+ * existed, 2026-10-19 — so deleting a custom code and making it again gives a new person with no old notes; codes
+ * made before keep their saltless personId and their notes). Codes have only ~40 bits, so a plain hash would let
+ * anyone who sees a personId (e.g. in the team repo) recover the code by brute force; the server-side secret
+ * (PERSON_ID_SECRET) prevents that. Without a secret (local tests) it falls back to plain SHA-256 of the same text.
+ * The Worker derives every personId through personIdForRow.
+ * @param {string} code the code as stored ("PR-XXXX-XXXX" or a custom "EICU-2026")
+ * @param {string} [secret] PERSON_ID_SECRET ('' = none)
+ * @param {string | null} [salt] codes.person_salt (null / '' = a code from before salts)
  */
-export async function personIdFor(code, secret = '') {
-  const data = new TextEncoder().encode(code);
+export async function personIdFor(code, secret = '', salt = null) {
+  const data = new TextEncoder().encode(salt ? `${code}\n${salt}` : code);
   let digest;
   if (secret) {
     const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -41,6 +48,41 @@ export async function personIdFor(code, secret = '') {
   }
   return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/**
+ * The personId of a codes row (`code` and, when the column exists and is set, `person_salt`): the one place the
+ * Worker derives it (GET /shared, the GitHub proxy, /shared/<lib>/activity, code deletion).
+ * @param {{ code: string, person_salt?: string | null }} row
+ * @param {string} [secret] PERSON_ID_SECRET
+ */
+export function personIdForRow(row, secret = '') {
+  return personIdFor(row.code, secret, row.person_salt || null);
+}
+
+/**
+ * Every personId whose people/<id>/ folder belongs to a code that is being deleted: its personId, and for a code
+ * from before salts also the plain SHA-256 one when a secret is set now (a folder written before PERSON_ID_SECRET
+ * was set was keyed that way). A collision with another code's id is a 2^-64 chance.
+ * @returns {Promise<string[]>}
+ */
+export async function personIdsOfDeletedCode(row, secret = '') {
+  const ids = [await personIdForRow(row, secret)];
+  if (!row.person_salt && secret) {
+    const plain = await personIdFor(row.code, '');
+    if (!ids.includes(plain)) ids.push(plain);
+  }
+  return ids;
+}
+
+/** Files under people/<id>/ for any of `personIds` among repo `paths` (nothing else, not people/<id>x…). */
+export function personFiles(paths, personIds) {
+  const prefixes = personIds.filter((id) => PERSON_ID_RE.test(id)).map((id) => `people/${id}/`);
+  return [...paths].filter((path) => prefixes.some((p) => path.startsWith(p)));
+}
+
+/** 최근 활동 line of the server commit that removes a deleted code's people/<id>/ files (no person id in it). */
+export const CODE_DELETE_SUMMARY = '초대 코드 삭제에 따라 개인 기록 정리';
+export const CODE_DELETE_MESSAGE = `[관리자] ${CODE_DELETE_SUMMARY}`;
 
 export const isPaperId = (id) => typeof id === 'string' && PAPER_ID_RE.test(id);
 

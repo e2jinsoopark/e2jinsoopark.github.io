@@ -157,6 +157,9 @@ The 20 original browser scenarios run unchanged.
   `carryOver` = its own target (a changed relay address carries the data over without asking). It also accepts the
   app's `Library.open`-style call (`getConfig`, `dbName`, `personName`; `name` then is the library name and ignored for
   deletedBy). `personIdFor(code)` / `normalizeInviteCode(code)` repeat relay/src/codes.js (cross-checked in a test).
+  `personIdFor` is only a fallback for callers that pass no personId and knows only the saltless, secret-less id: the
+  Worker's personId uses `PERSON_ID_SECRET` and, for codes made since 2026-10-19, a per-code salt (`docs/RELAY.md` §5),
+  so the app always passes `GET /shared`'s `personId`.
 - `trash()` (sync) → frozen items `{ ...record, kind: 'folder'|'paper', name, deletedAt, deletedBy, expiresAt, expired }`,
   newest first. Folders: 30 days. Papers: only where deletes keep files (공용 서재), also after 30 days (`expired`) until the
   purge removes their PDF (then hidden; detected after each pull). 내 서재 lists folders only (its papers' files are gone).

@@ -27,7 +27,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'file:///C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs';
-import { freshDatabase, startWrangler } from '../../relay/test/lib.mjs';
+import { freshDatabase, personIdOfCode, startWrangler } from '../../relay/test/lib.mjs';
 import { startFakeAnthropic, TRANSLATION_PREFIX } from '../relay-e2e/fake-anthropic.mjs';
 import { stageTestSite } from '../relay-e2e/test-site.mjs';
 import { routeGitHubToFake, startFakeGitHub } from '../store/fake-github.mjs';
@@ -155,8 +155,12 @@ const mineJson = (path) => {
   return b ? JSON.parse(b.toString('utf8')) : null;
 };
 
-/** personId (SHARED.md §1): the first 16 hex characters of SHA-256 of the normalised code. */
-const personIdOf = (code) => createHash('sha256').update(code).digest('hex').slice(0, 16);
+/**
+ * personId (SHARED.md §1, RELAY.md §5): the first 16 hex characters of SHA-256 of the stored code and its person salt,
+ * which the Worker keeps in its local D1 (read-only here; relay/test/lib.mjs personIdOfCode).
+ */
+const STATE_DIR = join(OUT, 'state');
+const personIdOf = (code) => personIdOfCode(code, STATE_DIR);
 
 // ------------------------------------------------------------------------------------------------- browser
 
@@ -370,7 +374,7 @@ try {
   gh.createRepo(MINE.owner, MINE.repo, { private: true, files: { 'README.md': '# paper-library\n' } });
   gh.createRepo(TEAM.owner, TEAM.repo, { private: true }); // empty, as freshly created on GitHub
   fake = await startFakeAnthropic({ port: UPSTREAM_PORT });
-  const stateDir = join(OUT, 'state');
+  const stateDir = STATE_DIR;
   freshDatabase(stateDir);
   stopWrangler = await startWrangler({
     stateDir,
@@ -413,7 +417,7 @@ try {
       assert(c && c.name === NAMES[k] && c.active, `code of ${NAMES[k]} in the Worker: ${JSON.stringify(c)}`);
     }
     assertEqual(new Set(Object.values(state.codes)).size, 3, 'three different codes');
-    state.pid = Object.fromEntries(Object.entries(state.codes).map(([k, c]) => [k, personIdOf(c)]));
+    state.pid = Object.fromEntries(await Promise.all(Object.entries(state.codes).map(async ([k, c]) => [k, await personIdOf(c)])));
     await shot(op, 'shared-e2e-01-codes');
     return `${Object.entries(state.codes).map(([k, c]) => `${NAMES[k]} ${c} (people/${state.pid[k]})`).join(', ')} — created in the UI, stored in D1`;
   });

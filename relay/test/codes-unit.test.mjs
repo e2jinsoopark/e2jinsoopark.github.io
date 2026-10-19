@@ -1,11 +1,18 @@
-// Pure-module tests for custom invite codes (src/codes.js) and the failed-attempt limiter (src/limiter.js).
+// Pure-module tests for invite codes (src/codes.js: custom codes, person salts), personIds and code deletion
+// (src/shared-paths.js) and the failed-attempt limiter (src/limiter.js).
 import assert from 'node:assert/strict';
+import { createHash, createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { codeKey, generateCode, isGeneratedCode, RESERVED_CODES, validateCodeInput, validateCustomCode } from '../src/codes.js';
+import {
+  codeKey, generateCode, isGeneratedCode, newPersonSalt, RESERVED_CODES, validateCodeInput, validateCustomCode,
+} from '../src/codes.js';
 import {
   activeFailures, clientKey, FAIL_WINDOW_MS, guessFingerprint, ipv6Prefix, retryAfterSeconds, tooManyAttempts, windowOpen,
 } from '../src/limiter.js';
-import { personIdFor } from '../src/shared-paths.js';
+import {
+  CODE_DELETE_MESSAGE, CODE_DELETE_SUMMARY, parseCommitLine, personFiles, personIdFor, personIdForRow,
+  personIdsOfDeletedCode, QUIET_SUMMARIES,
+} from '../src/shared-paths.js';
 
 const defaults = { allowedModels: ['claude-haiku-5-5'], dailyLimitUsd: 0.5 };
 /** The code rules as vectors, shared with the app's tests (tests/onboarding/run.mjs checks js/ai/relay.js on the same table). */
@@ -162,6 +169,54 @@ export const tests = [
       assert.equal(body.error.type, 'rate_limit_error');
       assert.match(body.error.message, /잠시 후 다시 시도해 주세요/);
       return `window 10 min from the first failure; 429 "${body.error.message}" retry-after 42`;
+    },
+  },
+  {
+    name: 'person salt: personId = HMAC(secret, code + LF + salt)[0:16] (SHA-256 without a secret); no salt → the old personId',
+    fn: async () => {
+      const salt = newPersonSalt();
+      assert.match(salt, /^[0-9a-f]{32}$/, '128 random bits as hex');
+      assert.notEqual(newPersonSalt(), salt);
+      const hmac = (text) => createHmac('sha256', 's3cret').update(text).digest('hex').slice(0, 16);
+      const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+      assert.equal(await personIdFor('EICU-2026', 's3cret', salt), hmac(`EICU-2026\n${salt}`));
+      assert.equal(await personIdFor('EICU-2026', '', salt), sha(`EICU-2026\n${salt}`));
+      // A code from before salts (person_salt NULL, or a database without the column) keeps its personId.
+      for (const row of [{ code: 'PR-ABCD-EFGH' }, { code: 'PR-ABCD-EFGH', person_salt: null }, { code: 'PR-ABCD-EFGH', person_salt: '' }]) {
+        assert.equal(await personIdForRow(row, 's3cret'), hmac('PR-ABCD-EFGH'));
+        assert.equal(await personIdForRow(row, ''), sha('PR-ABCD-EFGH'));
+      }
+      assert.equal(await personIdForRow({ code: 'EICU-2026', person_salt: salt }, 's3cret'), hmac(`EICU-2026\n${salt}`));
+      // The same custom code made again (new salt) is another person.
+      assert.notEqual(await personIdForRow({ code: 'EICU-2026', person_salt: newPersonSalt() }, 's3cret'), hmac(`EICU-2026\n${salt}`));
+      return `salt ${salt.slice(0, 8)}…: HMAC ${hmac(`EICU-2026\n${salt}`)}; legacy PR-ABCD-EFGH keeps ${hmac('PR-ABCD-EFGH')}`;
+    },
+  },
+  {
+    name: 'code deletion: person ids to clean (a legacy code with a secret also its plain SHA-256 folder) and only people/<id>/ files',
+    fn: async () => {
+      const salt = newPersonSalt();
+      const hmac = (text) => createHmac('sha256', 'k').update(text).digest('hex').slice(0, 16);
+      const sha = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+      assert.deepEqual(await personIdsOfDeletedCode({ code: 'PR-ABCD-EFGH', person_salt: null }, 'k'), [hmac('PR-ABCD-EFGH'), sha('PR-ABCD-EFGH')]);
+      assert.deepEqual(await personIdsOfDeletedCode({ code: 'PR-ABCD-EFGH' }, ''), [sha('PR-ABCD-EFGH')]);
+      assert.deepEqual(await personIdsOfDeletedCode({ code: 'EICU-2026', person_salt: salt }, 'k'), [hmac(`EICU-2026\n${salt}`)]);
+      const me = 'a1b2c3d4e5f60718';
+      const paths = [
+        'library.json', 'README.md', 'papers/p1/paper.pdf', 'papers/p1/translation.json',
+        `people/${me}/papers/p1/annotations.json`, `people/${me}/papers/p2/ai.json`, `people/${me}/notes.txt`,
+        'people/0f1e2d3c4b5a6978/papers/p1/annotations.json', `people/${me}0/papers/p1/ai.json`, `people/${me}`,
+        `papers/people/${me}/x.json`,
+      ];
+      assert.deepEqual(personFiles(paths, [me]), [
+        `people/${me}/papers/p1/annotations.json`, `people/${me}/papers/p2/ai.json`, `people/${me}/notes.txt`,
+      ]);
+      assert.deepEqual(personFiles(paths, ['../..', '']), [], 'only 16-hex person ids are ever matched');
+      const line = parseCommitLine(CODE_DELETE_MESSAGE);
+      assert.deepEqual(line, { who: '관리자', summary: CODE_DELETE_SUMMARY });
+      assert.ok(!QUIET_SUMMARIES.has(line.summary), 'the app shows it in 최근 활동 (not one of the hidden summaries)');
+      assert.ok(!/[0-9a-f]{16}/.test(CODE_DELETE_MESSAGE));
+      return `legacy+secret → 2 ids; salted → 1; ${personFiles(paths, [me]).length} of ${paths.length} paths; activity "${line.who}: ${line.summary}"`;
     },
   },
 ];

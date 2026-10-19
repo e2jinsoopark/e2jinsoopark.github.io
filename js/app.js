@@ -34,6 +34,19 @@ const SHARED_CACHE_KEY = 'pr.shared.v1';
 const SHARED_DB_PREFIX = 'paper-reader-shared-';
 /** First visit of an invitee without a remembered library list: wait this long for GET /shared before routing. */
 const INVITEE_FIRST_WAIT_MS = 2500;
+/** js/ai/relay.js CODE_REFUSED_EVENT: the saved invite code (one that worked here before) got a 401. */
+const CODE_REFUSED_EVENT = 'relay:code-refused';
+/** Emitted after this device forgot a refused invite code (the settings view redraws its invite card). */
+export const CODE_CLEARED_EVENT = 'relay:code-cleared';
+/** One line on the first screen (or a toast) once the saved invite code no longer works (deleted or stopped). */
+export const CODE_GONE_MESSAGE = '초대 코드가 더 이상 쓰이지 않아요. 새 코드를 넣어 주세요.';
+/** A sync error of 공용 서재 that says the code was refused (the relay proxy's 401). */
+const REFUSED_SYNC_MESSAGE = /^초대 코드가 올바르지 않거나/;
+/**
+ * Keys (letters and digits) of invite codes this device forgot after a 401, newest last. An iPhone home-screen app
+ * starts at its saved #/join/<CODE> address every time: that link must not try the dead code on every launch.
+ */
+const REFUSED_CODES_KEY = 'pr.relay.refused.v1';
 
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
 /** Browser/OS title-bar colour per theme (= --bg in css/app.css; also index.html and manifest.webmanifest). */
@@ -109,6 +122,16 @@ async function boot() {
   const shared = new SharedLibraries({ store: modules.library, relay: modules.providers?.relay ?? null });
   const deps = buildDeps(modules, library, failures, shared);
   if (failures.length) showBanner(bannerHost, failures);
+  // The owner deleted (or stopped) the saved invite code: forget it once, say so (also before the router starts).
+  const router = { api: null };
+  bus.on(deps.relay?.CODE_REFUSED_EVENT || CODE_REFUSED_EVENT, ({ code } = {}) => forgetRefusedCode(deps, code, router.api));
+  bus.on('settings:change', () => {
+    const r = settings.get().relay || {};
+    if (!String(r.code || '').trim()) return;
+    startNotice = '';
+    // A code the relay accepted (its models came back) is no longer a refused one (a stopped code used again).
+    if (Array.isArray(r.allowedModels) && r.allowedModels.length) forgetRefusedKey(codeKeyOf(deps, r.code));
+  });
   refreshRelayIdentity(deps);
 
   // 공용 서재 follows the saved invite code and server (a join link, 설정, 키·토큰 지우기, another tab).
@@ -124,7 +147,77 @@ async function boot() {
   // An invitee's library home is 공용 서재: know it before the first route. A first visit (no remembered list)
   // gives GET /shared a moment, so they do not first see an empty 내 서재.
   if (shared.isInvitee()) await Promise.race([started, new Promise((r) => setTimeout(r, INVITEE_FIRST_WAIT_MS))]);
-  startRouter(viewEl, deps);
+  router.api = startRouter(viewEl, deps);
+}
+
+/** The first screen's one-line notice, shown once by the next first screen (CODE_GONE_MESSAGE). */
+let startNotice = '';
+
+/**
+ * The saved invite code got a 401 from /relay/me, /shared, the 공용 서재 proxy or /v1/messages after it had worked on
+ * this device: the owner deleted or stopped it. Forget it (and its model choices and remembered 공용 서재 list), so
+ * nothing asks with it again, then:
+ * - nothing else set up (no own API key, no GitHub library, nothing in 내 서재) → the first screen with one line;
+ * - otherwise → a toast with the same words; the own setup stays (an own key becomes the AI again), 공용 서재 goes.
+ */
+function forgetRefusedCode(deps, code, router) {
+  const s = settings.get();
+  const saved = String(s.relay?.code || '').trim();
+  if (!saved || (code && codeKeyOf(deps, code) !== codeKeyOf(deps, saved))) return; // already forgotten or replaced
+  rememberRefusedKey(codeKeyOf(deps, saved));
+  const ownKey = ['claude', 'openai', 'gemini'].find((id) => String(s[id]?.apiKey || '').trim());
+  const patch = { relay: { code: '', name: '', allowedModels: [], translateModel: '', assistModel: '', autoModels: { translate: '', assist: '' } } };
+  if (s.provider === 'relay' && ownKey) patch.provider = ownKey;
+  safeStorage.remove(SHARED_CACHE_KEY);
+  settings.set(patch); // 공용 서재 follows: closed and hidden (SharedLibraries restarts without a code)
+  bus.emit(CODE_CLEARED_EVENT, {});
+  const r = parseRoute(location.hash);
+  const home = (hash = '#/') => {
+    if (router) router.navigate(hash, { replace: true });
+    else if (location.hash !== hash) history.replaceState(null, '', hash); // before the first route
+  };
+  if (needsGate(deps)) {
+    startNotice = CODE_GONE_MESSAGE;
+    if (r.name === 'join') return; // that screen is registering another code
+    if (r.name === 'settings') {
+      toast(CODE_GONE_MESSAGE, { kind: 'warning', timeout: 8000 }); // the first screen says it again on the way out
+      return;
+    }
+    home();
+    return;
+  }
+  toast(CODE_GONE_MESSAGE, { kind: 'warning', timeout: 8000 });
+  if (r.lib) home();
+}
+
+/** What the relay matches a code by (letters and digits), '' for none. */
+function codeKeyOf(deps, code) {
+  const raw = String(code || '').trim();
+  if (!raw) return '';
+  try {
+    return deps.relay?.inviteCodeKey ? deps.relay.inviteCodeKey(raw) : raw.toUpperCase().replace(/[^0-9A-Z]/g, '');
+  } catch { return ''; }
+}
+
+function refusedKeys() {
+  const list = safeStorage.get(REFUSED_CODES_KEY, []);
+  return Array.isArray(list) ? list.filter((k) => typeof k === 'string' && k) : [];
+}
+
+function rememberRefusedKey(key) {
+  if (!key) return;
+  safeStorage.set(REFUSED_CODES_KEY, [...refusedKeys().filter((k) => k !== key), key].slice(-20));
+}
+
+function forgetRefusedKey(key) {
+  const list = refusedKeys();
+  if (key && list.includes(key)) safeStorage.set(REFUSED_CODES_KEY, list.filter((k) => k !== key));
+}
+
+/** A join link of a code this device forgot after a 401. */
+function isRefusedCode(deps, raw) {
+  const key = codeKeyOf(deps, raw);
+  return Boolean(key) && refusedKeys().includes(key);
 }
 
 /**
@@ -365,8 +458,15 @@ class SharedLibraries extends EventTarget {
         library.addEventListener('error', (e) => {
           toast(`${entry.name}: ${e.detail?.message || '변경 내용을 이 기기에 저장하지 못했습니다.'}`, { kind: 'error', timeout: 8000 });
         });
+        // The proxy refused the code (401: deleted or stopped by the owner). The engine stops by itself (fatal).
+        const code = this.#code();
+        const onStatus = (status) => {
+          if (status?.state === 'error' && REFUSED_SYNC_MESSAGE.test(String(status.message || ''))) this.#relay?.reportRefusedCode?.(code);
+        };
+        library.addEventListener('syncstatus', (e) => onStatus(e.detail));
         entry.library = library;
         entry.status = 'ready';
+        queueMicrotask(() => onStatus(library.sync?.status)); // a first sync may have failed before the listener
         return library;
       } catch (err) {
         console.warn('[app] open shared library', lib.id, err);
@@ -508,6 +608,7 @@ export function parseRoute(hash) {
   return { name: 'library' };
 }
 
+/** @returns {{ navigate: (hash: string, opts?: { replace?: boolean }) => void }} */
 function startRouter(viewEl, deps) {
   let current = null;
   let previousHash = '#/';
@@ -525,6 +626,16 @@ function startRouter(viewEl, deps) {
     // every time): no screen in between — straight to the library, the code out of the address bar.
     if (r.name === 'join' && isSavedCode(deps, r.code)) {
       deps.relay.registerInviteCode(r.code).catch((err) => console.warn('[app] join', err?.message || err)); // same code: no request
+      history.replaceState(null, '', '#/');
+      r = parseRoute('#/');
+    }
+    // An installed / home-screen app that starts at the join link of a code the relay refused here (deleted or
+    // stopped; an iPhone home-screen app starts at its saved #/join/<CODE> on every launch): no request for it. The
+    // library when another setup works, else the first screen with the one line (an empty input: a new code goes
+    // there). In a browser tab a join link is opened on purpose, so it is tried once: a stopped code switched on again,
+    // or a chosen code made again with the same letters, works again; a dead one gets the ordinary error line.
+    if (r.name === 'join' && isStandalone() && isRefusedCode(deps, r.code)) {
+      if (needsGate(deps)) startNotice = CODE_GONE_MESSAGE;
       history.replaceState(null, '', '#/');
       r = parseRoute('#/');
     }
@@ -557,7 +668,9 @@ function startRouter(viewEl, deps) {
     viewEl.replaceChildren();
     try {
       if (gate) {
-        current = mountStartView(viewEl, { deps, navigate, gate: true });
+        const notice = startNotice; // once: "초대 코드가 더 이상 쓰이지 않아요…" after a refused code
+        startNotice = '';
+        current = mountStartView(viewEl, { deps, navigate, gate: true, notice });
       } else if (r.name === 'paper') {
         current = mountReaderView(viewEl, { paperId: r.id, lib: r.lib || null, deps, navigate });
       } else if (r.name === 'settings') {
@@ -588,6 +701,7 @@ function startRouter(viewEl, deps) {
     if (current?.kind === 'start' && current.gate && !current.busy() && !needsGate(deps)) route();
   });
   route();
+  return { navigate };
 }
 
 /**

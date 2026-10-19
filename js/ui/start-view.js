@@ -24,12 +24,13 @@ const SHARED_WAIT_MS = 2500;
 /**
  * @param {HTMLElement} container
  * @param {{ deps: object, navigate: (hash: string, opts?: { replace?: boolean }) => void, code?: string | null,
- *           gate?: boolean, quiet?: boolean }} opts  `code`: from a join link (registered at once); `gate`: shown instead
- *           of the library; `quiet`: with `code`, no form unless registering fails
+ *           gate?: boolean, quiet?: boolean, notice?: string }} opts  `code`: from a join link (registered at once);
+ *           `gate`: shown instead of the library; `quiet`: with `code`, no form unless registering fails; `notice`: one
+ *           line in the error line's place until the person types (the saved code no longer works, app.js)
  * @returns {{ kind: 'start', gate: boolean, busy: () => boolean, destroy: () => void }}
  */
-export function mountStartView(container, { deps, navigate, code = null, gate = false, quiet = false }) {
-  const view = new StartView(container, deps, navigate, { code, gate, quiet: quiet && code != null });
+export function mountStartView(container, { deps, navigate, code = null, gate = false, quiet = false, notice = '' }) {
+  const view = new StartView(container, deps, navigate, { code, gate, quiet: quiet && code != null, notice });
   return { kind: 'start', gate, busy: () => view.busy, destroy: () => view.destroy() };
 }
 
@@ -42,13 +43,14 @@ class StartView {
   #busy = false;
   #root;
 
-  constructor(container, deps, navigate, { code, gate, quiet }) {
+  constructor(container, deps, navigate, { code, gate, quiet, notice = '' }) {
     this.#deps = deps;
     this.#navigate = navigate;
     document.title = '갈피';
     this.#root = this.#build({ fromLink: code != null, gate });
     this.#root.classList.toggle('is-quiet', Boolean(quiet));
     container.replaceChildren(this.#root);
+    if (notice && code == null) this.#setNotice(notice);
     if (code != null) {
       this.#els.input.value = this.#display(code);
       this.#submit({ fromLink: true });
@@ -123,8 +125,15 @@ class StartView {
     return this.#extract(code) || String(code || '');
   }
 
+  /** Not an error of what was typed (the saved code stopped working): the same line, without the red. */
+  #setNotice(text) {
+    this.#els.error.textContent = text;
+    this.#els.error.classList.add('is-notice');
+  }
+
   #setError(text) {
     this.#els.error.textContent = text;
+    this.#els.error.classList.remove('is-notice');
     if (text) {
       this.#els.input.setAttribute('aria-invalid', 'true');
       this.#root?.classList.remove('is-quiet'); // something to say: the form shows

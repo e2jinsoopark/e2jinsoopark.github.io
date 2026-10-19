@@ -19,6 +19,8 @@ const SECTIONS = [
 ];
 
 const RELAY_CARD_TITLE = '키 없이 쓰기 (초대 코드)';
+/** js/app.js CODE_CLEARED_EVENT: the saved invite code was refused (deleted or stopped) and forgotten. */
+const CODE_CLEARED_EVENT = 'relay:code-cleared';
 // After a key is saved (blur/Enter), its model list is read unless 테스트 is pressed within this delay.
 const KEY_LIST_DELAY_MS = 400;
 /** Own-key providers, in card order. */
@@ -102,6 +104,13 @@ class SettingsView {
     // Another tab picked another provider: show it here too (a stale checked card could not be clicked back).
     this.#cleanup.push(bus.on('settings:change', ({ external } = {}) => {
       if (!external || settings.get().provider === this.#shownProvider) return;
+      this.#renderProviderCards();
+      this.#renderProviderDetail();
+      this.#renderUsage();
+    }));
+    // The saved invite code was refused (deleted or stopped by the owner) and forgotten (js/app.js): no stale card.
+    this.#cleanup.push(bus.on(CODE_CLEARED_EVENT, () => {
+      this.#mePromise = null;
       this.#renderProviderCards();
       this.#renderProviderDetail();
       this.#renderUsage();
@@ -1292,7 +1301,7 @@ class SettingsView {
         name.value = '';
         custom.value = '';
         this.#showCreated(created, code);
-        await this.#loadCodes(list);
+        await this.#loadCodes(list, { quiet: true }); // the list stays until the new one is there (no loading flash)
       } catch (err) {
         setResult(result, 'error', err?.message || '초대 코드를 만들지 못했습니다.');
         if (err?.status === 409) custom.focus();
@@ -1329,11 +1338,14 @@ class SettingsView {
           copyButton('코드 복사', () => c.code, '초대 코드를 복사했습니다.')))));
   }
 
-  async #loadCodes(list) {
+  /** `quiet`: keep what is shown until the new list is there (after a delete: no flash of the loading line). */
+  async #loadCodes(list, { quiet = false } = {}) {
     const relay = this.#deps.relay;
-    const busy = el('div', {});
-    setResult(busy, 'busy', '초대 코드 목록을 불러오는 중…');
-    list.replaceChildren(busy);
+    if (!quiet || !list.querySelector('.relay-code-list, .usage-stats')) {
+      const busy = el('div', {});
+      setResult(busy, 'busy', '초대 코드 목록을 불러오는 중…');
+      list.replaceChildren(busy);
+    }
     let data;
     try {
       data = await relay.listCodes();
@@ -1345,15 +1357,22 @@ class SettingsView {
     }
     const codes = [...data.codes].sort((a, b) => Number(b.active) - Number(a.active) || b.createdAt - a.createdAt);
     const active = codes.filter((c) => c.active).length;
-    list.replaceChildren(
+    // Deleted codes' usage stays in the totals above; one muted row says how much of this month it is.
+    const deleted = data.deletedMonthUsd > 0
+      ? el('li', { class: 'relay-code is-deleted-total' },
+        el('span', { class: 'relay-code-name' }, '삭제된 코드'),
+        el('span', { class: 'relay-code-meta' }, `이번 달 ${formatUsd(data.deletedMonthUsd)}`))
+      : null;
+    const rows = [...codes.map((c) => this.#codeItem(c, list)), deleted].filter(Boolean);
+    list.replaceChildren(...[
       el('div', { class: 'usage-stats' },
         stat('오늘 전체', `${formatUsd(data.todayTotalUsd)} / ${formatUsd(data.globalDailyLimitUsd)}`),
         stat('이번 달 전체', formatUsd(data.monthTotalUsd)),
         stat('사용 중인 코드', `${active} / ${codes.length}개`)),
-      codes.length
-        ? el('ul', { class: 'relay-code-list' }, codes.map((c) => this.#codeItem(c, list)))
-        : el('p', { class: 'field-hint' }, '아직 만든 초대 코드가 없습니다. 위에서 이름과 하루 한도를 정해 만들어 보세요.'),
-      el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: () => this.#loadCodes(list) })));
+      codes.length ? null : el('p', { class: 'field-hint' }, '아직 만든 초대 코드가 없습니다. 위에서 이름과 하루 한도를 정해 만들어 보세요.'),
+      rows.length ? el('ul', { class: 'relay-code-list' }, rows) : null,
+      el('div', { class: 'btn-row' }, button('새로 고침', { icon: 'refresh', size: 'sm', onClick: () => this.#loadCodes(list) })),
+    ].filter(Boolean));
   }
 
   #codeItem(c, list) {
@@ -1374,7 +1393,48 @@ class SettingsView {
         copyButton('초대 메시지 복사', () => relay.inviteMessage(c), '초대 메시지를 복사했습니다. 메신저에 붙여 넣어 보내세요.'),
         copyButton('코드 복사', () => c.code, '초대 코드를 복사했습니다.'),
         button('한도·모델 수정', { icon: 'pencil', size: 'sm', kind: 'ghost', onClick: () => this.#editCode(c, list) }),
-        button(c.active ? '중지' : '다시 사용', { icon: c.active ? 'stop' : 'play', size: 'sm', kind: 'ghost', onClick: () => this.#toggleCode(c, list) })));
+        button(c.active ? '중지' : '다시 사용', { icon: c.active ? 'stop' : 'play', size: 'sm', kind: 'ghost', onClick: () => this.#toggleCode(c, list) }),
+        relay.deleteCode
+          ? button('삭제', { icon: 'trash', size: 'sm', kind: 'ghost', className: 'relay-code-delete', onClick: () => this.#deleteCode(c, list) })
+          : null));
+  }
+
+  /**
+   * 삭제: one question, then DELETE /relay/admin/codes/:code. The Worker deletes the code's own files (people/<id>/ —
+   * highlights, notes, AI results) in 공용 서재 first and the code after; a GitHub failure keeps the code and the
+   * dialog (its Korean message as a toast), so 삭제 can be pressed again.
+   */
+  #deleteCode(c, list) {
+    const relay = this.#deps.relay;
+    let busyLabel = null;
+    const dlg = modal({
+      title: `‘${c.name || c.code}’ 코드를 삭제할까요?`,
+      size: 'sm',
+      body: el('div', { class: 'relay-delete' },
+        // (The ·-joined words stay on one line: browsers break after a middle dot.)
+        el('p', { class: 'modal-message' }, '이 코드로는 더 이상 들어올 수 없고, 이 코드로 남긴 ', el('span', { class: 'keep' }, '하이라이트·메모·AI'), ' 기록도 함께 지워집니다.'),
+        el('p', { class: 'modal-message' }, '공용 서재의 ', el('span', { class: 'keep' }, '논문·폴더·번역과'), ' 사용 비용 기록은 그대로 남습니다.')),
+      actions: [
+        { label: '취소', autofocus: true }, // not 삭제: Enter must not delete
+        { label: '삭제', kind: 'danger', onClick: async () => {
+          busyLabel?.replaceChildren('삭제하는 중…');
+          let gone = false;
+          try {
+            await relay.deleteCode(c.code);
+          } catch (err) {
+            if (err?.status !== 404) throw err; // the toast says why; the dialog stays for another try
+            gone = true; // already deleted (another tab or device): the same outcome
+          } finally {
+            busyLabel?.replaceChildren('삭제');
+          }
+          list.querySelector(`.relay-code[data-code="${CSS.escape(c.code)}"]`)?.remove();
+          toast(gone ? '이미 삭제된 코드입니다.' : '삭제했습니다.', { kind: 'success' });
+          this.#loadCodes(list, { quiet: true }); // totals and the 삭제된 코드 row
+          return true;
+        } },
+      ],
+    });
+    busyLabel = dlg.el.querySelector('.modal-footer .btn-danger .btn-label');
   }
 
   #editCode(c, list) {
@@ -1412,7 +1472,7 @@ class SettingsView {
   async #toggleCode(c, list) {
     const relay = this.#deps.relay;
     if (c.active) {
-      const ok = await confirmDialog(`${c.name}님의 초대 코드(${c.code})를 중지할까요?\n중지하면 이 코드로는 바로 번역·요약·채팅을 쓸 수 없습니다. ‘다시 사용’으로 되돌릴 수 있습니다.`,
+      const ok = await confirmDialog(`${c.name}님의 초대 코드(${c.code})를 중지할까요?\n중지하면 이 코드로는 바로 번역·요약·채팅·공용 서재를 쓸 수 없고, 쓰던 기기에서도 코드가 빠집니다. ‘다시 사용’으로 되돌리면 초대 링크나 코드를 한 번 더 넣으면 됩니다.`,
         { okLabel: '중지', danger: true, title: '초대 코드 중지' });
       if (!ok) return;
     }

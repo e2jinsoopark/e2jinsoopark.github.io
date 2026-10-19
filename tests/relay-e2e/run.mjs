@@ -33,6 +33,8 @@ const SETTINGS_KEY = 'pr.settings.v1';
 const OWNER_KEY = 'sk-ant-e2e-fake-owner-key-0000';
 const ADMIN_TOKEN = 'e2e-admin-token-0123456789abcdef';
 const BAD_CODE_MESSAGE = '초대 코드가 올바르지 않거나 사용이 중지되었습니다.';
+/** js/app.js CODE_GONE_MESSAGE: the device forgot its saved code after that 401 (stopped or deleted). */
+const CODE_GONE_MESSAGE = '초대 코드가 더 이상 쓰이지 않아요. 새 코드를 넣어 주세요.';
 const QUOTA_MESSAGE = '오늘 사용 한도($0.05)를 모두 썼습니다. 내일 오전 0시(한국 시간)에 다시 열립니다. (번역을 멈췄습니다.)';
 // Added to every translation batch's reported input tokens while the budget is being used up (≈ $0.009 per batch on
 // Haiku 5.5, still under its 100K long-context threshold).
@@ -572,25 +574,37 @@ try {
     return `“${card}”; 사용량 “${usage.slice(0, 90)}…” (Worker: $${me.todayUsd}, ${me.todayRequests} requests)`;
   });
 
-  await step('stopped code → clear Korean message (settings 테스트 and 채팅), nothing forwarded', async () => {
+  // Since code deletion (2026-10-19, docs/RELAY.md §5): the Worker answers a stopped code exactly like a deleted one,
+  // and a device forgets its saved, once-working code on that 401 (docs/notes/relay-client.md › Deleting a code). The
+  // colleague has a paper in 내 서재, so no first screen: a toast, the 내 서재 stays.
+  await step('stopped code → 채팅 shows the Worker\'s Korean 401 message, the device forgets the code with one toast (내 서재 stays), nothing forwarded', async () => {
     const { page } = owner;
     await page.locator(`.relay-code[data-code="${state.code1}"] .btn`, { hasText: '중지' }).click();
+    const question = (await page.locator('.modal .modal-message').innerText()).replace(/\s+/g, ' ').trim();
     await page.locator('.modal-footer .btn', { hasText: '중지' }).click();
     await page.waitForFunction((c) => /중지됨/.test(document.querySelector(`.relay-code[data-code="${c}"]`)?.textContent || ''), state.code1);
     assertEqual((await codeRecord(state.code1)).active, false, 'Worker active flag');
     const c = colleague.page;
     const callsFrom = fake.calls.length;
-    await c.locator('#set-ai .btn', { hasText: '테스트' }).click();
-    await c.waitForSelector('#set-ai .test-result.is-error');
-    const test = (await c.locator('#set-ai .test-result.is-error').innerText()).trim();
-    assertEqual(test, BAD_CODE_MESSAGE, 'settings 테스트');
     await c.goto(`${APP_ORIGIN}/index.html#/paper/${encodeURIComponent(state.paperId)}`);
     await waitForReader(c);
     const r = await askChat(c, '결론을 알려 주세요.');
-    assert(r.error && r.text.includes(BAD_CODE_MESSAGE), `chat bubble: error=${r.error} “${r.text}”`);
-    assertEqual(fake.calls.length, callsFrom, 'upstream calls for a stopped code');
+    await c.waitForSelector(`.toast >> text=${CODE_GONE_MESSAGE}`, { timeout: 15000 });
+    const s = await stored(c);
+    const view = { hash: await c.evaluate(() => location.hash), start: await c.locator('.start').count() };
     await shot(c, 'e2e-relay-10-stopped-code');
-    return `중지 → Worker active=false; 테스트 → “${test}”; 채팅 → “${r.text}”; 0 upstream calls`;
+    await c.evaluate(() => { location.hash = '#/settings'; });
+    await c.waitForSelector('#set-ai');
+    const cardCode = await c.locator('#set-ai input[aria-label="초대 코드"]').inputValue().catch(() => '(no field)');
+    const me = await relayMe(state.code1);
+    assert(question.includes('쓰던 기기에서도 코드가 빠집니다'), `중지 question: ${question}`);
+    assert(r.error && r.text.includes(BAD_CODE_MESSAGE), `chat bubble: error=${r.error} “${r.text}”`);
+    assertEqual([s.relay?.code, s.relay?.name], ['', ''], 'code forgotten on the device');
+    assertEqual(view, { hash: `#/paper/${encodeURIComponent(state.paperId)}`, start: 0 }, 'still in the reader (내 서재 paper), no first screen');
+    assert(cardCode === '' || cardCode === '(no field)', `초대 코드 card still shows ${cardCode}`);
+    assertEqual([me.status, me.body?.error?.message], [401, BAD_CODE_MESSAGE], 'Worker /relay/me for the stopped code');
+    assertEqual(fake.calls.length, callsFrom, 'upstream calls for a stopped code');
+    return `중지 question “${question.slice(0, 60)}…” → Worker active=false; 채팅 → “${r.text}” + toast “${CODE_GONE_MESSAGE}”; code forgotten, reader stays; 설정 card empty; /relay/me 401; 0 upstream calls`;
   });
 
   await step('Haiku + Sonnet code: join link, Sonnet offered and used for 요약·채팅 (beta fallback header via the Worker)', async () => {

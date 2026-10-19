@@ -45,6 +45,14 @@ export function generateCode() {
 }
 
 /**
+ * A fresh person salt for a new code (128 random bits, 32 hex characters; codes.person_salt). Mixed into the code's
+ * personId (shared-paths.js personIdFor), so a custom code that is deleted and made again is a new person.
+ */
+export function newPersonSalt() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
  * Canonical form of a typed or pasted GENERATED code ("pr abcd efgh", "PRABCDEFGH", "pr-abcd-efgh" → "PR-ABCD-EFGH"),
  * or '' when it cannot be one. For any code (custom ones too) use codeKey.
  */

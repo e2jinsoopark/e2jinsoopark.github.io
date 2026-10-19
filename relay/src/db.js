@@ -4,7 +4,8 @@
 
 /**
  * @typedef {{ code: string, name: string, active: number, allowed_models: string, daily_limit_usd: number,
- *             created_at: number, last_used_at: number | null }} CodeRow
+ *             created_at: number, last_used_at: number | null, person_salt?: string | null }} CodeRow
+ *   person_salt: absent (a database from before the column) or null for codes made before code deletion existed.
  * @typedef {CodeRow & { today_usd: number, today_requests: number, global_today_usd: number }} CodeBudgetRow
  * @typedef {CodeRow & { today_usd: number, month_usd: number, total_usd: number, total_requests: number }} CodeUsageRow
  */
@@ -88,16 +89,83 @@ export async function codesWithUsage(db, { day, month, code = null }) {
   return results;
 }
 
+/** Set once this isolate has seen (or added) codes.person_salt. */
+let saltColumnReady = false;
+
 /**
- * Insert a new code; false when a code with the same key already exists ("EICU2026" is taken by "EICU-2026": the
- * untargeted ON CONFLICT covers the primary key and the unique index codes_by_key).
+ * Make sure codes.person_salt exists. schema.sql creates it in a new database, but SQLite (and D1) has no
+ * "ADD COLUMN IF NOT EXISTS", so a database made before 2026-10-19 gets it here, on the first code created after the
+ * update: PRAGMA table_info, then ALTER TABLE when it is missing (a parallel ALTER from another isolate that won the
+ * race is fine). Only code creation needs the column — lookups read `c.*` and treat a missing salt as a code from
+ * before salts — so requests with a code never pay for this check.
  */
-export async function insertCode(db, { code, name, active, allowedModels, dailyLimitUsd, createdAt }) {
+export async function ensureSaltColumn(db) {
+  if (saltColumnReady) return;
+  const has = async () => {
+    const { results } = await db.prepare('PRAGMA table_info(codes)').all();
+    return results.some((c) => c.name === 'person_salt');
+  };
+  if (!(await has())) {
+    try {
+      await db.prepare('ALTER TABLE codes ADD COLUMN person_salt TEXT').run();
+    } catch (err) {
+      if (!(await has())) throw err; // not "duplicate column": a real failure
+    }
+  }
+  saltColumnReady = true;
+}
+
+/**
+ * Insert a new code with its person salt; false when a code with the same key already exists ("EICU2026" is taken
+ * by "EICU-2026": the untargeted ON CONFLICT covers the primary key and the unique index codes_by_key).
+ */
+export async function insertCode(db, { code, name, active, allowedModels, dailyLimitUsd, createdAt, personSalt }) {
+  await ensureSaltColumn(db);
   const res = await db.prepare(`
-    INSERT INTO codes (code, name, active, allowed_models, daily_limit_usd, created_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT DO NOTHING`)
-    .bind(code, name, active ? 1 : 0, JSON.stringify(allowedModels), dailyLimitUsd, createdAt).run();
+    INSERT INTO codes (code, name, active, allowed_models, daily_limit_usd, created_at, person_salt)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT DO NOTHING`)
+    .bind(code, name, active ? 1 : 0, JSON.stringify(allowedModels), dailyLimitUsd, createdAt, personSalt).run();
   return res.meta.changes === 1;
+}
+
+/**
+ * Remove a code for good, in one batch (one transaction): its usage rows are kept as history under
+ * `deleted:<ISO time>:<code>` (never a valid code, so they count in the totals and the global daily budget but never
+ * attach to a code made later with the same letters), the code row goes, and so do the shared_trees rows of its
+ * person ids. The caller has already removed the person's files from the shared libraries.
+ * @returns {Promise<boolean>} false when the code was already gone
+ */
+export async function deleteCodeRecord(db, { code, personIds, now }) {
+  const statements = [
+    db.prepare('UPDATE usage SET code = ?2 WHERE code = ?1').bind(code, deletedUsageCode(code, now)),
+    db.prepare('DELETE FROM codes WHERE code = ?1').bind(code),
+  ];
+  if (personIds.length) {
+    statements.push(db.prepare(`DELETE FROM shared_trees WHERE person IN (${personIds.map((_, i) => `?${i + 1}`).join(', ')})`)
+      .bind(...personIds));
+  }
+  const results = await db.batch(statements);
+  return results[1].meta.changes === 1;
+}
+
+/** The usage.code of a deleted code's history rows. */
+export function deletedUsageCode(code, now) {
+  return `deleted:${new Date(now).toISOString()}:${code}`;
+}
+
+/**
+ * Usage that belongs to no code any more (deleted codes; also a request still in flight when its code was deleted):
+ * today, this month (KST) and in total.
+ * @returns {Promise<{ today_usd: number, month_usd: number, total_usd: number, total_requests: number }>}
+ */
+export async function deletedCodesUsage(db, { day, month }) {
+  const row = await db.prepare(`
+    SELECT COALESCE(SUM(CASE WHEN u.day = ?1 THEN u.usd END), 0) AS today_usd,
+      COALESCE(SUM(CASE WHEN substr(u.day, 1, 7) = ?2 THEN u.usd END), 0) AS month_usd,
+      COALESCE(SUM(u.usd), 0) AS total_usd,
+      COALESCE(SUM(u.requests), 0) AS total_requests
+    FROM usage u WHERE NOT EXISTS (SELECT 1 FROM codes c WHERE c.code = u.code)`).bind(day, month).first();
+  return row ?? { today_usd: 0, month_usd: 0, total_usd: 0, total_requests: 0 };
 }
 
 /** Update some fields of a code; false when it does not exist. */

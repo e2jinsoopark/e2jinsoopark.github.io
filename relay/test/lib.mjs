@@ -1,6 +1,7 @@
 // Shared helpers for the relay tests: local `wrangler dev` with a throwaway D1, HTTP helpers, a tiny test runner.
 // Everything the tests write goes to C:/Users/dindoo/Projects/pr-tools/out/relay/.
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash, createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -10,6 +11,8 @@ export const PR_TOOLS = process.env.PR_TOOLS || 'C:/Users/dindoo/Projects/pr-too
 // RELAY_OUT_DIR: another place for results, logs and the throwaway D1 state (default pr-tools/out/relay).
 export const OUT_DIR = process.env.RELAY_OUT_DIR || path.join(PR_TOOLS, 'out/relay');
 export const RELAY_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** The test Worker's local D1 state (run.mjs); d1Rows reads it. */
+export const STATE_DIR = path.join(OUT_DIR, 'state');
 const WRANGLER = path.join(PR_TOOLS, 'node_modules/wrangler/bin/wrangler.js');
 
 export const WORKER_PORT = 8787;
@@ -55,9 +58,85 @@ export function portInUse(port) {
 /** Fresh local D1 state with the schema applied. */
 export function freshDatabase(stateDir) {
   fs.rmSync(stateDir, { recursive: true, force: true });
+  applySql(stateDir, 'schema.sql');
+}
+
+/**
+ * A local D1 as a deployment made before code deletion (2026-10-19) has it after the update's schema step:
+ * test/legacy-schema.sql (the schema of that time — codes without person_salt — and two codes made back then, see
+ * LEGACY_CODES), then today's schema.sql applied twice, which must succeed both times. The Worker adds
+ * codes.person_salt itself on its first code creation (src/db.js ensureSaltColumn). The relay tests run on this.
+ * @returns {string[]} the files applied, in order
+ */
+export function migratedDatabase(stateDir) {
+  fs.rmSync(stateDir, { recursive: true, force: true });
+  const steps = ['test/legacy-schema.sql', 'schema.sql', 'schema.sql'];
+  for (const file of steps) applySql(stateDir, file);
+  return steps;
+}
+
+/** Codes inserted by test/legacy-schema.sql: made before person salts, so their personId is the saltless one. */
+export const LEGACY_CODES = { generated: 'PR-01DC-0DE5', custom: 'OLD-WARD-7B' };
+
+/** Run a SQL file (relative to relay/) on a local D1 state with `wrangler d1 execute`. */
+export function applySql(stateDir, file) {
   const res = spawnSync(process.execPath, [WRANGLER, 'd1', 'execute', 'paper-relay', '--local', '--persist-to', stateDir,
-    '--file', 'schema.sql'], { cwd: RELAY_DIR, env: wranglerEnv, encoding: 'utf8' });
-  if (res.status !== 0) throw new Error(`schema apply failed:\n${res.stdout}\n${res.stderr}`);
+    '--file', file], { cwd: RELAY_DIR, env: wranglerEnv, encoding: 'utf8' });
+  if (res.status !== 0) throw new Error(`${file} apply failed:\n${res.stdout}\n${res.stderr}`);
+}
+
+/** Run one SQL command on a local D1 state (not the running Worker's) with `wrangler d1 execute --json`. */
+export function sqlRows(stateDir, command) {
+  const res = spawnSync(process.execPath, [WRANGLER, 'd1', 'execute', 'paper-relay', '--local', '--persist-to', stateDir,
+    '--command', command, '--json'], { cwd: RELAY_DIR, env: wranglerEnv, encoding: 'utf8' });
+  if (res.status !== 0) throw new Error(`${command} failed:\n${res.stdout}\n${res.stderr}`);
+  return JSON.parse(res.stdout)[0].results;
+}
+
+/**
+ * Read-only query on the running test Worker's local D1 (the SQLite file wrangler dev keeps under STATE_DIR), for
+ * what the HTTP API does not show (person salts, usage history rows, shared_trees). Never writes.
+ */
+export function d1Rows(sql, ...params) {
+  return d1RowsAt(STATE_DIR, sql, ...params);
+}
+
+/** d1Rows on another local D1 state (e.g. an end-to-end test's own `freshDatabase(stateDir)`). */
+export async function d1RowsAt(stateDir, sql, ...params) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = path.join(stateDir, 'v3/d1/miniflare-D1DatabaseObject');
+  const file = fs.readdirSync(dir).find((n) => /^[0-9a-f]{64}\.sqlite$/.test(n));
+  if (!file) throw new Error(`no D1 database in ${dir}`);
+  const db = new DatabaseSync(path.join(dir, file), { readOnly: true });
+  try {
+    return db.prepare(sql).all(...params).map((row) => ({ ...row }));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * personId as the Worker derives it (src/shared-paths.js personIdFor), computed independently: the first 16 hex of
+ * SHA-256 (HMAC-SHA-256 with `secret`) of the stored code, or of code + '\n' + salt for a code with a person salt.
+ */
+export function personIdOf(code, salt = null, secret = '') {
+  const hash = secret ? createHmac('sha256', secret) : createHash('sha256');
+  return hash.update(salt ? `${code}\n${salt}` : code).digest('hex').slice(0, 16);
+}
+
+/** The person salt the test Worker stored for `code` (the stored spelling; null for a legacy code). */
+export async function saltOf(code, stateDir = STATE_DIR) {
+  const [row] = await d1RowsAt(stateDir, 'SELECT person_salt FROM codes WHERE code = ?', code);
+  if (!row) throw new Error(`no code ${code} in D1`);
+  return row.person_salt ?? null;
+}
+
+/**
+ * personId of a code of a running test Worker (the tests set no PERSON_ID_SECRET), from its stored salt. End-to-end
+ * tests pass their own state dir: `await personIdOfCode('EICU-2026', stateDir)`.
+ */
+export async function personIdOfCode(code, stateDir = STATE_DIR) {
+  return personIdOf(code, await saltOf(code, stateDir));
 }
 
 /** Start `wrangler dev` on WORKER_PORT; resolves once it answers. Returns stop(). */

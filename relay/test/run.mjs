@@ -1,14 +1,17 @@
-// Relay test runner:  node relay/test/run.mjs [unit|http|codes|sdk|shared|shared-client ...]
+// Relay test runner:  node relay/test/run.mjs [unit|http|codes|sdk|shared|shared-client|code-delete ...]
 // 1. unit tests (pure modules, no servers)
-// 2. a throwaway local D1 + fake Anthropic upstream (8788) + fake GitHub (8792, tests/store/fake-github.mjs) +
+// 2. a throwaway local D1 shaped like the deployed one after an update (the schema from before code deletion, then
+//    today's schema.sql twice: lib.mjs migratedDatabase) + fake Anthropic upstream (8788) + fake GitHub (8792, tests/store/fake-github.mjs) +
 //    `wrangler dev` (8787) with TEST_MODE=1
 // 3. HTTP tests (node fetch; `codes` = custom invite codes and the failed-attempt limiter) and SDK tests (real @anthropic-ai/sdk in Edge via Playwright, page on localhost:8789)
 // 4. shared library (공용 서재): HTTP tests of the GitHub proxy, then the app's GitHubClient through it (Node and Edge)
+// 5. code-delete: deleting an invite code (its people/<id>/ files in every shared library, D1 rows, usage history),
+//    person salts and the schema migration
 // Results: C:/Users/dindoo/Projects/pr-tools/out/relay/results.json (+ run.log, wrangler.log; RELAY_OUT_DIR moves them).
 // No real API calls.
 import fs from 'node:fs';
 import path from 'node:path';
-import { freshDatabase, GITHUB_PORT, OUT_DIR, runTests, startWrangler, TEAM_TOKEN, UPSTREAM_PORT } from './lib.mjs';
+import { GITHUB_PORT, migratedDatabase, OUT_DIR, runTests, startWrangler, STATE_DIR, TEAM_TOKEN, UPSTREAM_PORT } from './lib.mjs';
 import { startFakeUpstream } from './fake-upstream.mjs';
 import { startFakeGitHub } from '../../tests/store/fake-github.mjs';
 
@@ -32,14 +35,15 @@ if (want('unit')) {
   results.push(...await runTests('unit', [...tests, ...sharedTests, ...codeTests], {}, logLine));
 }
 
-const SERVER_SUITES = ['http', 'codes', 'sdk', 'shared', 'shared-client'];
+const SERVER_SUITES = ['http', 'codes', 'sdk', 'shared', 'shared-client', 'code-delete'];
 if (SERVER_SUITES.some(want)) {
-  const stateDir = path.join(OUT_DIR, 'state');
+  const stateDir = STATE_DIR;
   let stopWrangler = () => {};
   let fake = null;
   let gh = null;
   try {
-    freshDatabase(stateDir);
+    const schemaSteps = migratedDatabase(stateDir);
+    logLine(`database: ${schemaSteps.join(' → ')} (each applied without error)`);
     fake = await startFakeUpstream({ port: UPSTREAM_PORT });
     gh = await startFakeGitHub({ port: GITHUB_PORT });
     gh.addToken(TEAM_TOKEN, { write: true });
@@ -48,7 +52,7 @@ if (SERVER_SUITES.some(want)) {
       if (!want(suite)) continue;
       logLine(suite);
       const { tests, setup, teardown } = await import(`./${suite}.test.mjs`);
-      const ctx = { fake, gh, ...(setup ? await setup({ gh }) : {}) };
+      const ctx = { fake, gh, schemaSteps, ...(setup ? await setup({ gh }) : {}) };
       try {
         results.push(...await runTests(suite, tests, ctx, logLine));
       } finally {

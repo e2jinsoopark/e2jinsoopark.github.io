@@ -30,7 +30,7 @@ Quota/denial responses set `x-should-retry: false` (the Anthropic SDK honours it
 - `Access-Control-Allow-Origin`: echo the request `Origin` only if it is in `ALLOWED_ORIGINS` (comma list; entries may be
   exact origins or `http://localhost:*` / `http://127.0.0.1:*` patterns). Otherwise no CORS headers (browser blocks;
   as built: 403 `permission_error` without CORS headers, nothing forwarded).
-- Preflight `OPTIONS`: 204, `Access-Control-Allow-Methods: GET, POST, PATCH, OPTIONS`,
+- Preflight `OPTIONS`: 204, `Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS` (DELETE since code deletion, §5),
   `Access-Control-Allow-Headers`: echo `Access-Control-Request-Headers` (the SDK sends x-stainless-* headers,
   anthropic-version, anthropic-beta, anthropic-dangerous-direct-browser-access, x-api-key, content-type),
   `Access-Control-Max-Age: 86400`, `Vary: Origin`.
@@ -62,11 +62,14 @@ allowed models only (the app's Claude "test key" and model list use this).
 
 ### Admin
 - `GET /relay/admin/codes` → `{ codes: [{ code, name, active, allowedModels, dailyLimitUsd, createdAt, lastUsedAt,
-  todayUsd, monthUsd /* KST calendar month */, totalUsd, totalRequests }], todayTotalUsd, monthTotalUsd, globalDailyLimitUsd }`
+  todayUsd, monthUsd /* KST calendar month */, totalUsd, totalRequests }], todayTotalUsd, monthTotalUsd, globalDailyLimitUsd,
+  deletedUsage: { todayUsd, monthUsd, totalUsd, totalRequests } }` — the totals include deleted codes' usage (§5).
 - `POST /relay/admin/codes` `{ name, code?, allowedModels?, dailyLimitUsd? }` → `{ code, ... }`. Code format: `PR-XXXX-XXXX`
   (Crockford base32, crypto-random, no ambiguous chars), or the owner's own `code` (custom code, §4).
   Defaults from `DEFAULT_MODELS` / `DEFAULT_DAILY_LIMIT_USD`.
 - `PATCH /relay/admin/codes/:code` `{ name?, active?, allowedModels?, dailyLimitUsd? }` → updated record.
+- `DELETE /relay/admin/codes/:code` → `{ deleted: true, purgedFiles }`; 404 unknown code; 502 GitHub unreachable (code
+  kept). §5.
 - `GET /relay/admin/usage?days=30` → `{ days: [{ day, usd, requests, byModel: {...} }] }`.
 - Validation: name 1–40 chars; dailyLimitUsd 0–20; allowedModels ⊆ `KNOWN_MODELS`
   (`claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`).
@@ -152,7 +155,8 @@ Additions and precisions on top of §1–§2, verified end to end with the real 
   Same key as an existing code, in any case or hyphenation → **409** `invalid_request_error` "이미 있는 코드입니다…"
   (unique index `codes_by_key` on `replace(code, '-', '')`). `PATCH` with `code` → 400: a code cannot be renamed.
 - Admin `PATCH /relay/admin/codes/:code` and `GET /relay/admin/usage?code=` accept any spelling of either kind.
-- **personId** = first 16 hex chars of HMAC-SHA-256(`PERSON_ID_SECRET`, stored code) (plain SHA-256 without the secret):
+- **personId** = first 16 hex chars of HMAC-SHA-256(`PERSON_ID_SECRET`, stored code) (plain SHA-256 without the secret;
+  since §5 a code made after 2026-10-19 mixes in its own random salt: `stored code + "\n" + person_salt`):
   unchanged for generated codes; for a custom code keyed on its stored form, so every spelling — and everyone sharing
   a group code — is one person in 공용 서재 (shared notes) and shares one daily limit.
 
@@ -183,3 +187,68 @@ Additions and precisions on top of §1–§2, verified end to end with the real 
   `relay/test/codes-unit.test.mjs`.
 - App note: `js/ai/relay.js` adds "내일 다시" only to a 429 whose message mentions 한도 and not "잠시 후", so keep the
   limiter's message containing "잠시 후" (or tell 429s apart by `retry-after`, which CORS exposes).
+
+## 5. Deleting a code and person salts (2026-10-19)
+
+Owner: "초대코드 중지는 있는데 삭제는 없네?". 중지 (stop) is reversible; **삭제** (delete) is not. Built on the Worker
+(`relay/src/index.js deleteCode`, `shared.js removePersonFiles`, `db.js`), the app (`docs/notes/relay-client.md` ›
+Deleting a code) and verified end to end with the real Worker (`tests/code-delete/run.mjs`).
+
+**`DELETE /relay/admin/codes/:code`** (admin token; any spelling of the code, as `PATCH`):
+1. The code is switched off first, so its holder cannot store anything new while the files go (every proxy request
+   checks the code; a push that raced past is caught by the ref update's fast-forward check and the plan is redone on
+   the new head).
+2. For **every** library in `SHARED_LIBRARIES`: one server-side commit that deletes everything under
+   `people/<personId>/` (highlights, notes, AI results) — none when that library has no such files. Message
+   `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` (최근 활동: who `관리자`; no person id in it). The 30-day purge and this
+   share one ref-update loop (`deletionCommit`). `library.json`, `papers/*` (PDF, translation) and other people's folders
+   are never touched. A pre-salt code with `PERSON_ID_SECRET` set also loses its plain-SHA-256 folder, if any.
+3. Then, in one D1 batch: the `codes` row and the person's `shared_trees` rows are deleted; the **usage rows stay** as
+   history, renamed `deleted:<ISO time>:<code>` — still in `todayTotalUsd` / `monthTotalUsd`, `deletedUsage` and the
+   global daily budget, never attached to a code made later with the same letters.
+→ `200 { deleted: true, purgedFiles: n }`. **GitHub unreachable or refusing** (any `UpstreamError`): nothing is deleted,
+the code gets its previous on/off state back, `502 api_error` "공용 서재(GitHub)에 연결하지 못해 이 코드의 개인 기록을 지우지
+못했습니다. 코드는 그대로 두었으니 잠시 후 다시 삭제해 주세요." — never a gone code with orphaned notes; a retry skips
+libraries already cleaned. Unknown code → 404. Without `TEAM_GITHUB_TOKEN` (공용 서재 off) only the D1 rows go.
+A deleted code is then unknown everywhere: 401 "초대 코드가 올바르지 않거나 사용이 중지되었습니다." (and it counts as a failed
+attempt in the limiter, unlike a stopped code).
+
+**Person salt**: `codes.person_salt` (nullable TEXT, 32 hex = 128 random bits) is set for every code created from now
+on (random or custom). personId = first 16 hex of HMAC-SHA-256(`PERSON_ID_SECRET`, `code + "\n" + salt`) when a salt
+is present, else the old HMAC(code) — older codes keep their personId and their notes. So deleting a custom code and
+making it again gives a **new person** who sees the shared papers and translations but none of the old notes. Every
+derivation goes through `relay/src/shared-paths.js personIdForRow` (`GET /shared`, the proxy, activity, deletion); the
+app always uses `GET /shared`'s personId (the store's own `personIdFor` fallback knows only saltless ids).
+
+**Schema**: `schema.sql` creates `person_salt` in a new database. SQLite/D1 has no `ADD COLUMN IF NOT EXISTS`, so an
+existing database gets it from the Worker itself the first time it creates a code (`db.js ensureSaltColumn`:
+`PRAGMA table_info(codes)`, then `ALTER TABLE codes ADD COLUMN person_salt TEXT`; losing a race to another isolate is
+fine). Lookups read `c.*` and treat a missing column as "no salt", so re-running `schema.sql` stays harmless and the
+hot path pays nothing. Tested on a database shaped like the deployed one (`relay/test/legacy-schema.sql` → `schema.sql`
+twice → Worker), in `relay/test` and in `tests/code-delete/run.mjs`.
+
+**Production deploy order** (in `relay/`, once; details in `docs/notes/relay.md` › Updating a deployed Worker):
+1. `npx wrangler d1 execute paper-relay --remote --file schema.sql` — harmless (all `IF NOT EXISTS`); needed only if the
+   custom-code / limiter / 공용 서재 tables of earlier updates are not on the remote database yet. It does **not** add
+   `person_salt` to the existing `codes` table (step 4 does).
+2. `npx wrangler deploy` — the **Worker before the app**: an old Worker's preflight lacks `DELETE`, so the new app's 삭제
+   would show "초대 코드 서버에 연결할 수 없습니다".
+3. Check `https://paper-relay.<account>.workers.dev/` → `{"service":"paper-relay","ok":true}` and one `/relay/me` with an
+   existing code → 200 (old codes are unchanged).
+4. In the app as it is (설정 → 초대 코드 관리) make one throwaway code, e.g. name `삭제 시험` (this adds the column), then
+   `npx wrangler d1 execute paper-relay --remote --command "SELECT code, person_salt IS NOT NULL AS salted FROM codes ORDER BY created_at DESC LIMIT 3"`
+   → only the new code has `salted = 1`.
+5. Then publish the app (push to `main`; GitHub Pages). No CSP or config change is needed.
+6. In the published app: 설정 → 초대 코드 관리 → the throwaway code's **삭제** → the dialog → 삭제 → "삭제했습니다." and the
+   row is gone (no 삭제된 코드 row: it never spent anything).
+Rollback (`npx wrangler rollback`) is safe for the data (the old Worker ignores `person_salt`), but under the old Worker
+a code created after this update would get its saltless personId, i.e. an empty 공용 서재 note folder, until the new
+Worker is back.
+
+**App** (`docs/notes/relay-client.md`): 삭제 next to 중지/다시 사용 with one dialog (title `‘<name>’ 코드를 삭제할까요?`, two
+lines, 취소 focused); the totals keep the deleted spend and one muted row **삭제된 코드 · 이번 달 $x** shows it. A device
+whose saved, once-working code gets that 401 (from `/relay/me`, `/shared`, the proxy or `/v1/messages`) forgets it once
+and shows the first screen with "초대 코드가 더 이상 쓰이지 않아요. 새 코드를 넣어 주세요." (or, with an own key / GitHub
+library / papers in 내 서재, a toast with the same words, keeping that setup and hiding 공용 서재). A stopped code gets the
+same 401 (the Worker never tells the two apart, so a guesser cannot learn that a word was a code), so 중지 also makes
+devices forget the code; the 중지 question says so.

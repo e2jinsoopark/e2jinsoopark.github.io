@@ -1,5 +1,5 @@
 // 첫 화면 · 초대 코드 붙여넣기 · 홈 화면에 추가 · 코드 직접 정하기 (docs/notes/onboarding.md), end to end:
-//   node tests/onboarding/run.mjs [--headed]     (starts `python -m http.server 8221` if nothing is listening)
+//   node tests/onboarding/run.mjs [--headed]     (starts `python -m http.server 8221` if nothing is listening; PR_TEST_PORT=… for another port)
 // Edge (Chromium) for desktop and Android (Pixel 7 emulation), and WebKit with the iPhone 15 profile for iOS Safari
 // (install once: node C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/cli.js install webkit). WebKit is
 // Safari's engine, not Safari: the home-screen web clip itself (which address iOS saves, its separate storage) can
@@ -19,7 +19,7 @@ import { ADMIN_TOKEN, CODE_FAIL_LIMIT, CODES, createFakeRelay, RELAY_URL, TOO_MA
 import { startFakeGitHub } from '../store/fake-github.mjs';
 import { startFakeRelay as startTeamRelay } from '../store/fake-relay.mjs';
 
-const PORT = 8221;
+const PORT = Number(process.env.PR_TEST_PORT) || 8221;
 const ORIGIN = `http://localhost:${PORT}`;
 const APP = `${ORIGIN}/index.html`;
 const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/onboarding';
@@ -135,7 +135,7 @@ async function device({ engine = 'edge', profile = null, viewport = null, seed =
   const ctx = await browser.newContext({ ...base, ...(viewport ? { viewport } : {}), locale: 'ko-KR', colorScheme: 'light', reducedMotion: 'reduce' });
   if (clipboard) await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIGIN });
   const external = [];
-  await ctx.route(/^https?:\/\/(?!localhost:8221\/|relay\.test\/)/, (route) => {
+  await ctx.route(new RegExp(String.raw`^https?:\/\/(?!localhost:${PORT}\/|relay\.test\/)`), (route) => {
     const url = route.request().url();
     if (url.startsWith('https://cdn.jsdelivr.net/gh/orioncactus/pretendard')) {
       return route.fulfill({ status: 200, contentType: 'text/css', body: '/* font stub (offline test) */' });
@@ -144,7 +144,7 @@ async function device({ engine = 'edge', profile = null, viewport = null, seed =
     problems.push(`${name}: external request blocked ${url}`);
     return route.abort();
   });
-  await ctx.route(/^http:\/\/localhost:8221\/index\.html(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: INDEX }));
+  await ctx.route(new RegExp(String.raw`^http:\/\/localhost:${PORT}\/index\.html(?:\?.*)?$`), (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: INDEX }));
   await ctx.route(`${RELAY_URL}/**`, relay.route);
   const fullSeed = theme ? { ...seed, ui: { ...(seed?.ui || {}), theme } } : seed;
   await ctx.addInitScript(({ key, seed, standalone }) => {

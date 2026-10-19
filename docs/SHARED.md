@@ -29,7 +29,9 @@ README.md
 `personId` = first 16 hex chars of SHA-256(invite code, normalised). Never put the code itself in a path.
 (As built: HMAC-SHA-256 with `PERSON_ID_SECRET` when that secret is set; "normalised" = the code as stored — `PR-XXXX-XXXX`,
 or an owner-chosen code as the owner spelled it, e.g. `EICU2-2026` — so every spelling of a code, and everyone sharing a
-group code, is one person. `docs/RELAY.md` §4.)
+group code, is one person. `docs/RELAY.md` §4. Since code deletion, 2026-10-19: a code made from then on also mixes in
+its own random salt (`codes.person_salt`), so a custom code deleted and made again is a new person; older codes keep
+their saltless id. `docs/RELAY.md` §5.)
 
 ## 2. Relay additions (`relay/`)
 
@@ -160,3 +162,7 @@ top of §1–§4:
   into the chosen folder and gains the sentences it lacks. Shared commit messages describe the batch in Korean.
 - **UI:** also `#/trash` (내 서재's 휴지통: folders only, since 내 서재 deletes a paper's files). 즐겨찾기 and 최근 읽음 in
   공용 서재 are per person and per browser. Settings → 공용 서재 is `#set-shared` (`#/settings/shared`).
+- **Deleting an invite code (2026-10-19, `docs/RELAY.md` §5):** the Worker removes everything under that code's
+  `people/<personId>/` in every library (one `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` commit per library that has such
+  files; 최근 활동 shows who `관리자`), then the code. Shared files (`library.json`, PDFs, translations) stay. GitHub
+  unreachable → 502 and the code stays (no orphaned notes). The holder's devices forget the code on the next 401.

@@ -21,12 +21,11 @@
 // while EICU2-2026 still opens from another IP (and a generated code from the same IP).
 // Results + screenshots: C:/Users/dindoo/Projects/pr-tools/out/onboarding/worker-e2e/.
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, devices, webkit } from 'file:///C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs';
-import { freshDatabase, portInUse, startWrangler } from '../../relay/test/lib.mjs';
+import { freshDatabase, personIdOf, portInUse, saltOf, startWrangler } from '../../relay/test/lib.mjs';
 import { startFakeAnthropic } from '../relay-e2e/fake-anthropic.mjs';
 import { stageTestSite } from '../relay-e2e/test-site.mjs';
 import { startFakeGitHub } from '../store/fake-github.mjs';
@@ -57,8 +56,8 @@ const problems = []; // page errors, unexpected console errors, CSP violations, 
 const expectedRefusals = []; // the browsers' "Failed to load resource" for the Worker's 401 / 409 / 429 the tests ask for
 const sdkFetches = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** personId (docs/SHARED.md §1) without PERSON_ID_SECRET: SHA-256 of the stored code, first 16 hex characters. */
-const personIdOf = (code) => createHash('sha256').update(code).digest('hex').slice(0, 16);
+/** The Worker's local D1 (freshDatabase): read-only checks of the person salts it stored. */
+const STATE_DIR = join(OUT, 'state');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function assertEqual(actual, expected, msg) {
@@ -250,7 +249,7 @@ try {
   gh.addToken(TEAM.token, { write: true, repos: [`${TEAM.owner}/${TEAM.repo}`] });
   gh.createRepo(TEAM.owner, TEAM.repo, { private: true, files: { 'README.md': '# 공용 서재\n' } });
   fake = await startFakeAnthropic({ port: UPSTREAM_PORT });
-  const stateDir = join(OUT, 'state');
+  const stateDir = STATE_DIR;
   freshDatabase(stateDir);
   stopWrangler = await startWrangler({
     stateDir,
@@ -468,7 +467,7 @@ try {
     return `#1–20 → “${NOT_FOUND}” (401); #21 → “${lines[20]}” (429, x-should-retry ${last.retry}, retry-after ${last.after}s); other IP: “eicu2 2026” → 공용 서재 (stored ${otherStored}); blocked IP: ${CUSTOM} → “${customSameIp}”, ${state.random} (generated) → 공용 서재`;
   });
 
-  await step('personId: every spelling of EICU2-2026 is one person in 공용 서재 (SHA-256 of the stored code)', async () => {
+  await step('personId: every spelling of EICU2-2026 is one person in 공용 서재 (SHA-256 of the stored code + its person salt)', async () => {
     const spellings = ['EICU2-2026', 'eicu22026', 'Eicu2 2026', 'eicu2--2026'];
     const ids = [];
     for (const code of spellings) {
@@ -478,8 +477,11 @@ try {
     }
     const random = await worker('/shared', { code: state.random.toLowerCase() });
     assertEqual(new Set(ids).size, 1, 'one personId');
-    assertEqual([ids[0], random.body.personId], [personIdOf(CUSTOM), personIdOf(state.random)], 'personId = SHA-256(stored code)');
-    return `${spellings.map((s) => `“${s}”`).join(', ')} → people/${ids[0]}; ${state.random.toLowerCase()} → people/${random.body.personId}`;
+    // Codes made since code deletion (2026-10-19) carry a random person salt (codes.person_salt, docs/RELAY.md §5).
+    const salts = [await saltOf(CUSTOM, STATE_DIR), await saltOf(state.random, STATE_DIR)];
+    assert(salts.every((x) => /^[0-9a-f]{32}$/.test(x || '')) && salts[0] !== salts[1], `person salts ${JSON.stringify(salts)}`);
+    assertEqual([ids[0], random.body.personId], [personIdOf(CUSTOM, salts[0]), personIdOf(state.random, salts[1])], 'personId = SHA-256(stored code, newline, salt)');
+    return `${spellings.map((s) => `“${s}”`).join(', ')} → people/${ids[0]}; ${state.random.toLowerCase()} → people/${random.body.personId} (each = SHA-256 of the stored code and its own 128-bit salt)`;
   });
 
   await step('no console errors, page errors, CSP violations, native dialogs or escaped requests; nothing reached the (fake) Anthropic API', async () => {

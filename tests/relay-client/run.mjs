@@ -1,5 +1,5 @@
 // Invite-code relay — app client (docs/RELAY.md §2), end to end in Edge:
-//   node tests/relay-client/run.mjs     (starts `python -m http.server 8150` if nothing is listening)
+//   node tests/relay-client/run.mjs     (starts `python -m http.server 8150` if nothing is listening; PR_TEST_PORT=… for another port)
 // The real app (index.html, real modules, the real Anthropic SDK from jsDelivr) talks to tests/relay-client/fake-relay.mjs
 // through Playwright route interception of https://relay.test. index.html is answered with a TEST COPY whose CSP
 // connect-src also lists https://relay.test (the browser checks CSP before any route sees the request); the real file
@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'file:///C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs';
 import { ADMIN_TOKEN, CODES, createFakeRelay, RELAY_URL } from './fake-relay.mjs';
 
-const PORT = 8150;
+const PORT = Number(process.env.PR_TEST_PORT) || 8150;
 const ORIGIN = `http://localhost:${PORT}`;
 const APP = `${ORIGIN}/index.html`;
 const OUT = 'C:/Users/dindoo/Projects/pr-tools/out/relay-client';
@@ -69,7 +69,7 @@ async function device({ seed = { relay: { url: RELAY_URL } }, viewport = { width
   const problems = [];
   const external = [];
   const indexHtml = testCopyOfIndex();
-  await ctx.route(/^https?:\/\/(?!localhost:8150\/|relay\.test\/)/, (route) => {
+  await ctx.route(new RegExp(String.raw`^https?:\/\/(?!localhost:${PORT}\/|relay\.test\/)`), (route) => {
     const url = route.request().url();
     if (url.startsWith('https://cdn.jsdelivr.net/gh/orioncactus/pretendard')) {
       return route.fulfill({ status: 200, contentType: 'text/css', body: '/* font stub (offline test) */' });
@@ -78,7 +78,7 @@ async function device({ seed = { relay: { url: RELAY_URL } }, viewport = { width
     external.push(url);
     return route.abort();
   });
-  await ctx.route(/^http:\/\/localhost:8150\/index\.html(?:\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: indexHtml }));
+  await ctx.route(new RegExp(String.raw`^http:\/\/localhost:${PORT}\/index\.html(?:\?.*)?$`), (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: indexHtml }));
   await ctx.route(`${RELAY_URL}/**`, fake.handle);
   await ctx.addInitScript(({ key, seed }) => {
     try { if (seed && !localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(seed)); } catch { /* blocked */ }

@@ -1,6 +1,7 @@
 // Responses, Anthropic-shaped errors and CORS.
 
-export const ALLOW_METHODS = 'GET, POST, PATCH, OPTIONS';
+/** DELETE: the admin's code deletion (DELETE /relay/admin/codes/<code>). */
+export const ALLOW_METHODS = 'GET, POST, PATCH, DELETE, OPTIONS';
 /** The shared library's GitHub proxy also takes PUT (README bootstrap of an empty repo). */
 export const SHARED_ALLOW_METHODS = 'GET, POST, PATCH, PUT, OPTIONS';
 // The Anthropic SDK decides about retries from x-should-retry / retry-after*: a browser shows it those headers

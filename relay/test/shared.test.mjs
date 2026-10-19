@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import http from 'node:http';
-import { ADMIN_TOKEN, call, newCode, TEAM_TOKEN, WORKER_PORT } from './lib.mjs';
+import { ADMIN_TOKEN, call, newCode, personIdOfCode, TEAM_TOKEN, WORKER_PORT } from './lib.mjs';
 
 const TEAM = ['dindoopark', 'paper-team-library'];
 const SMALL = ['dindoopark', 'paper-small-library'];
@@ -19,7 +19,6 @@ const README_TEXT = '# 논문 리더 데이터 저장소\n\n이 저장소는 논
 const seen = [];
 const codes = [];
 
-const personOf = (code) => createHash('sha256').update(code).digest('hex').slice(0, 16);
 const gitSha = (buf) => createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${buf.length}\0`), buf])).digest('hex');
 const PDF = (n, fill = 'a') => Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(Math.max(0, n - 9), fill)]);
 const libraryJson = (papers) => JSON.stringify({ version: 1, updatedAt: 1, folders: [], papers });
@@ -28,7 +27,8 @@ const file = (path, sha, extra = {}) => ({ path, mode: '100644', type: 'blob', s
 async function person(name) {
   const { code } = await newCode({ name });
   codes.push(code);
-  return { code, name, id: personOf(code) };
+  // personId = SHA-256(code, a line break, the person salt)[0:16] (no PERSON_ID_SECRET in the tests); salt read from D1.
+  return { code, name, id: await personIdOfCode(code) };
 }
 
 /** A Worker request, recorded in `seen`. `code` → Authorization: Bearer (as GitHubClient sends its token). */
@@ -141,7 +141,7 @@ export async function setup() {
 
 export const tests = [
   {
-    name: 'GET /shared: libraries, personId = sha256(code)[0:16], name; no / wrong / disabled code → 401 (nothing sent to GitHub)',
+    name: 'GET /shared: libraries, personId = sha256(code, line break, person salt)[0:16], name; no / wrong / disabled code → 401 (nothing sent to GitHub)',
     fn: async ({ A, gh }) => {
       const mark = gh.log.length;
       const res = await req('/shared', { code: A.code });
@@ -675,7 +675,7 @@ export const tests = [
       assert.equal(pre.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, PUT, OPTIONS');
       assert.equal(pre.headers.get('access-control-allow-headers'), requested);
       const v1 = await call('/v1/messages', { method: 'OPTIONS', origin, headers: { 'access-control-request-method': 'POST' } });
-      assert.equal(v1.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, OPTIONS');
+      assert.equal(v1.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
       const res = await req('/shared/team/gh/repos/team/library/git/ref/heads/main', { code: A.code, origin });
       assert.equal(res.status, 200);
       assert.equal(res.headers.get('access-control-allow-origin'), origin);

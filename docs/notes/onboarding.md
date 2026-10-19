@@ -35,6 +35,11 @@ Errors: one short line under the input (`role="alert"`, the input gets `aria-inv
 - no code in the text, a malformed code (no request), or the relay's 401 → **코드를 찾을 수 없어요**
 - anything else → the relay's own Korean message, e.g. the limiter's 429 "시도가 너무 많습니다. 잠시 후 다시 시도해 주세요."
   or "초대 코드 서버에 연결할 수 없습니다…".
+- the saved code stopped working (the owner deleted or stopped it; `docs/notes/relay-client.md` › Deleting a code) →
+  the same place, not red (`.is-notice`): **초대 코드가 더 이상 쓰이지 않아요. 새 코드를 넣어 주세요.**, shown once, gone on
+  typing. Also when an iPhone home-screen app (standalone) starts at the join link of that code (no request is sent for
+  it); in a browser tab that join link is tried once (it may work again: a stopped code switched back on, or the same
+  chosen code made again).
 
 Success: the code is saved (`registerInviteCode`), the screen waits up to 2.5 s for `GET /shared` (`deps.shared.settled()`,
 so an invitee lands in 공용 서재, not in an empty 내 서재 first), shows the toast "초대 코드를 등록했어요." and replaces the
@@ -187,7 +192,9 @@ node relay/test/run.mjs unit             # the Worker against relay/test/code-ve
 node tests/onboarding/run.mjs            # port 8221; fakes; Edge + WebKit (iPhone 15); 12 checks
 node tests/onboarding/worker-e2e.mjs     # ports 8222–8224 + wrangler dev 8787; the REAL Worker; Edge + WebKit; 8 steps
 node tests/relay-client/run.mjs          # join link / invite message / helpers updated for the new behaviour
+node tests/onboarding/code-delete.mjs    # port 8231; a deleted code: admin 삭제, the first screen's line, no request loop
 ```
+`PR_TEST_PORT=<port>` serves `run.mjs` (onboarding, relay-client) on another port.
 `tests/onboarding/run.mjs` (no paid API, no real relay, no GitHub; relay.test route-intercepted, 공용 서재 through
 `tests/store/fake-relay.mjs` + `fake-github.mjs`, which now knows owner-chosen codes too; any console error, page error,
 CSP violation or escaped request fails): the shared code vectors in Edge and WebKit + the 40,000-string app = Worker
@@ -216,7 +223,8 @@ no `TEST_MODE`) and a staged copy of the site (`tests/relay-e2e/test-site.mjs`).
 6. limiter: 21 different wrong codes from one IP → 20 × "코드를 찾을 수 없어요" (401), the 21st "시도가 너무 많습니다. 잠시 후 다시
    시도해 주세요." (429, `x-should-retry: false`, `retry-after`); another IP opens `eicu2 2026` meanwhile; the blocked IP
    is refused `EICU2-2026` but gets in with the generated code;
-7. personId: `EICU2-2026`, `eicu22026`, `Eicu2 2026`, `eicu2--2026` → one `people/<id>` = SHA-256(`EICU2-2026`);
+7. personId: `EICU2-2026`, `eicu22026`, `Eicu2 2026`, `eicu2--2026` → one `people/<id>` = SHA-256(`EICU2-2026` + "\n" +
+   its person salt), the salt read from the Worker's local D1 (every code made since code deletion has one);
 8. no console / page / CSP problems, no native dialog, no escaped request, 0 calls to the (fake) Anthropic API.
 Results and screenshots: `C:/Users/dindoo/Projects/pr-tools/out/onboarding/worker-e2e/`.
 
@@ -231,7 +239,8 @@ Results and screenshots: `C:/Users/dindoo/Projects/pr-tools/out/onboarding/worke
 - On a shared hospital IP, someone typing 20 wrong codes within 10 minutes blocks owner-chosen codes from that IP for up
   to 10 minutes (generated `PR-…` codes keep working) — the Worker's choice, `docs/RELAY.md` §4. The first screen then
   shows the Worker's "잠시 후 다시 시도해 주세요" line.
-- `js/store/library.js` `personIdFor(code)` (a fallback used only when no personId is passed) still knows generated codes
-  only; the app always passes the personId from `GET /shared`, so owner-chosen codes work (worker-e2e step 3–7).
+- `js/store/library.js` `personIdFor(code)` (a fallback used only when no personId is passed) knows only saltless ids
+  of generated codes (no `PERSON_ID_SECRET`, no person salt) — wrong for every code made since code deletion; the app
+  always passes the personId from `GET /shared`, so it is never used in the app (worker-e2e step 3–7, code-delete e2e).
 - The app's modules already used regex lookbehind before this change (`js/ui/components.js`), so iOS Safari older than
   16.4 cannot run 갈피 at all; not new, not addressed.

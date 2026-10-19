@@ -2,13 +2,12 @@
 // (apiBase = <relay>/shared/team/gh, owner 'team', repo 'library', token = invite code): in Node (fetch) and in Edge
 // on a localhost page (CORS preflights for PUT/PATCH, the ETag exposed for conditional GETs → 304).
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'file:///C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs';
-import { call, newCode, PAGE_PORT, TEAM_TOKEN, WORKER } from './lib.mjs';
+import { call, newCode, PAGE_PORT, personIdOfCode, TEAM_TOKEN, WORKER } from './lib.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const JS_DIR = path.join(REPO_ROOT, 'js');
@@ -18,13 +17,13 @@ const TEAM = ['dindoopark', 'paper-team-library'];
 const API = `${WORKER}/shared/team/gh`;
 const PAGE = `http://localhost:${PAGE_PORT}/`;
 
-const personOf = (code) => createHash('sha256').update(code).digest('hex').slice(0, 16);
 const codes = [];
 
 async function person(name) {
   const { code } = await newCode({ name });
   codes.push(code);
-  return { code, name, id: personOf(code) };
+  // personId = SHA-256(code, a line break, the person salt)[0:16] (no PERSON_ID_SECRET in the tests); salt read from D1.
+  return { code, name, id: await personIdOfCode(code) };
 }
 
 /** A GitHubClient for 공용 서재 with this person's invite code. */

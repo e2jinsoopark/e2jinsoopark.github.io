@@ -2,7 +2,7 @@
 // Each limiter test uses its own client IPs (CF-Connecting-IP, which wrangler dev passes through as sent) and pins its
 // own clock (x-relay-test-now), so tests do not share a window with each other or with the other suites.
 import assert from 'node:assert/strict';
-import { call, newCode, sendMessage, waitForRequests } from './lib.mjs';
+import { call, newCode, personIdOf, saltOf, sendMessage, waitForRequests } from './lib.mjs';
 import { personIdFor } from '../src/shared-paths.js';
 
 const BAD_CODE = '초대 코드가 올바르지 않거나 사용이 중지되었습니다.';
@@ -134,10 +134,13 @@ export const tests = [
     },
   },
   {
-    name: 'personId of a custom code: every spelling gives SHA-256(stored code)[0:16] on GET /shared; a generated code is unchanged',
+    name: 'personId of a custom code: every spelling gives SHA-256(stored code, its person salt)[0:16] on GET /shared; a generated code likewise',
     fn: async () => {
       const { code } = await newCode({ name: '야간 근무조', code: 'night-shift-5' });
-      const want = await personIdFor('NIGHT-SHIFT-5', '');
+      const salt = await saltOf('NIGHT-SHIFT-5');
+      assert.match(salt, /^[0-9a-f]{32}$/, 'a new code has a 128-bit person salt');
+      const want = await personIdFor('NIGHT-SHIFT-5', '', salt);
+      assert.equal(want, personIdOf('NIGHT-SHIFT-5', salt), 'the Worker\'s derivation = SHA-256("NIGHT-SHIFT-5\\n" + salt)');
       const ids = new Set();
       for (const typed of ['NIGHT-SHIFT-5', 'nightshift5', 'night shift 5']) {
         const res = await shared('/shared', typed);
@@ -147,9 +150,12 @@ export const tests = [
       }
       assert.deepEqual([...ids], [want]);
       const gen = await newCode({ name: '개인' });
+      const genSalt = await saltOf(gen.code);
+      assert.match(genSalt, /^[0-9a-f]{32}$/);
+      assert.notEqual(genSalt, salt);
       const genRes = await shared('/shared', gen.code.toLowerCase());
-      assert.equal(genRes.json?.personId, await personIdFor(gen.code, ''), genRes.text);
-      return `${code}: personId ${want} for 3 spellings; ${gen.code}: ${genRes.json.personId} (as before)`;
+      assert.equal(genRes.json?.personId, personIdOf(gen.code, genSalt), genRes.text);
+      return `${code}: personId ${want} for 3 spellings (salt ${salt.slice(0, 6)}…); ${gen.code}: ${genRes.json.personId}`;
     },
   },
   {

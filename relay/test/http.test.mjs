@@ -76,7 +76,7 @@ export const tests = [
       assert.equal(res.status, 204);
       assert.equal(res.headers.get('access-control-allow-origin'), 'http://localhost:5173');
       assert.equal(res.headers.get('access-control-allow-headers'), requested);
-      assert.equal(res.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, OPTIONS');
+      assert.equal(res.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, DELETE, OPTIONS');
       assert.equal(res.headers.get('access-control-max-age'), '86400');
       assert.match(res.headers.get('vary') || '', /Origin/);
       return `204; allow-headers = "${requested}"`;

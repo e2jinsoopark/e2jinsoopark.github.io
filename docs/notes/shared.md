@@ -23,7 +23,7 @@ What belongs to a code (= a person) is `people/<personId>/`: that person's highl
       │  Authorization: Bearer PR-XXXX-XXXX
       ▼
  Cloudflare Worker paper-relay (relay/src/shared.js, shared-paths.js, github.js)
-      │  code → D1 codes (active?) · personId = SHA-256(code)[0:16] · only the 11 routes of SHARED.md §2.1
+      │  code → D1 codes (active?) · personId = HMAC(code [+ salt])[0:16] · only the 11 routes of SHARED.md §2.1
       │  reads: tree listings without people/<other>/ · writes: path allowlist, base_tree = head, parents = [head],
       │  no force, PDFs immutable, deletes only of own people/<me>/ files · commit message → "[name] …"
       │  D1 shared_trees: trees made through the proxy (a commit must use a tree this person built on that head)
@@ -169,7 +169,8 @@ Worker request with its status).
 outside the app / Worker / jsDelivr SDK / fake GitHub fails the step):
 1. Owner, 설정 → 초대 코드 관리: codes for 김간호사, 이간호사 and the owner (박진수), checked in D1.
 2. Owner opens their own join link: home stays 내 서재 (GitHub sync), the sidebar adds an empty 공용 서재;
-   `GET /shared` → `[{ id: 'team', name: '공용 서재' }]`, personId = SHA-256(code)[0:16].
+   `GET /shared` → `[{ id: 'team', name: '공용 서재' }]`, personId = SHA-256(code + "\n" + its person salt)[0:16]
+   (the salt read from the Worker's local D1, `relay/test/lib.mjs personIdOfCode`).
 3. Owner's 내 서재: folder ‘섬망 연구’ (kiekkas2012, simwright2005) + cohen1960 at the top, synced to the personal repo.
 4. ‘섬망 연구’ → 공용 서재로 복사…: the empty team repo is bootstrapped through the Worker, both PDFs are byte-identical,
    no `people/` files, commits `[박진수] …`.
@@ -229,9 +230,10 @@ already refused; the UI builds every name/title/activity string with `el()` text
   subrequest, so one code could burn the Worker's GitHub rate limit or the free-plan request budget (a denial of
   service, not a data leak or a cheap size-exhaustion — those are capped). Per-code throttling would need a D1 write
   per request; it is not added here. GitHub's own rate-limit answers still pass through.
-- **personId** is 64 bits of SHA-256 over a code with 40 bits of entropy: whoever sees a personId can find the code
-  by brute force. The Worker hides other people's ids in listings, commit messages and activity; the owner sees them
-  in the repo. A later revision could use an HMAC with a server secret (would change every personId → new paths).
+- **personId** without `PERSON_ID_SECRET` is 64 bits of SHA-256 over a code with 40 bits of entropy: whoever sees a
+  personId of an old (saltless) code can find the code by brute force — set `PERSON_ID_SECRET` (HMAC). Codes made since
+  2026-10-19 also mix in a 128-bit random salt kept only in D1, so their ids reveal nothing even without the secret.
+  The Worker hides other people's ids in listings, commit messages and activity; the owner sees them in the repo.
 - Size cap is approximate (concurrent uploads can overshoot `maxBytes`; JSON files always save so deletes work).
 - Worker caches are per isolate; at GitHub's truncated-tree limit (≈100k entries) a level-by-level walk that crosses
   isolates can 404 once and is retried on the next sync. CPU time on the free plan for big listings not measured.
@@ -240,5 +242,7 @@ already refused; the UI builds every name/title/activity string with `el()` text
 - A reader recomputing a paper's progress counts writes them to the shared library.json once (`논문 정보 갱신`,
   hidden in 최근 활동).
 - A stopped (중지) code is refused at once (401) for 공용 서재 too, but what that person already downloaded stays on
-  their device, and their `people/<id>/` files stay in the repo.
+  their device, and their `people/<id>/` files stay in the repo. A **deleted** (삭제) code's `people/<id>/` files are
+  removed from the repo (`docs/RELAY.md` §5); the copy on that person's device stays until 이 기기의 데이터 모두 지우기 (the
+  app no longer opens it). Both answer 401 the same way, and the app forgets the saved code on it (`relay-client.md`).
 - 최근 활동 reads the last 50 commits; older history is only in the repo.

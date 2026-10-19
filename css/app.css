@@ -320,7 +320,7 @@ kbd {
 }
 .toast.is-leaving { opacity: 0; transform: translateY(6px); transition: opacity 0.15s, transform 0.15s; }
 .toast-icon { color: var(--accent); padding-top: 1px; display: flex; }
-.toast-msg { flex: 1; min-width: 0; padding-top: 1px; white-space: pre-line; overflow-wrap: anywhere; }
+.toast-msg { flex: 1; min-width: 0; padding-top: 1px; white-space: pre-line; word-break: keep-all; overflow-wrap: anywhere; }
 .toast-success { border-left-color: var(--success); } .toast-success .toast-icon { color: var(--success); }
 .toast-error { border-left-color: var(--danger); } .toast-error .toast-icon { color: var(--danger); }
 .toast-warning { border-left-color: var(--warning); } .toast-warning .toast-icon { color: var(--warning); }
@@ -843,6 +843,19 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .relay-code-name { font-weight: 700; overflow-wrap: anywhere; }
 .relay-code-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .relay-code-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.relay-code-actions .relay-code-delete { color: var(--danger); }
+.relay-code-actions .relay-code-delete:hover { background: var(--danger-soft); color: var(--danger-hover); }
+/* Usage of deleted codes (kept in the totals): one muted row under the list, no actions. */
+.relay-code.is-deleted-total {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 14px;
+  background: transparent; border-style: dashed; color: var(--text-3); font-size: 13px;
+}
+.relay-code.is-deleted-total .relay-code-name { font-weight: 600; color: var(--text-3); }
+.relay-code.is-deleted-total .relay-code-meta { margin-top: 0; }
+.relay-delete .modal-message { word-break: keep-all; }
+.relay-delete .keep { white-space: nowrap; }
+.relay-delete .modal-message + .modal-message { margin-top: 8px; }
+.relay-delete .modal-message:last-child { color: var(--text-2); font-size: 14px; }
 .tone-success .message-icon { background: var(--success-soft); color: var(--success); }
 @media (max-width: 860px) {
   .relay-create { grid-template-columns: minmax(0, 1fr); }
@@ -1001,6 +1014,8 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .start-input[aria-invalid='true']:focus { box-shadow: 0 0 0 3px var(--danger-soft); }
 .start-input:read-only { color: var(--text-2); }
 .start-error { margin: 0; min-height: 21px; padding-left: 2px; font-size: 13.5px; line-height: 1.55; color: var(--danger); word-break: keep-all; }
+/* The saved code no longer works (deleted or stopped): the same line, a notice rather than an error. */
+.start-error.is-notice { color: var(--warning); font-weight: 500; text-wrap: balance; }
 .start-go { width: 100%; height: 52px; border-radius: 12px; font-size: 16px; font-weight: 600; }
 .start-go:disabled { opacity: 0.85; cursor: progress; }
 .start-link {

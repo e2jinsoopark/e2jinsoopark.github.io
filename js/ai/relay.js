@@ -5,6 +5,7 @@
 //
 // relay.js and providers.js import each other: nothing here may use an imported binding at module top level (the
 // Claude provider underneath is made on first use).
+import { bus } from '../core/bus.js';
 import { APP_PUBLIC_URL, CLAUDE_MODELS, RELAY_DEFAULT_URL } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { formatUsd } from '../core/util.js';
@@ -39,6 +40,13 @@ const RUNS = ['01234567890', '09876543210', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'ZYXWV
   'ASDFGHJKL', 'ZXCVBNM'];
 
 const REQUEST_TIMEOUT_MS = 20_000;
+/** Deleting a code also deletes its files in every team library (one GitHub commit each): give it longer. */
+const DELETE_TIMEOUT_MS = 90_000;
+/**
+ * Emitted on the bus when the saved invite code — one that worked on this device before — is refused with a 401
+ * (the owner deleted or stopped it): `{ code }`. js/app.js clears the code once and tells the person.
+ */
+export const CODE_REFUSED_EVENT = 'relay:code-refused';
 const HANGUL = /[가-힣]/;
 // Crockford base32 (no I, L, O, U), as relay/src/codes.js generates and reads it.
 const CODE_RE = /^PR-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
@@ -64,6 +72,7 @@ const OWNER_SETUP_MESSAGE = '초대 코드 서버의 Claude 연결(관리자의 
 const NOT_FOUND_MESSAGE = '초대 코드 서버에서 요청한 기능을 찾을 수 없습니다. 설정의 서버 주소가 맞는지 확인해 주세요.';
 const ADMIN_AUTH_MESSAGE = '관리자 토큰이 올바르지 않습니다.';
 const NO_ADMIN_MESSAGE = '관리자 토큰을 먼저 저장해 주세요.';
+const NO_DELETE_MESSAGE = '초대 코드 서버가 아직 코드 삭제를 지원하지 않습니다. 서버(Worker)를 새 버전으로 배포한 뒤 다시 시도해 주세요.';
 
 // ───────────────────────────── invite codes ─────────────────────────────
 
@@ -295,6 +304,7 @@ function describeRelayError(err, sdk, info = {}) {
     const code = STATUS_CODES[status] || (status >= 500 ? 'server' : 'unknown');
     warn(code);
     if (code === 'permission') refreshMe().catch(() => {}); // the owner may have changed the code's models
+    if (status === 401) reportRefusedCode(settings.get().relay?.code); // deleted or stopped by the owner
     // "이 초대 코드로는 <model>을 쓸 수 없습니다." — the code no longer allows the model this tab still asks for:
     // not_found with the model, so getProvider() switches to an allowed one and retries (js/ai/models.js).
     if (code === 'permission' && info.model && detail.includes(info.model)) {
@@ -389,6 +399,24 @@ export async function registerInviteCode(raw, { signal } = {}) {
   settings.set({ provider: 'relay', relay: { code, name: me.name, allowedModels: me.allowedModels, ...NO_MODEL_CHOICE } });
   applyModelList(relayProvider, me.allowedModels);
   return { ...me, code };
+}
+
+/**
+ * A 401 for `code` (from /relay/me, /shared, the 공용 서재 proxy or /v1/messages). When it is the saved code and that
+ * code worked on this device before (its name / allowed models came from the relay), the owner has deleted or stopped
+ * it: CODE_REFUSED_EVENT once, and js/app.js clears it. A code being tried (first screen, join link, a code just typed
+ * in 설정 — saveInviteCode forgets the name and models) is only an error where it was typed.
+ * @returns {boolean} whether it was reported
+ */
+export function reportRefusedCode(code) {
+  const key = code ? inviteCodeKey(code) : '';
+  const r = settings.get().relay || {};
+  if (!key || !r.code || inviteCodeKey(r.code) !== key) return false;
+  const accepted = Boolean(String(r.name || '').trim()) || modelList(r.allowedModels).length > 0;
+  if (!accepted) return false;
+  console.warn('[relay] the saved invite code was refused (401): deleted or stopped by the owner');
+  bus.emit(CODE_REFUSED_EVENT, { code: normalizeInviteCode(r.code) });
+  return true;
 }
 
 /** Save a typed code; a different code forgets the previous one's name, models and model choices. */
@@ -502,10 +530,22 @@ function libraryPath(lib) {
  */
 export async function listCodes({ token, signal } = {}) {
   const d = await adminFetch('/relay/admin/codes', { token, signal });
+  const codes = (Array.isArray(d.codes) ? d.codes : []).map(toCode);
+  const todayTotalUsd = toNumber(d.todayTotalUsd);
+  const monthTotalUsd = toNumber(d.monthTotalUsd);
+  // Deleted codes keep their usage rows, so the totals include them; the list shows their month as one row.
+  // Taken from the Worker (`deletedUsage: { todayUsd, monthUsd, … }`), else what the totals hold beyond the listed codes.
+  const deleted = (field, total, key) => {
+    const given = [d.deletedUsage?.[key], d[field]].find((v) => v !== undefined && v !== null);
+    const rest = given !== undefined ? toNumber(given) : total - codes.reduce((s, c) => s + c[key], 0);
+    return rest >= 0.005 ? Math.round(rest * 1e6) / 1e6 : 0;
+  };
   return {
-    codes: (Array.isArray(d.codes) ? d.codes : []).map(toCode),
-    todayTotalUsd: toNumber(d.todayTotalUsd),
-    monthTotalUsd: toNumber(d.monthTotalUsd),
+    codes,
+    todayTotalUsd,
+    monthTotalUsd,
+    deletedTodayUsd: deleted('deletedTodayUsd', todayTotalUsd, 'todayUsd'),
+    deletedMonthUsd: deleted('deletedMonthUsd', monthTotalUsd, 'monthUsd'),
     globalDailyLimitUsd: toNumber(d.globalDailyLimitUsd),
   };
 }
@@ -530,6 +570,24 @@ export async function updateCode(code, patch, { token, signal } = {}) {
   const body = codeFields(patch, { requireName: false });
   if (patch.active !== undefined) body.active = Boolean(patch.active);
   return toCode(await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}`, { method: 'PATCH', body, token, signal }));
+}
+
+/**
+ * Delete a code for good: the Worker removes its files (people/<personId>/: highlights, notes, AI results) from every
+ * team library, then the code. Its usage stays in the totals. A GitHub failure is a 502 with a Korean message and the
+ * code is kept (try again); a code that is already gone is a 404.
+ * @returns {Promise<{ deleted: boolean, purgedFiles: number }>}
+ */
+export async function deleteCode(code, { token, signal } = {}) {
+  let d;
+  try {
+    d = await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}`, { method: 'DELETE', token, signal, timeoutMs: DELETE_TIMEOUT_MS });
+  } catch (err) {
+    // A Worker from before deleting existed: DELETE is not one of its methods.
+    if (err?.status === 405) throw aiError(NO_DELETE_MESSAGE, { code: 'not_found', status: 405 });
+    throw err;
+  }
+  return { deleted: d.deleted !== false, purgedFiles: Math.round(toNumber(d.purgedFiles)) };
 }
 
 /** Daily totals for the last `days` days (KST calendar days). */
@@ -598,13 +656,13 @@ function toCode(c) {
  * `Authorization: Bearer` (the shared-library endpoints), `admin` = admin token (Bearer).
  * Errors are Korean aiErrors; the relay's own Korean messages are kept as they are.
  */
-async function relayFetch(path, { method = 'GET', body, key, bearer, admin, url = settings.relayUrl(), signal } = {}) {
+async function relayFetch(path, { method = 'GET', body, key, bearer, admin, url = settings.relayUrl(), signal, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const root = String(url || '').trim().replace(/\/+$/, '');
   if (!root) throw aiError(NO_URL_MESSAGE, { code: 'no_key' });
   const token = admin || bearer;
   const headers = token ? { authorization: `Bearer ${token}` } : { 'x-api-key': key };
   if (body !== undefined) headers['content-type'] = 'application/json';
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const timeout = AbortSignal.timeout(timeoutMs);
   let res;
   let data = null;
   try {
@@ -623,7 +681,11 @@ async function relayFetch(path, { method = 'GET', body, key, bearer, admin, url 
     console.warn('[relay] request failed', path, err);
     throw aiError(isRelayOriginAllowed(root) ? CONNECT_MESSAGE : CSP_MESSAGE, { code: 'network', cause: err });
   }
-  if (!res.ok) throw httpError(res.status, data, Boolean(admin));
+  if (!res.ok) {
+    const err = httpError(res.status, data, Boolean(admin));
+    if (res.status === 401 && !admin) reportRefusedCode(key || bearer); // only the saved, once-working code
+    throw err;
+  }
   if (!data || typeof data !== 'object') {
     throw aiError('초대 코드 서버의 응답을 해석하지 못했습니다. 설정의 서버 주소가 맞는지 확인해 주세요.', { code: 'parse' });
   }

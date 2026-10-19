@@ -59,6 +59,9 @@ function nextKstMidnight(now = Date.now()) {
   return new Date(midnightKst - 9 * 3_600_000).toISOString();
 }
 
+/** The Worker's answer when GitHub cannot be reached while deleting a code (the code is kept). */
+export const DELETE_FAILED_MESSAGE = '공용 서재(GitHub)에 연결하지 못해 이 코드의 개인 기록을 지우지 못했습니다. 코드는 그대로 두었으니 잠시 후 다시 삭제해 주세요.';
+
 export function createFakeRelay() {
   const db = seed();
   /** Every non-preflight request: { method, path, search, headers, body }. */
@@ -67,6 +70,11 @@ export function createFakeRelay() {
   let nextCode = 0;
   /** Failed code lookups of this "network" (one fake = one IP): { at, guess }. */
   const failures = [];
+  /**
+   * DELETE /relay/admin/codes/:code: usage of deleted codes stays in the totals (their rows are gone);
+   * `githubDown` → 502 and the code is kept; `files` = what the purge commit would remove per code.
+   */
+  const deletion = { githubDown: false, deletedTodayUsd: 0, deletedMonthUsd: 0, deletedTotalUsd: 0, deletedRequests: 0, files: new Map(), deleted: [] };
   const keyOf = (code) => String(code).replace(/-/g, '');
   const findByKey = (key) => [...db.values()].find((r) => keyOf(r.code) === key) || null;
 
@@ -95,12 +103,15 @@ export function createFakeRelay() {
     const { method, path } = call;
     if (method === 'GET' && path === '/relay/admin/codes') {
       const codes = [...db.values()].map(toApi);
+      // As the Worker does: deleted codes' usage rows stay, so the totals include them, and `deletedUsage` gives them
+      // on their own (the list's 삭제된 코드 row).
       return {
         json: {
           codes,
-          todayTotalUsd: codes.reduce((s, c) => s + c.todayUsd, 0),
-          monthTotalUsd: codes.reduce((s, c) => s + c.monthUsd, 0),
+          todayTotalUsd: codes.reduce((s, c) => s + c.todayUsd, 0) + deletion.deletedTodayUsd,
+          monthTotalUsd: codes.reduce((s, c) => s + c.monthUsd, 0) + deletion.deletedMonthUsd,
           globalDailyLimitUsd: 5,
+          deletedUsage: { todayUsd: deletion.deletedTodayUsd, monthUsd: deletion.deletedMonthUsd, totalUsd: deletion.deletedTotalUsd, totalRequests: deletion.deletedRequests },
         },
       };
     }
@@ -137,6 +148,21 @@ export function createFakeRelay() {
       if (problem) return anthropicError(400, 'invalid_request_error', problem);
       for (const k of ['name', 'active', 'allowedModels', 'dailyLimitUsd']) if (body[k] !== undefined) r[k] = k === 'name' ? body[k].trim() : body[k];
       return { json: toApi(r) };
+    }
+    if (method === 'DELETE' && m) {
+      const parsed = codeKey(decodeURIComponent(m[1]));
+      const r = parsed ? findByKey(parsed.key) : null;
+      if (!r) return anthropicError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${decodeURIComponent(m[1])}`);
+      // The Worker first commits the deletion of people/<personId>/ in every team library; GitHub unreachable →
+      // 502 and the code row stays (no half state).
+      if (deletion.githubDown) return anthropicError(502, 'api_error', DELETE_FAILED_MESSAGE);
+      db.delete(r.code);
+      deletion.deletedTodayUsd += r.todayUsd;
+      deletion.deletedMonthUsd += r.monthUsd;
+      deletion.deletedTotalUsd += r.totalUsd;
+      deletion.deletedRequests += r.totalRequests;
+      deletion.deleted.push(r.code);
+      return { json: { deleted: true, purgedFiles: deletion.files.get(r.code) ?? 0 } };
     }
     if (method === 'GET' && path === '/relay/admin/usage') {
       const days = Number(new URLSearchParams(call.search).get('days') || 30);
@@ -256,7 +282,7 @@ export function createFakeRelay() {
       : {};
     if (req.method() === 'OPTIONS') {
       const allow = cors['access-control-allow-origin'] ? {
-        'access-control-allow-methods': 'GET, POST, PATCH, OPTIONS',
+        'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
         'access-control-allow-headers': headers['access-control-request-headers'] || '',
         'access-control-max-age': '86400',
       } : {};
@@ -276,5 +302,5 @@ export function createFakeRelay() {
     }).catch(() => {}); // the page may have aborted the request meanwhile
   }
 
-  return { db, calls, failures, handle };
+  return { db, calls, failures, deletion, handle };
 }
