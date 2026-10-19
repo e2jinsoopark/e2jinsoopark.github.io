@@ -22,12 +22,15 @@
     "DEFAULT_DAILY_LIMIT_USD": "0.5",
     "GLOBAL_DAILY_LIMIT_USD": "5",
     "MAX_TOKENS_CAP": "32000",
-    // Shared team library (공용 서재, docs/SHARED.md): every active invite code may use these private repos through
+    // Shared team library (전체 공용 서재, docs/SHARED.md): every active invite code may use these private repos through
     // /shared/<id>/gh with the Worker's TEAM_GITHUB_TOKEN. maxBytes = size cap (sum of the files in the repo);
     // maxFiles = cap on the number of files (stops filling the repo cheaply with countless tiny files; default 50000).
+    // The "team" repo also holds every invite code's own library (codes/<id>/, /shared/mine/gh, docs/SHARED.md §6),
+    // each capped at CODE_LIBRARY_MAX_BYTES unless the admin sets another cap for that code; both count in maxBytes.
     "GITHUB_API_BASE": "https://api.github.com",
     "SHARED_LIBRARIES": [
-      { "id": "team", "name": "공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000, "maxFiles": 50000 }
-    ]
+      { "id": "team", "name": "전체 공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000, "maxFiles": 50000 }
+    ],
+    "CODE_LIBRARY_MAX_BYTES": "500000000"
   }
 }

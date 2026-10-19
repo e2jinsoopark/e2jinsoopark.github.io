@@ -4,8 +4,12 @@
 
 /**
  * @typedef {{ code: string, name: string, active: number, allowed_models: string, daily_limit_usd: number,
- *             created_at: number, last_used_at: number | null, person_salt?: string | null }} CodeRow
+ *             created_at: number, last_used_at: number | null, person_salt?: string | null,
+ *             library_id?: string | null, library_max_bytes?: number | null }} CodeRow
  *   person_salt: absent (a database from before the column) or null for codes made before code deletion existed.
+ *   library_id: the code's own library (codes/<library_id>/ in the team repo, docs/CODE-LIBRARIES.md); absent or null until
+ *   the code first opens it (made lazily by ensureLibraryId) — codes made since code libraries get one at creation.
+ *   library_max_bytes: that library's size cap (null = the default, CODE_LIBRARY_MAX_BYTES).
  * @typedef {CodeRow & { today_usd: number, today_requests: number, global_today_usd: number }} CodeBudgetRow
  * @typedef {CodeRow & { today_usd: number, month_usd: number, total_usd: number, total_requests: number }} CodeUsageRow
  */
@@ -89,42 +93,95 @@ export async function codesWithUsage(db, { day, month, code = null }) {
   return results;
 }
 
-/** Set once this isolate has seen (or added) codes.person_salt. */
-let saltColumnReady = false;
+/** Set once this isolate has seen (or added) the optional columns of codes. */
+let codeColumnsReady = false;
+
+/** Columns of codes that a database made before them lacks (SQLite has no "ADD COLUMN IF NOT EXISTS"). */
+const OPTIONAL_CODE_COLUMNS = [
+  ['person_salt', 'TEXT'], // 2026-10-19, code deletion
+  ['library_id', 'TEXT'], // 2026-10-19, code libraries
+  ['library_max_bytes', 'INTEGER'], // 2026-10-19, code libraries
+];
 
 /**
- * Make sure codes.person_salt exists. schema.sql creates it in a new database, but SQLite (and D1) has no
- * "ADD COLUMN IF NOT EXISTS", so a database made before 2026-10-19 gets it here, on the first code created after the
- * update: PRAGMA table_info, then ALTER TABLE when it is missing (a parallel ALTER from another isolate that won the
- * race is fine). Only code creation needs the column — lookups read `c.*` and treat a missing salt as a code from
- * before salts — so requests with a code never pay for this check.
+ * Make sure codes has person_salt, library_id and library_max_bytes (and the unique index on library_id).
+ * schema.sql creates them in a new database, but SQLite (and D1) has no "ADD COLUMN IF NOT EXISTS", so a database
+ * made before 2026-10-19 gets them here, the first time they are needed after the update (creating a code, a code's
+ * first visit to its own library, an admin change of a library's cap): PRAGMA table_info, then ALTER TABLE for each
+ * missing column (a parallel ALTER from another isolate that won the race is fine). Lookups read `c.*` and treat a
+ * missing column as unset, so requests with a code never pay for this check.
  */
-export async function ensureSaltColumn(db) {
-  if (saltColumnReady) return;
-  const has = async () => {
-    const { results } = await db.prepare('PRAGMA table_info(codes)').all();
-    return results.some((c) => c.name === 'person_salt');
-  };
-  if (!(await has())) {
+export async function ensureCodeColumns(db) {
+  if (codeColumnsReady) return;
+  const columns = async () => new Set((await db.prepare('PRAGMA table_info(codes)').all()).results.map((c) => c.name));
+  const have = await columns();
+  for (const [name, type] of OPTIONAL_CODE_COLUMNS) {
+    if (have.has(name)) continue;
     try {
-      await db.prepare('ALTER TABLE codes ADD COLUMN person_salt TEXT').run();
+      await db.prepare(`ALTER TABLE codes ADD COLUMN ${name} ${type}`).run();
     } catch (err) {
-      if (!(await has())) throw err; // not "duplicate column": a real failure
+      if (!(await columns()).has(name)) throw err; // not "duplicate column": a real failure
     }
   }
-  saltColumnReady = true;
+  // Not in schema.sql: on an old database the column does not exist yet when schema.sql runs.
+  await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS codes_by_library ON codes (library_id)').run();
+  codeColumnsReady = true;
+}
+
+/** A fresh code library id: 16 hex (64 random bits); codes.library_id, the folder codes/<id>/ of the team repo. */
+export function newLibraryId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
- * Insert a new code with its person salt; false when a code with the same key already exists ("EICU2026" is taken
- * by "EICU-2026": the untargeted ON CONFLICT covers the primary key and the unique index codes_by_key).
+ * The code's library id, made now when it has none yet (a code from before code libraries, on its first visit to its
+ * library, or a code an admin operation needs one for). Concurrent first visits agree: the id is only set while NULL
+ * and then read back. @returns {Promise<string>}
  */
-export async function insertCode(db, { code, name, active, allowedModels, dailyLimitUsd, createdAt, personSalt }) {
-  await ensureSaltColumn(db);
+export async function ensureLibraryId(db, row) {
+  if (/^[0-9a-f]{16}$/.test(row?.library_id || '')) return row.library_id;
+  await ensureCodeColumns(db);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await db.prepare('UPDATE codes SET library_id = ?2 WHERE code = ?1 AND library_id IS NULL').bind(row.code, newLibraryId()).run();
+    } catch (err) {
+      if (!/UNIQUE/i.test(String(err?.message))) throw err; // a 2^-64 clash with another code: try another id
+      continue;
+    }
+    const got = await db.prepare('SELECT library_id FROM codes WHERE code = ?1').bind(row.code).first();
+    if (/^[0-9a-f]{16}$/.test(got?.library_id || '')) {
+      row.library_id = got.library_id;
+      return got.library_id;
+    }
+    if (!got) break;
+  }
+  throw new Error(`no library id for ${row.code}`);
+}
+
+/** Set a code's library size cap (null = the default); false when the code does not exist. */
+export async function setLibraryMaxBytes(db, code, maxBytes) {
+  await ensureCodeColumns(db);
+  const res = await db.prepare('UPDATE codes SET library_max_bytes = ?2 WHERE code = ?1').bind(code, maxBytes).run();
+  return res.meta.changes === 1;
+}
+
+/** Every code (all columns), oldest first: the split looks codes up by name. @returns {Promise<CodeRow[]>} */
+export async function allCodes(db) {
+  const { results } = await db.prepare('SELECT * FROM codes ORDER BY created_at, code').all();
+  return results;
+}
+
+/**
+ * Insert a new code with its person salt and its own library id; false when a code with the same key already exists
+ * ("EICU2026" is taken by "EICU-2026": the untargeted ON CONFLICT covers the primary key, the unique index
+ * codes_by_key and codes_by_library).
+ */
+export async function insertCode(db, { code, name, active, allowedModels, dailyLimitUsd, createdAt, personSalt, libraryId }) {
+  await ensureCodeColumns(db);
   const res = await db.prepare(`
-    INSERT INTO codes (code, name, active, allowed_models, daily_limit_usd, created_at, person_salt)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT DO NOTHING`)
-    .bind(code, name, active ? 1 : 0, JSON.stringify(allowedModels), dailyLimitUsd, createdAt, personSalt).run();
+    INSERT INTO codes (code, name, active, allowed_models, daily_limit_usd, created_at, person_salt, library_id)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT DO NOTHING`)
+    .bind(code, name, active ? 1 : 0, JSON.stringify(allowedModels), dailyLimitUsd, createdAt, personSalt, libraryId ?? null).run();
   return res.meta.changes === 1;
 }
 
@@ -209,8 +266,38 @@ export function parseModels(text) {
   return String(text || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-/** How long a tree created through the shared-library proxy may be committed (and how long rows are kept). */
-const SHARED_TREE_KEEP_MS = 60 * 60 * 1000;
+/**
+ * How long rows of shared_trees are kept: trees created through the shared-library proxy and the upload proofs
+ * (insertSharedBlob) — an upload proves possession of the bytes this long (js/store/sync.js re-uploads before).
+ */
+export const SHARED_TREE_KEEP_MS = 60 * 60 * 1000;
+/** Upload proofs share shared_trees with the trees: under lib 'blob:<lib>' (tree = the blob sha), never a tree key. */
+const blobProofLib = (lib) => `blob:${lib}`;
+
+/**
+ * Remember that `person` uploaded blob `sha` through library `lib` (POST git/blobs): the proof that lets them name
+ * the blob in a tree of that library (shared.js createTree) when the tree reaches another isolate than the upload.
+ * Pruned with the trees (insertSharedTree) after SHARED_TREE_KEEP_MS; removed with a deleted code's person ids.
+ */
+export async function insertSharedBlob(db, { lib, sha, person, now }) {
+  await db.prepare(`
+    INSERT INTO shared_trees (lib, tree, base, person, created_at) VALUES (?1, ?2, '', ?3, ?4)
+    ON CONFLICT (lib, tree, base, person) DO UPDATE SET created_at = excluded.created_at`)
+    .bind(blobProofLib(lib), sha, person, now).run();
+}
+
+/**
+ * Of `shas`, those `person` uploaded through library `lib` since `since` (insertSharedBlob). One query whatever the
+ * number of shas (a tree may name thousands): this person's proofs of the last hour, matched here.
+ * @returns {Promise<Set<string>>}
+ */
+export async function uploadedBlobs(db, { lib, shas, person, since }) {
+  const wanted = new Set(shas);
+  const { results } = await db.prepare(`
+    SELECT tree FROM shared_trees WHERE lib = ?1 AND person = ?2 AND created_at >= ?3 AND base = ''`)
+    .bind(blobProofLib(lib), person, since).all();
+  return new Set(results.map((r) => r.tree).filter((sha) => wanted.has(sha)));
+}
 
 /**
  * Remember that `person` created `tree` on top of `base` ('' = no base: the branch did not exist yet) through the

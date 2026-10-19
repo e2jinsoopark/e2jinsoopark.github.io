@@ -66,7 +66,9 @@ Nothing outside these was touched.
   - Debounce 3 s, at most 30 s after the first pending write, and immediately on `visibilitychange→hidden` / `pagehide`.
   - Normally one commit. A backlog over ~48 MB is split into several commits, so a failure does not throw away every upload.
   - PDFs go first and `library.json` last, so no device sees a paper before its PDF.
-  - A blob whose git sha already matches the remote is not uploaded. Uploaded shas are reused across conflict retries.
+  - A blob whose git sha already matches the remote is not uploaded. Uploaded shas are reused across conflict retries
+    for up to 45 min (`UPLOAD_REUSE_MS`: the relay accepts in a tree only blobs uploaded through that library in the
+    last hour), and forgotten when the conflict retries run out, so the next attempt uploads again.
   - `README.md` is added to a commit when missing.
   - Non-fast-forward → re-pull, merge, retry (4 attempts with jitter).
 - **Pull.** On start, on window focus or tab show (at most every 15 s), every 2 min (skipped while hidden unless writes are pending), on `online`, and before every push.
@@ -202,3 +204,84 @@ The 20 original browser scenarios run unchanged.
 5. **Test incident (fixed):** one run of the new proxy-mode unit test, before the fix, sent one `GET /repos/me/lib` with the
    fake token `good` to the real api.github.com (`apiBase: undefined` fell back to the constructor default). The default
    is gone in proxy mode, GitHub hosts are refused as a proxy, and both Node suites now block every non-loopback request.
+
+## Code libraries: each invite code's own library (2026-10-19)
+
+Owner decision: 전체 공용 서재 stays (lib `team`, the team repo's root); every invite code also gets its own library
+(lib `mine`), visible only to holders of that code, kept in the folder `codes/<libraryId>/` of the **same** team repo.
+Whole design, migration and deploy order: [`docs/CODE-LIBRARIES.md`](../CODE-LIBRARIES.md).
+
+**API**
+- `GitHubClient({ …, rootPrefix, label })`: `rootPrefix` (`''` or segments like `codes/<libraryId>/`, `ROOT_PREFIX_RE`)
+  makes `listTree()` return only the blobs under that folder, keyed relative to it (a truncated listing is walked level by
+  level only along the way down), and `commit()` take library paths and write `rootPrefix + path` (`..`, `.`, empty or
+  absolute segments → `config` error, no request). Head, trees, `base_tree` and parents stay the whole repo's; an empty
+  repo is still bootstrapped with README.md at the root; `target` gains `:<rootPrefix>`. `label` names the library in
+  proxy-mode fallback messages (default `공용 서재`). A bad prefix is a config error with no request.
+- `Library.open({ …, rootPrefix })`: validated; passed to the engine's client config (with `label`; no README ever).
+  A `carryOver` equal to the folder-less target is upgraded to this library's own target. Getter `rootPrefix`,
+  `repoPath(path)` (= rootPrefix + path).
+- `openSharedLibrary({ lib: 'mine', libraryId, … })` (`CODE_LIBRARY = 'mine'`): apiBase `<relay>/shared/mine/gh`,
+  `rootPrefix = codeLibraryPrefix(libraryId)` = `codes/<libraryId>/`, IndexedDB
+  `sharedDbName('mine', personId, libraryId)` = `paper-reader-shared-mine-<libraryId>-<personId>`, default label
+  `초대 코드 서재` (the app passes GET /shared's `name`, e.g. `봄당 서재`), `carryOver` = its own target. A missing or
+  malformed `libraryId` → Korean error before any request. `lib: 'team'` is unchanged.
+
+**Decisions**
+- **Paths stay the library's own everywhere in the app**: IndexedDB keys, `dataPath()`, `listPaths()`, `'remotechange'`
+  paths and commit-message descriptions are `library.json`, `papers/<id>/…`, `people/<id>/…`; only GitHubClient maps
+  to repo paths. reader-view / annotations / library-view need no path changes for the code library.
+- Copy works between **any two** libraries (내 서재, a code library, 전체 공용 서재) with the existing
+  `copyPaperTo` / `copyFolderTo` (PDF + translation, sha256 dedupe, never notes). A second instance on the same
+  database and id counts as the same library (refused).
+- Trash / restore unchanged (the code library tombstones like 공용 서재).
+- **Moves are honoured in merges** (`merge.js`): `mergeLibrary` with a base drops a record that the base has and one
+  side no longer has (`mergeRecords(…, { removals: true })`), even when the other side edited it meanwhile. Clients only
+  tombstone (and the relay refuses a push that drops a record), so such a record was moved out by the relay's
+  split-by-uploader (or a code-library move); without this, a device with an unsaved library edit, a stale tab, the
+  page-hide journal or the reader's progress counts would merge it back and push a broken record (files gone) to
+  전체 공용 서재. Base-less merges, tombstones and annotations are unchanged.
+- The commit summary never contains `{lib:` (the relay's library marker is neutralised as `{lib `).
+- **Empty-repo race fixed** (`sync.js`): the README bootstrap is decided on exactly the paths about to be uploaded
+  (inside `#push`), not on a pending count taken before; a write landing between the pull and the push used to upload
+  a blob into the empty repo → 409 → fatal "저장소가 비어 있습니다" (seen once in `run-shared.mjs`; regression test
+  `code-libs.test.mjs` › empty-repo-race fails on the old engine).
+
+**Fake relay** (`tests/store/fake-relay.mjs`, `startFakeRelay({ …, codeLibraries: true, codeMaxBytes })`; default off so
+other suites keep the old `GET /shared`): `addCode(code, name, { libraryId, maxBytes })`, `libraryIdOf(code)`,
+`codeFiles(code)`. `/shared/mine/gh` works under `codes/<libraryId>/` (allowlist mirrored, people/ isolation inside it,
+listings — recursive and level by level — and blob reads hide everything else); `/shared/<team>/gh` hides `codes/` and
+refuses writes there; commit messages `[name] {lib:<team|libraryId>} …`; `/shared/<lib>/activity` per library, marker
+removed (unmarked commits = team). In both modes now: library.json records may only be tombstoned (403), an existing
+paper.pdf cannot change (403), blobs are served only when visible / listed / uploaded by the caller (else 404),
+`base_tree` must be the head's tree or a head / proxy-made tree of the last 10 min (409).
+
+**For the relay builder / integrator** (all four confirmed against the real Worker at integration:
+`relay/test/shared-client.test.mjs` › rootPrefix through /shared/mine/gh, `tests/code-libs/run.mjs`)
+1. The client sends library-relative paths through `/shared/mine/gh` **already prefixed** with `codes/<libraryId>/`
+   (tree entry paths in `POST git/trees`), uses the whole repo's head tree as `base_tree`, and reads the whole-repo
+   recursive listing of the head (expects it filtered to `codes`, `codes/<libraryId>` and below).
+2. A code library in an **empty** team repo bootstraps it with `PUT contents/README.md` through `/shared/mine/gh` — allow
+   it there as on `/shared/team/gh` (only while the repo is empty), or the first push of a fresh deployment fails.
+3. The client never writes `{lib:`; the Worker adds the marker after `[name] `.
+4. `GET /shared` must return `libraryId` whenever a `mine` library is listed (the store refuses to open it without one).
+
+**Known limits**
+- Notes of a moved paper that were **not yet synced** when the split ran (`people/<me>/papers/<id>/…` dirty on a device)
+  are pushed to the old place (전체 공용 서재's `people/<me>/`), not into the code library; the code library has the
+  version from before. An edit to a moved record made during the split is dropped with the record.
+- Every library's commit moves the one branch, so engines of other libraries re-pull (one filtered listing) and
+  concurrent pushes across libraries retry on 409/422 as within one library.
+- (Fixed at integration) `features/annotations.js` reloaded on `remotechange` only for `papers/<id>/annotations.json`;
+  it now uses `ctx.library.dataPath(id, 'annotations')` (`people/<me>/…` in 공용 서재 and code libraries), so a highlight
+  from another device of the same code shows without reopening the paper.
+
+**Tests**
+```
+node tests/store/unit.test.mjs        # 28: + rootPrefix client (listing, commit, target, truncated walk, refusals), merge removals
+node tests/store/code-libs.test.mjs   # 11 (Node): rootPrefix, lib 'mine', isolation, cross-library 409, activity, copy ×4,
+                                      #    휴지통 + relay refusals, truncated listing, size cap, post-split production shape, empty-repo race
+node tests/store/run-code-libs.mjs    # 6 (Edge + WebKit, port 8241): three libraries in one page, copy across all three,
+                                      #    same code on 2 browsers, other code, 휴지통, reload journals, iPhone engine
+```
+Results: `C:/Users/dindoo/Projects/pr-tools/out/code-libs/` (`store-node.results.json`, `store-browser.results.json`).

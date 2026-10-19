@@ -4,15 +4,20 @@
 const MAX_AI_CHAT = 200;
 const MAX_AI_EXPLANATIONS = 100;
 
-/** library.json: folders and papers merge per item id. */
+/**
+ * library.json: folders and papers merge per item id. Clients only tombstone (they never drop a record, and the relay
+ * refuses a push that does), so a record that the base has and one side no longer has was moved out of this library
+ * by the relay (an admin splitting 전체 공용 서재 into the uploaders' code libraries, 2026-10-19). It stays removed,
+ * even when the other side edited it meanwhile: the paper lives in the other library now, its files are gone here.
+ */
 export function mergeLibrary(local, remote, base = null) {
   return {
     ...remote,
     ...local,
     version: 1,
     updatedAt: newerTime(local.updatedAt, remote.updatedAt),
-    folders: mergeRecords(local.folders, remote.folders, base?.folders),
-    papers: mergeRecords(local.papers, remote.papers, base?.papers),
+    folders: mergeRecords(local.folders, remote.folders, base?.folders, { removals: true }),
+    papers: mergeRecords(local.papers, remote.papers, base?.papers, { removals: true }),
   };
 }
 
@@ -124,25 +129,30 @@ function unionById(local, remote, { stamp, after = 0, cap = Infinity }) {
  * Without a base version of an item the newer `updatedAt` wins (a tombstone wins a tie, then local).
  * With one, fields changed on only one side are kept from that side (so a rename on one device and
  * a move on another both survive), and fields changed on both sides take the newer item's value.
+ * `removals` (with a base): an item the base has and one side no longer has was removed on purpose and is
+ * dropped from the result (library.json only — see mergeLibrary). Without it, or without a base, an item present
+ * on one side only is kept, as always.
  */
-export function mergeRecords(local, remote, base = null) {
+export function mergeRecords(local, remote, base = null, { removals = false } = {}) {
   const valid = (x) => x && typeof x === 'object' && x.id != null;
   const l = Array.isArray(local) ? local.filter(valid) : [];
   const r = Array.isArray(remote) ? remote.filter(valid) : [];
   const remoteById = new Map(r.map((x) => [x.id, x]));
   const baseById = Array.isArray(base) ? new Map(base.filter(valid).map((x) => [x.id, x])) : null;
+  const removed = (item) => Boolean(removals && baseById?.has(item.id));
   const out = [];
   const seen = new Set();
   for (const item of l) {
     if (seen.has(item.id)) continue;
     seen.add(item.id);
     const other = remoteById.get(item.id);
-    out.push(other ? mergeItem(item, other, baseById?.get(item.id) ?? null) : item);
+    if (other) out.push(mergeItem(item, other, baseById?.get(item.id) ?? null));
+    else if (!removed(item)) out.push(item);
   }
   for (const item of r) {
     if (seen.has(item.id)) continue;
     seen.add(item.id);
-    out.push(item);
+    if (!removed(item)) out.push(item);
   }
   return out;
 }

@@ -216,13 +216,14 @@ async function firstScreen(page) {
   await page.waitForSelector('.start:not(.is-quiet) .start-input', { timeout: 30000 });
 }
 async function sharedReady(page) {
+  await page.waitForSelector('.lib-sec[data-lib="shared:mine"] .lib-sec-body .lib-nav-heading', { timeout: 30000 });
   await page.waitForSelector('.lib-sec[data-lib="shared:team"] .lib-sec-body .lib-nav-heading', { timeout: 30000 });
 }
-/** 공용 서재 is the open place (an invitee's home). */
+/** The code's own library ('<name> 서재', #/s/mine) is the open place — an invitee's home since code libraries. */
 async function inSharedLibrary(page) {
   await page.waitForSelector('.library', { timeout: 30000 });
   await sharedReady(page);
-  await page.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 15000 });
+  await page.waitForFunction(() => location.hash === '#/s/mine', null, { timeout: 15000 });
 }
 /** Submit the first screen and wait for its answer: the library, or an error line with 시작 enabled again. */
 async function submitAndWait(page) {
@@ -338,7 +339,7 @@ try {
     assertEqual(me(log).map((r) => r.status), [200], '/relay/me answers');
     assert(log.some((r) => r.path === '/shared' && r.status === 200), `GET /shared: ${JSON.stringify(log)}`);
     how += `; input “${value}”`;
-    return `${how}; 시작 → #/s/team (공용 서재) from the real Worker; stored ${s.relay.code} (${s.relay.name}); Worker calls ${log.map((r) => `${r.method} ${r.path} ${r.status}`).slice(0, 4).join(', ')}…`;
+    return `${how}; 시작 → #/s/mine (the code’s own 서재) from the real Worker; stored ${s.relay.code} (${s.relay.name}); Worker calls ${log.map((r) => `${r.method} ${r.path} ${r.status}`).slice(0, 4).join(', ')}…`;
   });
 
   if (wk) {
@@ -372,7 +373,7 @@ try {
       assertEqual(me(log).map((r) => r.status), [200], '/relay/me answers');
       assertEqual(install, ['header'], 'install button');
       assertEqual([new URL(state.saved).hash, tip, manifestAfter], [`#/join/${CUSTOM}`, '공유 → 홈 화면에 추가', 0], 'after 홈 화면에 추가');
-      return `no <link rel=manifest>, apple-mobile-web-app-capable=yes, title 갈피, icon-180; typed eicu2-2026 → stored ${s.relay.code} (${s.relay.name}) → #/s/team; 홈 화면에 추가 → address ${new URL(state.saved).hash}, popover “${tip}”, still no manifest`;
+      return `no <link rel=manifest>, apple-mobile-web-app-capable=yes, title 갈피, icon-180; typed eicu2-2026 → stored ${s.relay.code} (${s.relay.name}) → #/s/mine; 홈 화면에 추가 → address ${new URL(state.saved).hash}, popover “${tip}”, still no manifest`;
     });
 
     await step('iPhone home-screen app (new storage, standalone) launched at #/join/EICU2-2026 twice: silent registration → 공용 서재, then straight in; never a form or a welcome', async () => {
@@ -390,10 +391,10 @@ try {
         await shot(page, `worker-e2e-06-home-screen-launch-${n}`);
       }
       const s = await stored(page);
-      assertEqual(launches[0], { seen: { start: true, startForm: false, welcome: false }, me: [200], hash: '#/s/team', install: [] }, 'first launch (quiet registration)');
-      assertEqual(launches[1], { seen: { start: false, startForm: false, welcome: false }, me: [], hash: '#/s/team', install: [] }, 'second launch');
+      assertEqual(launches[0], { seen: { start: true, startForm: false, welcome: false }, me: [200], hash: '#/s/mine', install: [] }, 'first launch (quiet registration)');
+      assertEqual(launches[1], { seen: { start: false, startForm: false, welcome: false }, me: [], hash: '#/s/mine', install: [] }, 'second launch');
       assertEqual([s.provider, s.relay?.code], ['relay', CUSTOM], 'stored in the home-screen app');
-      return `launch 1: quiet screen only (mark + spinner), 1 × /relay/me 200 → #/s/team; launch 2: no screen, 0 requests → #/s/team; no install button in the app; stored ${s.relay.code}`;
+      return `launch 1: quiet screen only (mark + spinner), 1 × /relay/me 200 → #/s/mine; launch 2: no screen, 0 requests → #/s/mine; no install button in the app; stored ${s.relay.code}`;
     });
   } else {
     results.push({ name: 'iPhone (WebKit) steps', result: 'skipped', evidence: 'WebKit is not installed' });
@@ -426,7 +427,7 @@ try {
     assertEqual(manifest, [`${APP}/manifest.webmanifest`], 'manifest link');
     assertEqual([m.status, m.json.start_url, m.json.display], [200, './', 'standalone'], 'manifest');
     assertEqual([before, prevented, popovers], [['header'], true, 0], 'install button, prompt kept (no mini-infobar), no hint after the prompt');
-    return `#/join/${CUSTOM} → #/s/team; <link rel=manifest> ${manifest[0].replace(APP, '')} (start_url ${m.json.start_url}, ${m.json.display}); button in the header; beforeinstallprompt preventDefault'ed → click → prompt() once → accepted → button gone`;
+    return `#/join/${CUSTOM} → #/s/mine; <link rel=manifest> ${manifest[0].replace(APP, '')} (start_url ${m.json.start_url}, ${m.json.display}); button in the header; beforeinstallprompt preventDefault'ed → click → prompt() once → accepted → button gone`;
   });
 
   await step('limiter: 21 wrong codes from one IP → the 21st is the Worker\'s 429 line; EICU2-2026 still opens from another IP; the same IP: custom refused, generated code works', async () => {

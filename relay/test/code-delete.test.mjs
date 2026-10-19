@@ -165,7 +165,8 @@ export const tests = [
       const now = '2032-11-03T10:00:00+09:00';
       await treeVia(gh, A, `people/${A.id}/papers/p1/ai.json`);
       await treeVia(gh, B, `people/${B.id}/papers/p1/ai.json`);
-      assert.equal((await d1Rows('SELECT COUNT(*) AS n FROM shared_trees WHERE person = ?', A.id))[0].n, 1);
+      // One tree, and the proof of the blob uploaded for it (lib 'blob:team': what lets a tree name it).
+      assert.deepEqual((await d1Rows('SELECT lib FROM shared_trees WHERE person = ? ORDER BY lib', A.id)).map((r) => r.lib), ['blob:team', 'team']);
       const sent = await sendMessage({ code: A.code, now, headers: { 'cf-connecting-ip': IP } });
       assert.equal(sent.status, 200, sent.text);
       const booked = await waitForRequests(A.code, 1, { now });
@@ -253,7 +254,7 @@ export const tests = [
     },
   },
   {
-    name: 'GitHub down → 502 (Korean), the code stays as it was (active, works, notes kept); a failure in the 2nd library → 502, the retry finishes',
+    name: 'GitHub down → 502 (Korean), the code stays as it was (active, works, notes kept); a failure in the last library (the host, done last) → 502, the retry finishes',
     fn: async ({ gh }) => {
       const D = await person('최다운');
       const off = await person('정중지');
@@ -281,29 +282,30 @@ export const tests = [
       assert.equal(under(shaMap(gh, TEAM), D.id).length, 2);
       assert.equal(gh.commits(...TEAM).length, commits);
 
-      // GitHub fails on the second library's commit: the first library is cleaned, the code is kept; the retry
-      // cleans the second one only (the first has nothing left: no second commit there).
+      // GitHub fails on the last library's commit (the repo that holds the code libraries goes after every other
+      // library): the other library is cleaned, the code is kept; the retry cleans the last one only (the other has
+      // nothing left: no second commit there).
       const E = await person('한부분');
       gh.commitFiles(...TEAM, notesOf(E.id), { message: 'seed E team' });
       gh.commitFiles(...SMALL, notesOf(E.id), { message: 'seed E small' });
-      const teamCommits = gh.commits(...TEAM).length;
-      gh.failNext({ method: 'POST', path: /paper-small-library\/git\/commits$/, status: 500 });
+      const smallCommits = gh.commits(...SMALL).length;
+      gh.failNext({ method: 'POST', path: /paper-team-library\/git\/commits$/, status: 500 });
       const partial = await del(E.code);
       assert.equal(partial.status, 502, partial.text);
-      assert.equal(under(shaMap(gh, TEAM), E.id).length, 0, 'first library cleaned');
-      assert.equal(under(shaMap(gh, SMALL), E.id).length, 2, 'second library not yet');
+      assert.equal(under(shaMap(gh, SMALL), E.id).length, 0, 'the other library cleaned first');
+      assert.equal(under(shaMap(gh, TEAM), E.id).length, 2, 'the host library (last) not yet');
       assert.equal((await list()).json.codes.find((c) => c.code === E.code)?.active, true);
       const retry = await del(E.code);
       assert.equal(retry.status, 200, retry.text);
       assert.deepEqual(retry.json, { deleted: true, purgedFiles: 2 });
-      assert.equal(under(shaMap(gh, SMALL), E.id).length, 0);
-      assert.equal(gh.commits(...TEAM).length, teamCommits + 1, 'team: only the first attempt\'s commit');
+      assert.equal(under(shaMap(gh, TEAM), E.id).length, 0);
+      assert.equal(gh.commits(...SMALL).length, smallCommits + 1, 'small: only the first attempt\'s commit');
 
       const finish = await del(D.code);
       assert.equal(finish.status, 200, finish.text);
       assert.deepEqual(finish.json, { deleted: true, purgedFiles: 2 });
       assert.equal((await del(off.code)).status, 200);
-      return `down → 502 "${down.json.error.message}"; D active again + /relay/me 200; partial failure → 502, retry → purgedFiles 2 in small only`;
+      return `down → 502 "${down.json.error.message}"; D active again + /relay/me 200; partial failure (host library, done last) → 502, retry → purgedFiles 2 in team only`;
     },
   },
   {

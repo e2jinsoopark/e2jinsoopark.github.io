@@ -8,6 +8,9 @@ User-facing explanation (Korean): [`README.md`](../../README.md) › 공용 서�
 
 There is **one** 공용 서재 per server, not one per invite code: every active code opens the same library ('team').
 What belongs to a code (= a person) is `people/<personId>/`: that person's highlights, notes and AI results.
+**Since 2026-10-19 each invite code also has its own library** ("<code name> 서재", `codes/<libraryId>/` in the same repo,
+seen only by that code's holders) and this library is called **전체 공용 서재**; invitees land in their code library.
+See [`docs/CODE-LIBRARIES.md`](../CODE-LIBRARIES.md) — the notes below describe the team library as first built.
 
 ## Architecture
 
@@ -154,6 +157,7 @@ links. Never set `TEST_MODE` in production.
 
 | Command | Ports | What |
 |---|---|---|
+| `node tests/code-libs/run.mjs [--headed]` | 8243–8245, 8787 | Code libraries, the split migration and code deletion with move/delete, real app + real Worker ([`CODE-LIBRARIES.md`](../CODE-LIBRARIES.md) §7) |
 | `node tests/shared-e2e/run.mjs [--headed]` | 8195 (site), 8196 (fake GitHub), 8787, 8788, 9339 | **Real app + real Worker** (`wrangler dev`, production vars + `GITHUB_API_BASE` → fake GitHub serving the personal and the team repo, each with its own token) + fake Anthropic; scenario below |
 | `node tests/shared-ui/run.mjs` | 8194 | UI details against `tests/store/fake-relay.mjs` (route-intercepted `https://relay.test`), mock AI |
 | `node tests/store/library.test.mjs` / `run-shared.mjs` | – / 8193 | store: several libraries, 휴지통, copy, through the fake relay |
@@ -165,7 +169,9 @@ after the other. None of them calls a paid API or contacts the real GitHub or th
 Results and screenshots: `C:/Users/dindoo/Projects/pr-tools/out/shared-e2e/` (`results.json` also holds every browser →
 Worker request with its status).
 
-`tests/shared-e2e/run.mjs` scenario (17 checks; any console error, page error, CSP violation, native dialog or request
+`tests/shared-e2e/run.mjs` scenario (since code libraries: the owner's sidebar also has '박진수 서재', the copy goes
+through 다른 서재로 복사… → 전체 공용 서재, invitees land in their own '<name> 서재' and go on to 전체 공용 서재, 내 서재 is hidden
+for them while empty, and stored commit messages carry `{lib:team}`; 17 checks; any console error, page error, CSP violation, native dialog or request
 outside the app / Worker / jsDelivr SDK / fake GitHub fails the step):
 1. Owner, 설정 → 초대 코드 관리: codes for 김간호사, 이간호사 and the owner (박진수), checked in D1.
 2. Owner opens their own join link: home stays 내 서재 (GitHub sync), the sidebar adds an empty 공용 서재;
@@ -218,6 +224,20 @@ regression tests in `relay/test/shared*.test.mjs` (see SHARED.md §5 for the enf
 - **File-count cap** (`maxFiles`, default 50 000): stops filling the repo (and GitHub's tree) cheaply with tiny files.
 - **Purge is history-proof** (`confirmedPurgeIds` + `commitBefore`): a client-written, back-dated `deletedAt` no longer
   rushes permanent deletion; only tombstones already 30 days old in an actually-old commit are purged.
+
+Second pass, on code libraries (isolation between invite codes; details and the full attack table in
+[`CODE-LIBRARIES.md`](../CODE-LIBRARIES.md) §7):
+
+- **Blobs named in a tree are proven** (`createTree` + `unprovenBlobs`, D1 `shared_trees` rows `lib = 'blob:<lib>'` written
+  by `createBlob`): GitHub accepts any blob of the repo in a tree, so a code could learn whether another code's library
+  (or the history) held a PDF whose bytes it could guess (201 vs 422), and take in another library's file by its sha.
+  Now a tree may name only blobs the caller uploaded through that library in the last hour or can already see there;
+  otherwise one 409 for all, before GitHub or the Worker looks at the blob. The app re-uploads after 45 min and when its
+  conflict retries run out (`js/store/sync.js`).
+- **Commit lines of codes named with emoji** (`commitLines`): `[name]` was read up to 60 UTF-16 units, so a name of
+  31–40 emoji turned that code's library lines into 전체 공용 서재's (its titles in everyone's 최근 활동). Now up to 200.
+- **Code deletion with a library does the host repo last** (`removeCodeData`), so a failure in another library leaves
+  the code (switched back on) with its library.
 
 Refuted (no change): invite codes / `TEAM_GITHUB_TOKEN` / `ADMIN_TOKEN` never cross (leak tests pass); route, path,
 encoding, lookalike, symlink/submodule and traversal rules already reject escalation; force-push / history rewrite are

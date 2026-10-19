@@ -337,7 +337,9 @@ export function installAnnotationMarks(ctx, session, { signal }) {
   if (store.loaded) push();
   else store.ready.then(() => { if (!signal.aborted) push(); });
 
-  const path = `papers/${ctx.paper.id}/annotations.json`;
+  // The library's own path of this person's annotations: papers/<id>/… in 내 서재, people/<me>/papers/<id>/… in a
+  // library behind the relay (the code's own library, 전체 공용 서재).
+  const path = ctx.library?.dataPath?.(ctx.paper.id, 'annotations') ?? `papers/${ctx.paper.id}/annotations.json`;
   ctx.library?.sync?.addEventListener?.('remotechange', (e) => {
     if (e.detail?.paths?.includes(path)) store.reload();
   }, { signal });

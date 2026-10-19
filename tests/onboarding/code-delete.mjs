@@ -189,6 +189,7 @@ try {
       return {
         title: m.querySelector('.modal-title').textContent,
         lines: [...m.querySelectorAll('.modal-body p')].map((p) => p.textContent),
+        choices: [...m.querySelectorAll('.relay-lib-choice .radio-card')].map((c) => `${c.querySelector('input').checked ? '●' : '○'} ${c.querySelector('.radio-title').textContent}`),
         buttons: [...m.querySelectorAll('.modal-footer .btn')].map((b) => [b.textContent.trim(), b.className.includes('btn-danger')]),
         focused: document.activeElement?.textContent?.trim(),
       };
@@ -196,7 +197,9 @@ try {
     const box = await page.locator('.modal').boundingBox();
     await shot(page, 'delete-confirm-modal', { clip: { x: Math.max(0, box.x - 160), y: Math.max(0, box.y - 120), width: box.width + 320, height: box.height + 240 } });
     assertEqual(modal.title, '‘홍길동’ 코드를 삭제할까요?', 'modal title');
-    assertEqual(modal.lines, ['이 코드로는 더 이상 들어올 수 없고, 이 코드로 남긴 하이라이트·메모·AI 기록도 함께 지워집니다.', '공용 서재의 논문·폴더·번역과 사용 비용 기록은 그대로 남습니다.'], 'modal lines');
+    assertEqual(modal.lines, ['이 코드로는 더 이상 들어올 수 없고, 전체 공용 서재에 남긴 하이라이트·메모·AI 기록도 지워집니다.', '전체 공용 서재의 논문·폴더·번역과 사용 비용 기록은 그대로 남습니다.'], 'modal lines');
+    // The code's own library (code libraries, 2026-10-19): 서재도 함께 삭제 (default) or 다른 코드로 옮기기.
+    assertEqual(modal.choices, ['● 서재도 함께 삭제', '○ 다른 코드로 옮기기'], 'library choices');
     assertEqual(modal.buttons, [['취소', false], ['삭제', true]], 'modal buttons');
     assertEqual(modal.focused, '취소', 'focus (Enter must not delete)');
 
@@ -228,14 +231,15 @@ try {
     await shot(page.locator('#set-invites'), 'admin-list-deleted-total');
     assert(actions.every((a) => a.includes('삭제') && a.indexOf('삭제') === a.length - 1 && (a.includes('중지') || a.includes('다시 사용'))), `row actions ${JSON.stringify(actions)}`);
     assertEqual(before.deletedRow, 0, '삭제된 코드 row while nothing is deleted');
-    assertEqual(dels.map((c) => [c.path, c.headers.authorization]), [[`/relay/admin/codes/${CODES.haiku}`, `Bearer ${ADMIN_TOKEN}`], [`/relay/admin/codes/${CODES.haiku}`, `Bearer ${ADMIN_TOKEN}`]], 'DELETE requests (502, then 200)');
+    assertEqual(dels.map((c) => [c.path, c.search, c.headers.authorization]), [[`/relay/admin/codes/${CODES.haiku}`, '?library=delete', `Bearer ${ADMIN_TOKEN}`], [`/relay/admin/codes/${CODES.haiku}`, '?library=delete', `Bearer ${ADMIN_TOKEN}`]], 'DELETE requests (502, then 200)');
     assert(!after.rows.includes(CODES.haiku), `row still listed: ${after.rows}`);
     assertEqual(after.month, before.month, 'this month total keeps the deleted code');
     assertEqual(after.deletedRow, '삭제된 코드 이번 달 $1.20', '삭제된 코드 row');
     assertEqual(await overflow(page), [], 'horizontal overflow');
 
     // An older Worker without DELETE (405) and a code someone already deleted (404).
-    await d.ctx.route(`${RELAY_URL}/relay/admin/codes/${CODES.sonnet}`, (r) => (r.request().method() === 'DELETE'
+    // (The DELETE carries ?library=delete since code libraries: match the path with any query.)
+    await d.ctx.route((u) => u.origin === RELAY_URL && u.pathname === `/relay/admin/codes/${CODES.sonnet}`, (r) => (r.request().method() === 'DELETE'
       ? r.fulfill({ status: 405, contentType: 'application/json', headers: { 'access-control-allow-origin': ORIGIN }, body: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: '이 주소에서는 DELETE 요청을 쓸 수 없습니다.' } }) })
       : r.fallback()));
     await deleteBtn(page, CODES.sonnet).click();

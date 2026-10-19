@@ -102,7 +102,8 @@ export const tests = [
         { path: 'library.json', text: libraryJson([{ id: 'p_lu', title: 'Lu 2025', folderId: 'f1' }], [{ id: 'f1', name: '중환자' }]) },
       ], '논문 추가: Lu 2025', { parent: null });
       const commits = gh.commits(...TEAM);
-      assert.deepEqual(commits.map((c) => c.message), ['[김민지] 논문 추가: Lu 2025', '[김민지] 논문 리더 데이터 저장소 시작']);
+      // Stored with the library marker ({lib:team}, docs/SHARED.md §6); the app never shows it.
+      assert.deepEqual(commits.map((c) => c.message), ['[김민지] {lib:team} 논문 추가: Lu 2025', '[김민지] {lib:team} 논문 리더 데이터 저장소 시작']);
       assert.equal(commits[0].sha, r1.commitSha);
 
       const full = await b.checkAccess();
@@ -253,7 +254,7 @@ export const tests = [
       assert.deepEqual(r.paths, ['README.md', 'library.json', 'papers/p_lu/paper.pdf', `people/${A.id}/papers/p_lu/ai.json`]);
       assert.equal(headSha(gh), r.second);
       assert.deepEqual(gh.commits(...TEAM).map((c) => c.message),
-        ['[김민지] 브라우저에서 메모', '[김민지] 브라우저에서 논문 추가', '[김민지] 논문 리더 데이터 저장소 시작']);
+        ['[김민지] {lib:team} 브라우저에서 메모', '[김민지] {lib:team} 브라우저에서 논문 추가', '[김민지] {lib:team} 논문 리더 데이터 저장소 시작']);
       const refGets = gh.log.slice(mark).filter((e) => e.method === 'GET' && e.path.endsWith('/git/ref/heads/main'));
       assert.ok(refGets.some((e) => e.status === 304 && e.headers['if-none-match']), 'the page sent If-None-Match (ETag exposed) and got 304');
       assert.ok(gh.log.slice(mark).some((e) => e.method === 'PUT' && e.status === 201), 'README bootstrap went through');
@@ -262,6 +263,37 @@ export const tests = [
       assert.ok(!([...treeB.keys()].some((p) => p.startsWith('people/'))));
       assert.deepEqual(errors.filter((e) => !/the server responded with a status of 40[49]/.test(e)), []);
       return `in Edge: bootstrap + 2 commits, 304 on the 2nd getHead, PDF ${r.size} B read back; console: ${errors.length} expected 404/409 lines`;
+    },
+  },
+  {
+    name: 'GitHubClient with rootPrefix through /shared/mine/gh (a code library, docs/CODE-LIBRARIES.md): an empty repo is bootstrapped at the root, files land under codes/<id>/, listings are relative; another code sees none of it',
+    fn: async ({ gh, A, B }) => {
+      gh.createRepo(...TEAM, { private: true });
+      const libA = (await call('/shared', { headers: { authorization: `Bearer ${A.code}` } })).json.libraryId;
+      assert.match(libA || '', /^[0-9a-f]{16}$/);
+      const root = `codes/${libA}/`;
+      const mine = (who, prefix) => new GitHubClient({
+        owner: 'team', repo: 'library', branch: 'main', token: who.code, apiBase: `${WORKER}/shared/mine/gh`, proxy: true,
+        rateLimitMaxWaitMs: 0, rootPrefix: prefix,
+      });
+      const a = mine(A, root);
+      const r = await a.commit([
+        { path: 'papers/p_own/paper.pdf', bytes: new Uint8Array(fs.readFileSync(FIXTURE)) },
+        { path: `people/${A.id}/papers/p_own/annotations.json`, text: '{"version":1,"items":[]}' },
+        { path: 'library.json', text: libraryJson([{ id: 'p_own', title: '내 코드 서재 논문' }]) },
+      ], '논문 추가', { parent: null });
+      const files = [...gh.files(...TEAM).keys()].sort();
+      assert.deepEqual(files, ['README.md', `${root}library.json`, `${root}papers/p_own/paper.pdf`, `${root}people/${A.id}/papers/p_own/annotations.json`]);
+      assert.deepEqual(gh.commits(...TEAM).map((c) => c.message), [`[김민지] {lib:${libA}} 논문 추가`, `[김민지] {lib:${libA}} 논문 리더 데이터 저장소 시작`]);
+      const h = await a.getHead();
+      assert.equal(h.commitSha, r.commitSha);
+      assert.deepEqual([...(await a.listTree(h.treeSha)).keys()].sort(), ['library.json', 'papers/p_own/paper.pdf', `people/${A.id}/papers/p_own/annotations.json`]);
+      // B: its own code library (another prefix) and 전체 공용 서재 are both empty of A's files.
+      const libB = (await call('/shared', { headers: { authorization: `Bearer ${B.code}` } })).json.libraryId;
+      const hb = await mine(B, `codes/${libB}/`).getHead();
+      assert.deepEqual([...(await mine(B, `codes/${libB}/`).listTree(hb.treeSha)).keys()], []);
+      assert.deepEqual([...(await client(B).listTree(hb.treeSha)).keys()], ['README.md']);
+      return `bootstrap through /shared/mine/gh → README.md at the root, 3 files under ${root}; commits “${gh.commits(...TEAM)[0].message}”; B lists nothing of it (own library, team)`;
     },
   },
   {

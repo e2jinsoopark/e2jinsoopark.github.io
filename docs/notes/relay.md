@@ -85,9 +85,10 @@ is unaffected because its relay (`https://relay.test`) is route-intercepted too.
 | `node tests/relay-e2e/run.mjs [--headed]` | 8160, 8787, 8788 | Real app + real Worker (`wrangler dev`, fresh local D1) + fake Anthropic (`tests/relay-e2e/fake-anthropic.mjs`) |
 | `node tests/onboarding/worker-e2e.mjs [--headed]` | 8222–8224, 8787 | First screen, custom codes, 홈 화면에 추가 and the failed-attempt limiter with the real Worker, Edge + WebKit (iPhone 15) ([`onboarding.md`](onboarding.md)) |
 | `node tests/code-delete/run.mjs [--headed]` | 8232–8234, 8787 | 초대 코드 삭제 with the real Worker on a database shaped like the deployed one, fake GitHub + fake Anthropic (below) |
+| `node tests/code-libs/run.mjs [--headed]` | 8243–8245, 8787 | 코드별 서재: the split migration and deleting a code with its library deleted or moved, real Worker ([`docs/CODE-LIBRARIES.md`](../CODE-LIBRARIES.md) §7) |
 
-`relay/test`, `tests/relay-e2e`, `tests/shared-e2e`, `tests/onboarding/worker-e2e.mjs` and `tests/code-delete/run.mjs`
-all start `wrangler dev` on 8787 (inspector 9339): run them one after the other. `relay/test` runs on a migrated
+`relay/test`, `tests/relay-e2e`, `tests/shared-e2e`, `tests/onboarding/worker-e2e.mjs`, `tests/code-delete/run.mjs` and
+`tests/code-libs/run.mjs` all start `wrangler dev` on 8787 (inspector 9339): run them one after the other. `relay/test` runs on a migrated
 database (`test/legacy-schema.sql` = the schema before code deletion with two old codes, then `schema.sql` twice; the
 `code-delete` suite covers deletion, salts and the migration) and reads the Worker's D1 file read-only with
 `node:sqlite` (Node 22.5+; one ExperimentalWarning per run). Neither calls the real API;
@@ -137,7 +138,8 @@ old codes, then `schema.sql` twice), production vars, fake GitHub (team repo) an
 4. Owner 삭제 → the dialog (title, two lines) → GitHub refuses the deletion's tree once → the Worker's 502 text as the
    toast; dialog and row stay, the code is active again in D1, `/relay/me` 200, the holder's files are still there.
 5. 삭제 again → `{ deleted: true, purgedFiles: 2 }`, row gone, "삭제했습니다."; exactly one new commit
-   `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` deleting the holder's 2 files; paper.pdf, translation.json and 김간호사's
+   `[관리자] {lib:team} 초대 코드 삭제에 따라 개인 기록 정리` (library marker since code libraries,
+   `docs/CODE-LIBRARIES.md`) deleting the holder's 2 files; paper.pdf, translation.json and 김간호사's
    file kept; D1: no code row, no `shared_trees` of the holder (김간호사's kept), usage renamed `deleted:<ISO>:EICU2-TEST`;
    오늘 전체 / 이번 달 전체 unchanged; row "삭제된 코드 이번 달 $0.02" = the holder's month.
 6. The holder's open app (in 공용 서재): its next request (지금 동기화) → the proxy's 401 → the first screen with

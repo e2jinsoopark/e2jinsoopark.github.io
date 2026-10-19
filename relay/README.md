@@ -121,7 +121,7 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
    ```
    curl -H "Authorization: Bearer PR-XXXX-XXXX" https://paper-relay.<계정>.workers.dev/shared
    ```
-   `{"libraries":[{"id":"team","name":"공용 서재"}],"personId":"…","name":"…"}`가 나오면 준비된 것입니다. 저장소가 비어 있어도 됩니다 — 첫 사용자가 저장할 때 `README.md`를 만들고 시작합니다.
+   `{"libraries":[{"id":"mine","name":"… 서재","kind":"code"},{"id":"team","name":"전체 공용 서재","kind":"team"}],"personId":"…","name":"…","libraryId":"…"}`가 나오면 준비된 것입니다. 저장소가 비어 있어도 됩니다 — 첫 사용자가 저장할 때 `README.md`를 만들고 시작합니다.
 
 **토큰 바꾸기**: GitHub에서 새 토큰을 같은 조건으로 만들고 `npx wrangler secret put TEAM_GITHUB_TOKEN`으로 넣은 뒤(바로 적용) 옛 토큰을 GitHub에서 삭제합니다. 토큰이 만료되거나 틀리면 서버는 502와 함께 "공용 서재 서버의 GitHub 연결에 문제가 있습니다(…TEAM_GITHUB_TOKEN…). 관리자에게 알려 주세요."를 돌려주고, 앱은 잠시 뒤 자동으로 다시 시도합니다 — 동료의 초대 코드는 그대로 둬도 됩니다.
 
@@ -133,17 +133,17 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 - **쓸 수 있는 경로**: `library.json`, `papers/<id>/paper.pdf`(새 PDF만 — 이미 있는 PDF는 바꿀 수 없음), `papers/<id>/translation.json`, `people/<나>/papers/<id>/annotations.json`·`ai.json`. `<id>`는 영문·숫자·`_`·`-` 1~64자.
 - **지울 수 있는 것**: 내 `people/<나>/` 파일만. 논문·번역은 지워지지 않고 앱의 휴지통(묘비 기록)으로만 갑니다. PDF는 30일이 지나 관리자가 비울 때까지 남습니다.
 - **현재 상태 위에만 저장**: 트리는 현재 커밋의 트리(또는 10분 안에 현재였던 트리) 위에서만, 커밋은 현재 커밋을 부모로, 이 사람이 이 서버를 거쳐 그 트리 위에 만든 트리로만 만들 수 있습니다. 그사이 다른 사람이 저장했으면 409를 돌려주고, 앱은 새로 받아 합친 뒤 다시 저장합니다. 강제 덮어쓰기(`force`)는 403, 빨리감기가 아닌 브랜치 갱신은 GitHub의 422가 그대로 갑니다.
-- **커밋 메시지**: `[초대 코드 이름] 앱이 쓴 첫 줄`(200자 이내)로 바꿔 기록합니다. 최근 활동은 여기서 읽습니다.
+- **커밋 메시지**: `[초대 코드 이름] {lib:<서재>} 앱이 쓴 첫 줄`(200자 이내)로 바꿔 기록합니다. 최근 활동은 여기서 서재별로 읽습니다(`{lib:…}`는 앱에 보내지 않음).
 - **용량**: 파일 하나는 100MB까지. PDF(또는 8MB가 넘는 파일)를 올리면 저장소 크기가 `maxBytes`를 넘을 때 413("공용 서재 저장 공간이 부족해…")으로 거절합니다. JSON 파일(목록·메모 등)은 꽉 차도 저장되므로 지우기·휴지통 비우기는 언제나 됩니다.
 - GitHub에는 서버 토큰·`Accept`·`X-GitHub-Api-Version: 2022-11-28`·`User-Agent: paper-relay`만 보내고 초대 코드는 절대 보내지 않습니다. GitHub의 요청 한도 헤더(`X-RateLimit-*`, `Retry-After`)와 `ETag`(304 조건부 요청)는 앱에 그대로 전달합니다.
 
 | 요청 | 누가 | 내용 |
 |---|---|---|
-| `GET /shared` | 초대 코드 | `{ libraries: [{ id, name }], personId, name }` |
-| `GET /shared/<서재>/activity?limit=50` | 초대 코드 | 최근 커밋에서 만든 `{ items: [{ ts, who, summary }] }` (최신 먼저, 이메일·토큰 없음) |
-| `/shared/<서재>/gh/repos/team/library/...` | 초대 코드 (`Authorization: Bearer`) | GitHub 호환 중계 (`docs/SHARED.md` §2.1의 표) |
+| `GET /shared` | 초대 코드 | `{ libraries: [{ id: 'mine', name: '<코드 이름> 서재', kind: 'code' }, { id: 'team', name: '전체 공용 서재', kind: 'team' }], personId, name, libraryId }` (아래 "코드별 서재") |
+| `GET /shared/<서재>/activity?limit=50` | 초대 코드 | 그 서재의 최근 커밋 줄만 모은 `{ items: [{ ts, who, summary }] }` (최신 먼저, 이메일·토큰·서재 표시 없음) |
+| `/shared/<서재>/gh/repos/team/library/...` | 초대 코드 (`Authorization: Bearer`) | GitHub 호환 중계 (`docs/SHARED.md` §2.1의 표). `<서재>` = `team`(전체 공용 서재) 또는 `mine`(내 코드 서재) |
 | `GET /relay/admin/shared/<서재>/stats` | 관리자 토큰 | `{ bytes, papers, people, maxBytes }` (현재 커밋 기준 전체 파일 크기, PDF 수, 사람 수) |
-| `POST /relay/admin/shared/<서재>/purge` | 관리자 토큰 | 휴지통에 들어간 지 30일 지난 논문의 파일(`papers/<id>/*`, 모두의 `people/*/papers/<id>/*`)을 지우는 커밋 하나. 묘비 기록은 `library.json`에 남습니다. → `{ purged: [논문 id], files, freedBytes, commitSha }` |
+| `POST /relay/admin/shared/<서재>/purge` | 관리자 토큰 | 휴지통에 들어간 지 30일 지난 논문의 파일(`papers/<id>/*`, 모두의 `people/*/papers/<id>/*`)을 지우는 커밋 하나 — 전체 공용 서재와 그 저장소의 **모든 코드별 서재**를 함께(서재마다 최근 활동 한 줄). 묘비 기록은 `library.json`에 남습니다. → `{ purged: [논문 id], files, freedBytes, commitSha }` |
 
 초대 코드를 **사용 중지**하면 그 사람은 공용 서재에도 바로 401입니다(메모는 저장소에 남아 다시 켜면 그대로. 다만 앱은 이 401을 받으면 기기에서 코드를 지우므로, 다시 켠 뒤에는 그 사람이 초대 링크를 한 번 더 열거나 코드를 다시 넣어야 합니다). **삭제**하면 그 사람의 `people/<personId>/` 파일까지 지웁니다 — 아래 "초대 코드 삭제". 지금은 활성 초대 코드 모두가 `SHARED_LIBRARIES`의 모든 서재를 씁니다(코드별로 제한하려면 `src/shared.js`의 `librariesFor`만 바꾸면 됩니다).
 
@@ -179,7 +179,8 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 | `GLOBAL_DAILY_LIMIT_USD` | `5` | 서버 전체 하루 한도($) |
 | `MAX_TOKENS_CAP` | `32000` | 요청 하나의 `max_tokens` 상한 |
 | `GITHUB_API_BASE` | `https://api.github.com` | 공용 서재 저장소가 있는 GitHub API(테스트에서만 바꿈) |
-| `SHARED_LIBRARIES` | `[{ "id": "team", "name": "공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000 }]` | 공용 서재 목록(JSON). `id`는 영문 소문자·숫자·`-`, `maxBytes`는 저장소 전체 파일 크기 상한 |
+| `SHARED_LIBRARIES` | `[{ "id": "team", "name": "전체 공용 서재", "repo": "dindoopark/paper-team-library", "branch": "main", "maxBytes": 4000000000 }]` | 공용 서재 목록(JSON). `id`는 영문 소문자·숫자·`-`(`mine`은 쓸 수 없음), `maxBytes`는 저장소 전체 파일 크기 상한(코드별 서재 포함). `team` 저장소에 코드별 서재도 들어갑니다 |
+| `CODE_LIBRARY_MAX_BYTES` | `500000000` | 코드별 서재 하나의 기본 용량 상한(바이트). 코드마다 관리자가 바꿀 수 있음 |
 
 무료 요금제에 맞춰, 요청 하나마다 D1 호출 1번(코드+오늘 사용액+잘못된 시도 횟수, 있는 코드면 아무것도 쓰지 않음)과 쓰기 1번(사용량 기록)만 합니다. 다만 그림이 많이 든 아주 큰 요청은 무료 요금제의 요청당 CPU 시간 한도를 넘을 수 있습니다.
 
@@ -192,7 +193,10 @@ Node.js가 설치된 컴퓨터에서, 터미널을 이 `relay` 폴더에서 엽�
 | `GET /relay/admin/codes` | 코드 목록(최근 것 먼저)과 오늘·이번 달(KST)·누적 사용액, `todayTotalUsd`, `monthTotalUsd`(삭제한 코드의 사용액 포함), `globalDailyLimitUsd`, `deletedUsage: { todayUsd, monthUsd, totalUsd, totalRequests }`(삭제한 코드들의 사용액 합계 — 목록의 "삭제된 코드" 줄) |
 | `POST /relay/admin/codes` `{ name, code?, allowedModels?, dailyLimitUsd? }` | 새 코드(201). 이름 1~40자. `code`를 주면 그 코드로(아래 규칙), 비우면 무작위 `PR-XXXX-XXXX`. 이미 있는 코드면 409 |
 | `PATCH /relay/admin/codes/<코드>` `{ name?, active?, allowedModels?, dailyLimitUsd? }` | 고친 코드. `<코드>`는 대소문자·하이픈 상관없음. 코드 자체(`code`)는 바꿀 수 없음(400) |
-| `DELETE /relay/admin/codes/<코드>` | 코드 삭제(아래 "초대 코드 삭제"). `<코드>`는 대소문자·하이픈 상관없음. → `{ deleted: true, purgedFiles }`, 없는 코드 404, GitHub 연결 실패 502(코드는 그대로) |
+| `DELETE /relay/admin/codes/<코드>[?library=delete\|move&to=<다른 코드>]` | 코드 삭제(아래 "초대 코드 삭제"). `<코드>`는 대소문자·하이픈 상관없음. 코드별 서재는 함께 지우거나(`delete`, 기본) 다른 코드의 서재로 옮김(`move`). → `{ deleted: true, purgedFiles, library? }`, 없는 코드 404, 잘못된 `library`/`to` 400·404, GitHub 연결 실패 502(코드·서재 그대로) |
+| `GET /relay/admin/codes/<코드>/library` | 그 코드의 서재: `{ code, name, libraryId, papers, trashed, files, bytes, maxBytes }` (삭제 확인 창의 논문 수) |
+| `PATCH /relay/admin/codes/<코드>/library` `{ maxBytes }` | 그 코드 서재의 용량 상한(바이트, 1 MB~100 GB 정수, `null` = 기본값) → `{ code, name, libraryId, maxBytes }` |
+| `POST /relay/admin/shared/team/split-by-uploader` `{ dryRun }` | 전체 공용 서재의 논문을 올린 사람의 코드 서재로 나누기(아래 "코드별 서재"). `dryRun: true`(기본)는 계획만 → `{ moves, skipped }`, `false`는 실행 → `+ commitSha` |
 | `GET /relay/admin/usage?days=30[&code=<코드>]` | 날짜별(최근 날 먼저, 쓴 적 없는 날도 0으로 포함)·모델별 사용량(삭제한 코드의 사용량도 날짜별 합계에 들어감) |
 
 예 (PowerShell이나 터미널의 `curl`):
@@ -215,7 +219,7 @@ CP949로 보내는 일이 있어, 받는 쪽에서는 이름이 `�����
 1. 먼저 코드를 **사용 중지**합니다. 지우는 동안 그 사람이 새 메모를 저장하지 못하게 하려는 것입니다(공용 서재의 요청은
    매번 코드를 확인합니다. 그 사이 끼어든 저장은 GitHub의 빨리감기 검사에 걸려 새 상태에서 다시 정리합니다).
 2. `SHARED_LIBRARIES`의 **모든 서재**에서 그 사람의 `people/<personId>/` 아래 파일(하이라이트·메모·AI 기록)을 지우는
-   서버 커밋을 **서재마다 하나** 만듭니다. 메시지는 `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` — 최근 활동에 이 줄이
+   서버 커밋을 **서재마다 하나** 만듭니다(그 코드의 코드별 서재 삭제·옮기기도 같은 커밋 — 위 "코드별 서재"). 메시지는 `[관리자] {lib:team} 초대 코드 삭제에 따라 개인 기록 정리` — 최근 활동에 이 줄이
    보이고, personId는 들어가지 않습니다. 그 사람의 파일이 없는 서재에는 커밋하지 않습니다. 공유 파일(`library.json`,
    `papers/*`: 논문·폴더·번역)과 다른 사람의 폴더는 건드리지 않습니다. 2026-10-19 전에 만든 코드는, `PERSON_ID_SECRET`을
    나중에 넣었을 때 생겼을 수 있는 예전 폴더(비밀값 없이 계산한 personId)도 함께 지웁니다.
@@ -234,6 +238,52 @@ CP949로 보내는 일이 있어, 받는 쪽에서는 이름이 `�����
   보이지 않습니다.
 - 삭제한 코드도 잘못된 시도 제한에서는 "없는 코드"로 셉니다(중지한 코드와 다름). 앱은 이 401을 받으면 코드를 지우고 다시
   묻지 않지만, 예전 앱을 쓰는 기기 여러 대가 같은 병원 IP에서 계속 접속하면 그 IP의 실패 횟수가 찰 수 있습니다.
+
+## 코드별 서재 (2026-10-19)
+
+초대 코드마다 **그 코드를 가진 사람만 보는 서재**가 하나 있습니다(앱에서 "<코드 이름> 서재"). 예전의 공용 서재는
+**전체 공용 서재**로 그대로 남고, 활성 코드 모두가 봅니다. 같은 코드를 여러 명이 쓰면 그 서재(와 메모)도 함께 씁니다.
+
+- **저장 위치**: 같은 저장소(`dindoopark/paper-team-library`)의 `codes/<libraryId>/` 아래, 전체 공용 서재와 같은 모양
+  (`library.json`, `papers/<id>/…`, `people/<personId>/…`). `libraryId`는 무작위 16자리(D1 `codes.library_id`).
+  새 코드는 만들 때, 예전 코드는 처음 `GET /shared`(또는 나누기·옮기기)를 할 때 정해집니다.
+- **중계**: `/shared/mine/gh/...` — 앱은 모든 경로 앞에 `codes/<libraryId>/`를 붙여 씁니다. 서버는 그 코드의 폴더 밖은
+  목록에서 빼고(위로 내려가는 길인 `codes`, `codes/<libraryId>`만 보임) 읽기·쓰기를 모두 거절합니다. 규칙은 전체 공용
+  서재와 같습니다(PDF 바꾸기 불가, 삭제는 휴지통, 내 `people/<나>/`만). `/shared/team/...`은 `codes/` 아래를 보이지도,
+  쓰지도 못합니다. 다른 코드의 서재를 가리키는 주소는 없습니다.
+- **파일 sha로 끌어오기 막기**: 트리(`POST git/trees`)에는 **그 사람이 그 서재로 올린 파일**(최근 1시간, D1
+  `shared_trees`에 `lib = 'blob:<서재>'`로 기록)이나 **그 서재에서 이미 보이는 파일**만 넣을 수 있습니다. 아니면 409
+  "이 서재에 올린 기록이 없는 파일이 있어…"(그런 파일이 저장소에 있든 없든 같은 답, GitHub에 묻지 않음) — 그래서 PDF
+  내용을 아는 사람이 "다른 서재에 이 논문이 있나"를 알아낼 수 없습니다. 앱은 45분이 지난 업로드를 다시 올립니다.
+- **커밋 메시지**: `[이름] {lib:team} …` 또는 `[이름] {lib:<libraryId>} …`. `{lib:…}`는 서버만 쓰고(앱이 보낸 것은 지움),
+  최근 활동은 이것으로 서재별로 나눠 보여 줍니다. 앱에는 보내지 않고, `GET git/commits`도 다른 서재의 커밋이면 메시지를
+  비워서 돌려줍니다(다른 서재의 논문 제목이 보이지 않게). 표시가 없는 예전 커밋은 전체 공용 서재 것입니다.
+- **용량**: 코드별 서재마다 `CODE_LIBRARY_MAX_BYTES`(기본 500 MB, 관리자가 코드별로 바꿈) + 저장소 전체 `maxBytes`.
+  넘으면 413 "<이름> 서재의 저장 공간이 부족해…".
+- **코드 삭제**: 확인 창에서 "서재도 함께 삭제"(`?library=delete`) 또는 "다른 코드로 옮기기"(`?library=move&to=<코드>`).
+  옮기면 `library.json` 기록을 id로 합치고(겹치는 id는 새 id로), 파일과 그 사람의 메모를 대상 코드의 서재와 사람으로
+  옮깁니다(사람이 코드를 바꿔도 메모가 남음). 전체 공용 서재의 그 사람 메모 정리와 **한 커밋**이고, 코드별 서재가 든
+  저장소는 **맨 나중에** 처리하므로 GitHub가 실패하면 서재는 그대로입니다(502, 코드도 다시 켜짐).
+- **나누기(한 번)**: `POST /relay/admin/shared/team/split-by-uploader` — 전체 공용 서재의 논문 중 `addedBy`가 **코드 하나의
+  이름과 정확히 같은**(켜짐·중지 모두) 휴지통 밖 논문을 그 코드의 서재로 옮깁니다: PDF·번역·그 코드 사람의 메모, 같은
+  이름·같은 단계의 폴더(있으면 그 폴더 사용). 전체 공용 서재에서는 그 기록을 지우고(묘비가 아니라 이동), 그래서 빈 폴더는
+  휴지통으로 보냅니다. 휴지통의 논문, 이름이 맞는 코드가 없거나 둘 이상인 논문은 남습니다. 다른 사람이 그 논문에 단 메모는
+  전체 공용 서재에 그대로 남습니다. 먼저 `{ "dryRun": true }`로 계획을 보고, `{ "dryRun": false }`로 실행합니다(커밋 하나,
+  `[관리자] {lib:team} 올린 사람의 코드 서재로 나누기`). 다시 실행하면 옮길 것이 없습니다.
+
+**배포 순서** (`relay` 폴더):
+1. `npx wrangler d1 execute paper-relay --remote --file schema.sql` — 해도 무해합니다. 기존 `codes` 테이블에 새 열
+   (`library_id`, `library_max_bytes`)과 고유 색인 `codes_by_library`는 서버가 처음 필요할 때 스스로 추가합니다.
+2. `npx wrangler deploy` — **앱보다 먼저**. (`SHARED_LIBRARIES`의 이름이 "전체 공용 서재"로 바뀝니다.)
+3. 확인: 초대 코드 하나로 `curl -H "Authorization: Bearer <코드>" https://paper-relay.<계정>.workers.dev/shared` →
+   `libraries`에 `mine`과 `team`, `libraryId`(16자리)가 보이면 됩니다.
+4. 곧바로 앱을 배포합니다(`main`에 push). 그 사이 열려 있는 예전 앱에는 "<이름> 서재"가 빈 서재로 보이고 저장은 서버가
+   거절합니다(아무것도 쓰이지 않음). 새로 고치면 해결됩니다.
+5. 동료들의 열린 앱이 한 번 새로 고쳐진 뒤, 관리 화면의 "전체 공용 서재 논문을 올린 사람 서재로 나누기"(또는 위 API)로
+   계획을 확인하고 실행합니다. 자세한 설명: `docs/CODE-LIBRARIES.md`.
+
+되돌리기(`npx wrangler rollback`)는 데이터를 망가뜨리지 않지만, 예전 서버는 `codes/`를 숨기지 않아 그동안 코드별 서재가
+다른 코드에게도 읽힐 수 있습니다. 나누기 뒤에는 되돌리지 마세요.
 
 ## 직접 정하는 코드와 잘못된 시도 제한
 

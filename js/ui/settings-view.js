@@ -7,7 +7,7 @@ import { settings } from '../core/settings.js';
 import { debounce, el, formatBytes, formatUsd, safeStorage } from '../core/util.js';
 import { button, confirmDialog, iconButton, modal, progressBar, spinner, toast } from './components.js';
 import { icon } from './icons.js';
-import { sharedIcon } from './library-view.js';
+import { libraryIcon, sharedIcon } from './library-view.js';
 
 const SECTIONS = [
   { id: 'ai', label: 'AI 번역', icon: 'bot' },
@@ -816,10 +816,13 @@ class SettingsView {
       body.append(el('dl', { class: 'shared-facts-list' },
         el('dt', {}, '내 이름'), el('dd', {}, who ? `${who} (초대 코드의 이름 · 최근 활동과 휴지통에 이렇게 표시됩니다)` : '초대 코드 확인 중…')));
       for (const entry of shared.libraries) body.append(this.#sharedLibraryRow(entry));
-      const admin = this.#sharedAdmin(shared.libraries);
+      const admin = this.#sharedAdmin(shared.libraries.filter((l) => l.kind !== 'code'));
       if (admin) body.append(admin);
     }
-    body.append(note('info', '폴더·논문(PDF)·번역은 초대 코드를 받은 모든 사람과 공유되고, 하이라이트·메모·AI 요약·채팅은 나만 봅니다. 누구나 폴더와 논문을 추가·이동·삭제할 수 있으며, 삭제한 항목은 30일 동안 휴지통에서 복구할 수 있습니다. 내 서재(위의 GitHub 동기화)와는 따로 저장됩니다.'));
+    const codeLib = state === 'ready' ? shared.libraries.find((l) => l.kind === 'code') : null;
+    body.append(note('info', codeLib
+      ? `‘${codeLib.name}’는 이 초대 코드를 가진 사람만, 전체 공용 서재는 초대 코드를 받은 모든 사람이 봅니다. 두 서재 모두 폴더·논문(PDF)·번역은 함께 쓰고, 하이라이트·메모·AI 요약·채팅은 나만 봅니다. 삭제한 항목은 30일 동안 휴지통에서 복구할 수 있습니다. 내 서재(위의 GitHub 동기화)와는 따로 저장됩니다.`
+      : '폴더·논문(PDF)·번역은 초대 코드를 받은 모든 사람과 공유되고, 하이라이트·메모·AI 요약·채팅은 나만 봅니다. 누구나 폴더와 논문을 추가·이동·삭제할 수 있으며, 삭제한 항목은 30일 동안 휴지통에서 복구할 수 있습니다. 내 서재(위의 GitHub 동기화)와는 따로 저장됩니다.'));
     host.replaceChildren(section('shared', '공용 서재', 'library',
       '초대 코드로 동료들과 함께 쓰는 서재입니다. 초대 코드 서버를 거쳐 팀 저장소에 저장되므로 GitHub 토큰이 필요 없습니다.', body));
     host.querySelector('#set-shared .section-icon')?.replaceChildren(sharedIcon(18));
@@ -840,8 +843,10 @@ class SettingsView {
     } });
     const open = button('열기', { icon: 'arrow-right', size: 'sm', kind: 'ghost', onClick: () => this.#navigate(`#/s/${encodeURIComponent(entry.id)}`) });
     this.#paintSharedStatus(status, entry, syncNow);
-    const row = el('div', { class: 'shared-lib', 'data-lib': entry.id },
-      el('div', { class: 'shared-lib-head' }, sharedIcon(16), el('b', {}, entry.name), el('span', { class: 'badge' }, entry.id)),
+    const code = entry.kind === 'code';
+    const row = el('div', { class: `shared-lib is-${code ? 'code' : 'team'}`, 'data-lib': entry.id },
+      el('div', { class: 'shared-lib-head' }, libraryIcon(code ? 'code' : 'team', 16), el('b', {}, entry.name),
+        el('span', { class: 'badge' }, code ? '이 초대 코드만' : '초대받은 모든 사람')),
       el('div', { class: 'input-group shared-row' }, status, el('div', { class: 'btn-row-inline' }, syncNow, open)));
     this.#sharedRows.set(entry.id, { status, syncNow, entry });
     return row;
@@ -1206,13 +1211,91 @@ class SettingsView {
     }
     const list = el('div', { class: 'relay-codes', 'aria-live': 'polite' });
     const created = el('div', {});
-    host.replaceChildren(
+    host.replaceChildren(...[
       this.#adminTokenSaved(host),
       this.#adminCreateForm(list, created),
       created,
       el('div', { class: 'subsection' }, el('h3', { class: 'subsection-title' }, icon('list', { size: 16 }), '초대 코드 목록'), list),
-      this.#adminUsage());
+      this.#adminSplit(list),
+      this.#adminUsage(),
+    ].filter(Boolean));
     this.#loadCodes(list);
+  }
+
+  /**
+   * 전체 공용 서재 → each uploader's code library (POST /relay/admin/shared/team/split-by-uploader): the plan first
+   * (dry run, in a dialog), then one commit on 옮기기.
+   */
+  #adminSplit(list) {
+    const relay = this.#deps.relay;
+    if (typeof relay?.splitSharedByUploader !== 'function') return null;
+    const result = el('div', { class: 'test-result', 'aria-live': 'polite' });
+    const run = button('전체 공용 서재 논문을 올린 사람 서재로 나누기', { icon: 'folder-input', size: 'sm', className: 'relay-split-btn', onClick: async () => {
+      run.disabled = true;
+      setResult(result, 'busy', '옮길 논문을 확인하는 중…');
+      let plan;
+      try {
+        plan = await relay.splitSharedByUploader({ dryRun: true });
+        clearResult(result);
+      } catch (err) {
+        setResult(result, 'error', err?.message || '옮길 논문을 확인하지 못했습니다.');
+        return;
+      } finally {
+        run.disabled = false;
+      }
+      this.#splitDialog(plan, list);
+    } });
+    const head = el('h3', { class: 'subsection-title' }, sharedIcon(16), '전체 공용 서재 정리');
+    return el('div', { class: 'subsection relay-split' }, head,
+      el('p', { class: 'field-hint relay-split-hint' }, '전체 공용 서재에 올라간 논문을 올린 사람의 코드 서재로 옮깁니다. 옮기기 전에 목록을 먼저 보여 줍니다.'),
+      run, result);
+  }
+
+  /** The dry run's plan: what moves where, what stays and why; 옮기기 applies it. */
+  #splitDialog(plan, list) {
+    const relay = this.#deps.relay;
+    const moves = plan.moves || [];
+    const skipped = plan.skipped || [];
+    const moveRow = (m) => el('li', { class: 'split-row', 'data-paper': m.paperId },
+      icon('file-text', { size: 16 }),
+      el('div', { class: 'split-main' },
+        el('div', { class: 'split-title', title: m.title }, m.title || m.paperId),
+        el('div', { class: 'split-where' },
+          libraryIcon('code', 13), el('b', {}, `${m.toCode} 서재`),
+          m.folderPath ? el('span', { class: 'split-folder' }, icon('folder', { size: 13 }), m.folderPath) : el('span', { class: 'split-folder' }, '최상위'))));
+    const skipRow = (s) => el('li', { class: 'split-row is-skipped', 'data-paper': s.paperId },
+      icon('file-text', { size: 16 }),
+      el('div', { class: 'split-main' },
+        el('div', { class: 'split-title', title: s.title }, s.title || s.paperId),
+        el('div', { class: 'split-where' }, splitReason(s.reason))));
+    const body = el('div', { class: 'split-plan' },
+      el('p', { class: 'modal-message' }, moves.length
+        ? `논문 ${moves.length}편을 올린 사람의 코드 서재로 옮깁니다.`
+        : '올린 사람의 코드 서재로 옮길 논문이 없습니다.'),
+      moves.length ? el('ul', { class: 'split-list', 'aria-label': '옮길 논문' }, moves.map(moveRow)) : null,
+      skipped.length ? el('details', { class: 'split-skipped', open: !moves.length },
+        el('summary', {}, `그대로 두는 논문 ${skipped.length}편`),
+        el('ul', { class: 'split-list' }, skipped.map(skipRow))) : null,
+      moves.length ? note('info', '옮긴 논문은 전체 공용 서재에서 빠지고 그 코드를 가진 사람만 봅니다. 올린 사람의 하이라이트·메모·AI 결과도 함께 옮겨지고, 비게 된 폴더는 휴지통으로 갑니다.') : null);
+    modal({
+      title: '올린 사람 서재로 나누기',
+      size: 'md',
+      className: 'split-dialog',
+      body,
+      actions: moves.length
+        ? [
+          { label: '취소', autofocus: true },
+          { label: `${moves.length}편 옮기기`, kind: 'primary', onClick: async () => {
+            const r = await relay.splitSharedByUploader({ dryRun: false }); // a failure: toast, the dialog stays
+            toast(r.moves.length ? `논문 ${r.moves.length}편을 올린 사람 서재로 옮겼습니다.` : '옮길 논문이 없었습니다.', { kind: 'success', timeout: 6000 });
+            // This device's open libraries pick the change up now rather than on their next pull.
+            for (const l of this.#deps.shared?.libraries || []) l.library?.sync?.syncNow?.()?.catch?.(() => {});
+            this.#loadCodes(list, { quiet: true });
+            return true;
+          } },
+        ]
+        : [{ label: '닫기', kind: 'primary' }],
+    });
   }
 
   /** The token is checked against the server before it is saved, and never shown again. */
@@ -1363,7 +1446,7 @@ class SettingsView {
         el('span', { class: 'relay-code-name' }, '삭제된 코드'),
         el('span', { class: 'relay-code-meta' }, `이번 달 ${formatUsd(data.deletedMonthUsd)}`))
       : null;
-    const rows = [...codes.map((c) => this.#codeItem(c, list)), deleted].filter(Boolean);
+    const rows = [...codes.map((c) => this.#codeItem(c, list, codes)), deleted].filter(Boolean);
     list.replaceChildren(...[
       el('div', { class: 'usage-stats' },
         stat('오늘 전체', `${formatUsd(data.todayTotalUsd)} / ${formatUsd(data.globalDailyLimitUsd)}`),
@@ -1375,7 +1458,7 @@ class SettingsView {
     ].filter(Boolean));
   }
 
-  #codeItem(c, list) {
+  #codeItem(c, list, codes = []) {
     const relay = this.#deps.relay;
     return el('li', { class: `relay-code${c.active ? '' : ' is-inactive'}`, dataset: { code: c.code } },
       el('div', { class: 'relay-code-head' },
@@ -1395,40 +1478,81 @@ class SettingsView {
         button('한도·모델 수정', { icon: 'pencil', size: 'sm', kind: 'ghost', onClick: () => this.#editCode(c, list) }),
         button(c.active ? '중지' : '다시 사용', { icon: c.active ? 'stop' : 'play', size: 'sm', kind: 'ghost', onClick: () => this.#toggleCode(c, list) }),
         relay.deleteCode
-          ? button('삭제', { icon: 'trash', size: 'sm', kind: 'ghost', className: 'relay-code-delete', onClick: () => this.#deleteCode(c, list) })
+          ? button('삭제', { icon: 'trash', size: 'sm', kind: 'ghost', className: 'relay-code-delete', onClick: () => this.#deleteCode(c, list, codes) })
           : null));
   }
 
   /**
-   * 삭제: one question, then DELETE /relay/admin/codes/:code. The Worker deletes the code's own files (people/<id>/ —
-   * highlights, notes, AI results) in 공용 서재 first and the code after; a GitHub failure keeps the code and the
-   * dialog (its Korean message as a toast), so 삭제 can be pressed again.
+   * 삭제: one dialog, then DELETE /relay/admin/codes/:code?library=delete|move&to=<code>. The code's own library
+   * ('<name> 서재', codes/<libraryId>/) is deleted with it (default) or moved — folders, papers, translations and the
+   * holder's notes — into another code's library. The Worker also removes the holder's own files (people/<id>/) in
+   * 전체 공용 서재, then the code; a GitHub failure keeps everything and the dialog (its Korean message as a toast), so
+   * 삭제 can be pressed again.
    */
-  #deleteCode(c, list) {
+  #deleteCode(c, list, codes = []) {
     const relay = this.#deps.relay;
+    const others = codes.filter((x) => x.code !== c.code)
+      .sort((a, b) => Number(b.active) - Number(a.active) || collator.compare(a.name || a.code, b.name || b.code));
+    const libName = `${c.name || c.code} 서재`;
+    const deleteText = (n) => (n != null ? `논문 ${n}편과 폴더·번역·메모가 함께 지워집니다.` : '논문·폴더·번역·메모가 함께 지워집니다.');
+    const deleteDesc = el('span', { class: 'radio-desc' }, deleteText(null));
+    // The paper count comes from GET /relay/admin/codes/<code>/library (a GitHub read): filled in when it answers.
+    if (typeof relay.codeLibrary === 'function') {
+      relay.codeLibrary(c.code)
+        .then((info) => { deleteDesc.textContent = deleteText(info.papers); })
+        .catch((err) => console.warn('[settings] code library', err?.message || err));
+    }
+    const group = `relay-del-lib-${Math.random().toString(36).slice(2, 8)}`;
+    const delInput = el('input', { type: 'radio', name: group, value: 'delete', checked: true });
+    const moveInput = el('input', { type: 'radio', name: group, value: 'move', disabled: !others.length });
+    const target = el('select', { class: 'select relay-move-to', 'aria-label': '서재를 옮길 코드', disabled: !others.length },
+      others.map((o) => el('option', { value: o.code }, `${o.name || '(이름 없음)'} · ${o.code}${o.active ? '' : ' (중지됨)'}`)));
+    const okLabel = () => (moveInput.checked ? '옮기고 삭제' : '삭제');
     let busyLabel = null;
+    const sync = () => busyLabel?.replaceChildren(okLabel());
+    // Picking a code in the list chooses 옮기기 (a select inside a label does not check its radio by itself).
+    for (const type of ['focus', 'change']) target.addEventListener(type, () => { if (!moveInput.disabled) { moveInput.checked = true; sync(); } });
+    for (const input of [delInput, moveInput]) input.addEventListener('change', sync);
+    const choice = el('fieldset', { class: 'relay-lib-choice' },
+      el('legend', {}, libraryIcon('code', 14), libName),
+      el('div', { class: 'radio-cards' },
+        el('label', { class: 'radio-card' }, delInput,
+          el('span', { class: 'radio-title' }, '서재도 함께 삭제'),
+          deleteDesc),
+        el('label', { class: 'radio-card' }, moveInput,
+          el('span', { class: 'radio-title' }, '다른 코드로 옮기기'),
+          others.length ? target : null,
+          el('span', { class: 'radio-desc' }, others.length
+            ? '논문·폴더·번역과 이 코드의 메모를 고른 코드의 서재로 옮깁니다.'
+            : '옮길 다른 코드가 없습니다.'))));
     const dlg = modal({
       title: `‘${c.name || c.code}’ 코드를 삭제할까요?`,
       size: 'sm',
+      className: 'relay-delete-dialog',
       body: el('div', { class: 'relay-delete' },
         // (The ·-joined words stay on one line: browsers break after a middle dot.)
-        el('p', { class: 'modal-message' }, '이 코드로는 더 이상 들어올 수 없고, 이 코드로 남긴 ', el('span', { class: 'keep' }, '하이라이트·메모·AI'), ' 기록도 함께 지워집니다.'),
-        el('p', { class: 'modal-message' }, '공용 서재의 ', el('span', { class: 'keep' }, '논문·폴더·번역과'), ' 사용 비용 기록은 그대로 남습니다.')),
+        el('p', { class: 'modal-message' }, '이 코드로는 더 이상 들어올 수 없고, 전체 공용 서재에 남긴 ', el('span', { class: 'keep' }, '하이라이트·메모·AI'), ' 기록도 지워집니다.'),
+        choice,
+        el('p', { class: 'modal-message' }, '전체 공용 서재의 ', el('span', { class: 'keep' }, '논문·폴더·번역과'), ' 사용 비용 기록은 그대로 남습니다.')),
       actions: [
         { label: '취소', autofocus: true }, // not 삭제: Enter must not delete
         { label: '삭제', kind: 'danger', onClick: async () => {
-          busyLabel?.replaceChildren('삭제하는 중…');
+          const move = moveInput.checked && Boolean(target.value);
+          const to = others.find((o) => o.code === target.value);
+          busyLabel?.replaceChildren(move ? '옮기는 중…' : '삭제하는 중…');
           let gone = false;
           try {
-            await relay.deleteCode(c.code);
+            await relay.deleteCode(c.code, move ? { library: 'move', to: target.value } : { library: 'delete' });
           } catch (err) {
             if (err?.status !== 404) throw err; // the toast says why; the dialog stays for another try
             gone = true; // already deleted (another tab or device): the same outcome
           } finally {
-            busyLabel?.replaceChildren('삭제');
+            sync();
           }
           list.querySelector(`.relay-code[data-code="${CSS.escape(c.code)}"]`)?.remove();
-          toast(gone ? '이미 삭제된 코드입니다.' : '삭제했습니다.', { kind: 'success' });
+          toast(gone
+            ? '이미 삭제된 코드입니다.'
+            : move ? `삭제했습니다. 서재는 ‘${to?.name || target.value}’ 코드로 옮겼습니다.` : '삭제했습니다.', { kind: 'success', timeout: 6000 });
           this.#loadCodes(list, { quiet: true }); // totals and the 삭제된 코드 row
           return true;
         } },
@@ -1442,14 +1566,31 @@ class SettingsView {
     const name = el('input', { class: 'input', type: 'text', value: c.name, maxlength: String(relay.NAME_MAX), 'aria-label': '이름', autocomplete: 'off' });
     const limit = el('input', { class: 'input', type: 'number', min: '0', max: String(relay.DAILY_LIMIT_MAX), step: '0.1', value: String(c.dailyLimitUsd), 'aria-label': '하루 한도 (달러)' });
     const pick = modelSetPicker(relay, c.allowedModels);
+    // The code's own library: its size cap (MB), shown once GET …/library answers (a server without code libraries:
+    // the field stays hidden and nothing is sent for it).
+    const cap = el('input', { class: 'input', type: 'number', min: '1', max: String(CAP_MAX_MB), step: '1', 'aria-label': '서재 용량 (MB)' });
+    const capInfo = el('span', { class: 'field-hint' });
+    const capField = el('label', { class: 'field relay-lib-cap', hidden: true },
+      el('span', { class: 'field-label' }, libraryIcon('code', 14), '서재 용량 (MB)'), cap, capInfo);
+    let capFrom = null; // the value shown when the library answered
+    if (typeof relay.codeLibrary === 'function' && typeof relay.setCodeLibraryMaxBytes === 'function') {
+      relay.codeLibrary(c.code).then((info) => {
+        capFrom = info.maxBytes ? String(Math.round(info.maxBytes / 1e6)) : '';
+        cap.value = capFrom;
+        capInfo.textContent = `‘${c.name || c.code} 서재’ · 논문 ${info.papers}편 · ${decimalMb(info.bytes)} 사용 중`;
+        capField.hidden = false;
+      }).catch((err) => console.warn('[settings] code library', err?.message || err));
+    }
     modal({
       title: '초대 코드 수정',
       size: 'sm',
+      className: 'relay-edit-dialog',
       body: el('div', { class: 'relay-edit' },
         el('p', { class: 'field-hint', style: { marginTop: 0 } }, el('code', {}, c.code), ' · 바꾼 내용은 바로 적용됩니다.'),
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '이름'), name),
         el('label', { class: 'field' }, el('span', { class: 'field-label' }, '하루 한도 ($)'), limit),
-        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '모델'), pick.el)),
+        el('div', { class: 'field' }, el('span', { class: 'field-label' }, '모델'), pick.el),
+        capField),
       actions: [
         { label: '취소' },
         { label: '저장', kind: 'primary', onClick: async () => {
@@ -1459,8 +1600,18 @@ class SettingsView {
           if (v === '' || Number(v) !== c.dailyLimitUsd) patch.dailyLimitUsd = v === '' ? NaN : Number(v);
           const models = pick.value();
           if (models.join(',') !== c.allowedModels.join(',')) patch.allowedModels = models;
-          if (!Object.keys(patch).length) return true;
-          await relay.updateCode(c.code, patch); // a Korean validation/server error keeps the dialog open (toast)
+          // Blank = the server's default cap; otherwise whole MB within the server's range.
+          const capText = cap.value.trim();
+          const capChanged = capFrom !== null && capText !== capFrom;
+          if (capChanged && capText !== '' && !(Number.isInteger(Number(capText)) && Number(capText) >= 1 && Number(capText) <= CAP_MAX_MB)) {
+            throw new Error(`서재 용량은 1~${CAP_MAX_MB.toLocaleString('ko-KR')} MB 사이의 정수로 입력해 주세요(비우면 기본값).`);
+          }
+          if (!Object.keys(patch).length && !capChanged) return true;
+          if (Object.keys(patch).length) await relay.updateCode(c.code, patch); // a Korean validation/server error keeps the dialog open (toast)
+          if (capChanged) {
+            await relay.setCodeLibraryMaxBytes(c.code, capText === '' ? null : Number(capText) * 1e6);
+            capFrom = capText;
+          }
           toast('초대 코드를 수정했습니다.', { kind: 'success' });
           this.#loadCodes(list);
           return true;
@@ -1515,6 +1666,21 @@ class SettingsView {
 }
 
 // ------------------------------------------------------------------ helpers
+
+const collator = new Intl.Collator('ko', { numeric: true, sensitivity: 'base' });
+/** A code library's size cap is set in whole MB (10^6 bytes), up to the Worker's maximum (100 GB). */
+const CAP_MAX_MB = 100_000;
+
+/** Bytes as decimal MB, as the Worker's caps are given (500 MB = 500,000,000 bytes). */
+function decimalMb(n) {
+  const mb = (Number(n) || 0) / 1e6;
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb).toLocaleString('ko-KR')} MB`;
+}
+
+/** Why the split leaves a paper in 전체 공용 서재: the Worker's Korean words (relay/src/code-libraries.js SPLIT_SKIP). */
+function splitReason(reason) {
+  return String(reason || '').trim() || '그대로 둡니다';
+}
 
 /**
  * GitHub Pages project sites of one account share one origin (user.github.io/a, user.github.io/b): localStorage

@@ -1,5 +1,7 @@
 // 공용 서재 UI (docs/SHARED.md §3.2), end to end in Edge with the real app, the real store and three people:
 //   node tests/shared-ui/run.mjs     (starts `python -m http.server 8194` if nothing is listening)
+// The relay here is one from before code libraries (GET /shared lists only 'team', no kinds): the app must keep
+// working with it. The three libraries (내 서재, '<code name> 서재', 전체 공용 서재) are tests/shared-ui/code-libs.mjs.
 //
 // The owner (내 서재 synced to a fake personal repo + the invite code + the admin token), invitee 김동료 and invitee
 // 이동료 each get a fresh browser context. The team library goes through tests/store/fake-relay.mjs (the contract's
@@ -311,13 +313,13 @@ try {
   });
 
   let luTitle = '';
-  await test('owner: ‘공용 서재로 복사…’ picks a target folder (one made in the picker) and copies PDF + translation only', async () => {
+  await test('owner: ‘다른 서재로 복사…’ picks a target folder (one made in the picker) and copies PDF + translation only', async () => {
     await sec(op, 'mine').locator('.tree-item.is-folder', { hasText: '섬망 연구' }).click();
     const row = op.locator('.paper-row').first();
     luTitle = (await row.locator('.paper-title').textContent()).trim();
     ids.luMine = await row.getAttribute('data-id');
     await row.locator('button[aria-label="논문 메뉴"]').click();
-    await op.locator('.menu .menu-item', { hasText: '공용 서재로 복사…' }).click();
+    await op.locator('.menu .menu-item', { hasText: '다른 서재로 복사…' }).click();
     await op.waitForSelector('.copy-dialog .folder-picker');
     const before = await op.$$eval('.copy-dialog .folder-picker .menu-label', (els) => els.map((e) => e.textContent));
     await op.locator('.copy-dialog .btn', { hasText: '새 폴더' }).click();
@@ -329,7 +331,7 @@ try {
     await op.locator('.copy-dialog .modal-footer .btn', { hasText: '복사' }).click();
     await op.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /공용 서재 ‘팀 섬망 자료’ 폴더에 복사했습니다/.test(t.textContent)), null, { timeout: 30000 });
     const toastText = await op.locator('.toast', { hasText: '복사했습니다' }).last().textContent();
-    await toastAction(op, '공용 서재에서 보기');
+    await toastAction(op, '보기');
     await op.waitForFunction(() => location.hash === '#/s/team' && document.querySelector('.lib-title')?.textContent === '팀 섬망 자료', null, { timeout: 10000 });
     const shared = await rowTitles(op);
     await waitFor(() => teamPdfs().length === 1 && teamPaper(luTitle.slice(0, 20)), 30000, 'the copy pushed to the team repo');
@@ -348,7 +350,7 @@ try {
     await sec(op, 'mine').locator('.tree-item', { hasText: '전체' }).click();
     await op.waitForFunction(() => location.hash === '#/');
     await sec(op, 'mine').locator('.tree-item.is-folder', { hasText: '섬망 연구' }).click({ button: 'right' });
-    await op.locator('.menu .menu-item', { hasText: '공용 서재로 복사…' }).click();
+    await op.locator('.menu .menu-item', { hasText: '다른 서재로 복사…' }).click();
     await op.waitForSelector('.copy-dialog .folder-picker');
     const message = (await op.locator('.copy-dialog .modal-message').textContent()).trim();
     await op.locator('.copy-dialog .modal-footer .btn', { hasText: '복사' }).click();
@@ -366,14 +368,14 @@ try {
   const K = await device('kim', seeds.invitee('kim'));
   const kp = K.page;
 
-  await test('invitee: #/ opens 공용 서재 by default; 내 서재 is folded away', async () => {
+  await test('invitee: #/ opens 공용 서재 by default; an empty 내 서재 is not shown', async () => {
     await kp.goto(`${APP}#/`);
     await booted(kp);
     await sharedReady(kp);
     await kp.waitForFunction(() => document.querySelectorAll('.paper-row').length >= 1, null, { timeout: 30000 });
     const hash = await hashOf(kp);
     const st = await kp.evaluate(() => ({
-      mineExpanded: document.querySelector('.lib-sec[data-lib="mine"] .lib-sec-toggle')?.getAttribute('aria-expanded'),
+      mineShown: Boolean(document.querySelector('.lib-sec[data-lib="mine"]')),
       current: document.querySelector('.lib-sec.is-current')?.dataset.lib,
       crumbs: document.querySelector('.lib-crumbs').textContent,
       title: document.querySelector('.lib-title').textContent,
@@ -383,10 +385,10 @@ try {
     await kp.waitForFunction(() => /동기화 완료/.test(document.querySelector('.lib-sync')?.textContent || ''), null, { timeout: 20000 });
     await shot(kp, 'invitee-default');
     assert(hash === '#/s/team', `invitee home ${hash}`);
-    assert(st.mineExpanded === 'false' && st.current === 'shared:team', JSON.stringify(st));
+    assert(st.mineShown === false && st.current === 'shared:team', JSON.stringify(st));
     assert(st.crumbs === '공용 서재' && st.title === '전체', JSON.stringify(st));
     assert(st.folders.includes('팀 섬망 자료') && st.folders.includes('섬망 연구'), `folders ${st.folders}`);
-    return `#/ → ${hash}; 내 서재 aria-expanded=${st.mineExpanded}; current ${st.current}; header “${st.crumbs} / ${st.title}”; folders [${st.folders}]`;
+    return `#/ → ${hash}; 내 서재 section shown=${st.mineShown}; current ${st.current}; header “${st.crumbs} / ${st.title}”; folders [${st.folders}]`;
   });
 
   await test('invitee: upload (file input) and drag-drop work in 공용 서재', async () => {
@@ -574,7 +576,7 @@ try {
     await op.locator('#set-shared .btn', { hasText: '용량 확인' }).click();
     await op.waitForSelector('#set-shared .shared-admin-stats .stat');
     const stats = (await op.locator('#set-shared .shared-admin-stats').textContent()).replace(/\s+/g, ' ');
-    assert(text.includes('공용 서재') && text.includes('team') && text.includes(`내 이름${NAMES.kim}`), text.slice(0, 300));
+    assert(text.includes('공용 서재') && text.includes('초대받은 모든 사람') && text.includes(`내 이름${NAMES.kim}`), text.slice(0, 300));
     assert(nav === 1 && adminKim === 0, `nav ${nav}, admin for 김동료 ${adminKim}`);
     assert(/논문\s?3편/.test(stats) && /사람/.test(stats), stats);
     return `김동료: “${text.slice(0, 160).trim()}…”; owner stats “${stats.trim()}”`;
@@ -632,23 +634,24 @@ try {
     return `deep links → “${activityTitle}”, “${trashTitle}”; #/s/nope → “${unknown}”; no code: sidebar sections ${sections}, #/s/team → “${off}”, reader → “${readerOff}”`;
   });
 
-  await test('invitee picks 내 서재: #/ stays there; 공용 서재 click goes back', async () => {
+  await test('invitee: an empty 내 서재 stays out of the sidebar; a 내 서재 link (#/trash) still opens it; #/ is 공용 서재', async () => {
     await kp.goto(`${APP}#/s/team`);
     await sharedReady(kp);
-    await sec(kp, 'mine').locator('.lib-sec-toggle').click();
-    await sec(kp, 'mine').locator('.tree-item', { hasText: '전체' }).click();
-    await kp.waitForFunction(() => location.hash === '#/' && document.querySelector('.lib-sec.is-current')?.dataset.lib === 'mine');
-    await kp.goto(`${APP}#/`);
+    const hidden = await sec(kp, 'mine').count();
+    await kp.goto(`${APP}#/trash`);
     await sharedReady(kp);
-    await sleep(300);
-    const after = await hashOf(kp);
+    await kp.waitForFunction(() => document.querySelector('.lib-sec.is-current')?.dataset.lib === 'mine' && document.querySelector('.lib-title')?.textContent === '휴지통');
+    const onLink = await kp.$$eval('.lib-sec', (els) => els.map((e) => e.dataset.lib));
     await sec(kp, 'shared:team').locator('.tree-item', { hasText: '전체' }).click();
     await kp.waitForFunction(() => location.hash === '#/s/team');
     await kp.goto(`${APP}#/`);
     await sharedReady(kp);
     await kp.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 5000 });
-    assert(after === '#/', `after choosing 내 서재, #/ went to ${after}`);
-    return `내 서재 chosen → reload #/ stays ${after}; 공용 서재 chosen again → #/ → #/s/team`;
+    const back = await kp.$$eval('.lib-sec', (els) => els.map((e) => e.dataset.lib));
+    assert(hidden === 0, `내 서재 sections while empty: ${hidden}`);
+    assert(onLink.join() === 'mine,shared:team', `sections on #/trash: ${onLink}`);
+    assert(back.join() === 'shared:team', `sections after going back: ${back}`);
+    return `empty 내 서재 hidden (${hidden} sections); #/trash → [${onLink}]; 공용 서재 → #/ → #/s/team with [${back}]`;
   });
 
   await test('first visit with the relay unreachable: the 공용 서재 section says so; 다시 시도 connects', async () => {

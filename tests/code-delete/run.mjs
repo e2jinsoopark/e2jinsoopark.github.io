@@ -48,7 +48,8 @@ const NAMES = { team: '응급중환자실2', kim: '김간호사' };
 const GONE = '초대 코드가 더 이상 쓰이지 않아요. 새 코드를 넣어 주세요.';
 const BAD_CODE = '초대 코드가 올바르지 않거나 사용이 중지되었습니다.';
 const DELETE_FAILED = '공용 서재(GitHub)에 연결하지 못해 이 코드의 개인 기록을 지우지 못했습니다. 코드는 그대로 두었으니 잠시 후 다시 삭제해 주세요.';
-const ADMIN_COMMIT = '[관리자] 초대 코드 삭제에 따라 개인 기록 정리';
+// The Worker marks which library a commit changed ({lib:team}, docs/CODE-LIBRARIES.md); 최근 활동 never shows it.
+const ADMIN_COMMIT = '[관리자] {lib:team} 초대 코드 삭제에 따라 개인 기록 정리';
 const IP = { owner: '198.51.100.20', holder: '198.51.100.21', kim: '198.51.100.22', fresh: '198.51.100.23', node: '198.51.100.99' };
 const headed = process.argv.includes('--headed');
 
@@ -207,11 +208,18 @@ const sec = (page, key) => page.locator(`.lib-sec[data-lib="${key}"]`);
 async function sharedReady(page) {
   await page.waitForSelector('.lib-sec[data-lib="shared:team"] .lib-sec-body .lib-nav-heading', { timeout: 30000 });
 }
-/** 공용 서재 is the open place (an invitee's home). */
+/**
+ * 전체 공용 서재 is the open place. An invitee lands in their code's own library (#/s/mine, docs/CODE-LIBRARIES.md)
+ * — or where they were last (#/s/team) — and goes on to 전체 공용 서재 from the sidebar.
+ */
 async function inSharedLibrary(page) {
   await page.waitForSelector('.library', { timeout: 30000 });
   await sharedReady(page);
-  await page.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 15000 });
+  await page.waitForFunction(() => location.hash === '#/s/mine' || location.hash === '#/s/team', null, { timeout: 15000 });
+  if (await page.evaluate(() => location.hash === '#/s/mine')) {
+    await page.locator('.lib-sec[data-lib="shared:team"] .tree-item', { hasText: '전체' }).click();
+    await page.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 10000 });
+  }
 }
 /** 공용 서재 sync chip → 지금 동기화, then wait until it is idle again. */
 async function syncShared(page) {
@@ -479,6 +487,7 @@ try {
       return {
         title: m.querySelector('.modal-title').textContent,
         lines: [...m.querySelectorAll('.modal-body p')].map((p) => p.textContent),
+        choices: [...m.querySelectorAll('.radio-card')].map((c) => `${c.querySelector('input').checked ? '●' : '○'} ${c.querySelector('.radio-title').textContent}`),
         buttons: [...m.querySelectorAll('.modal-footer .btn')].map((b) => b.textContent.trim()),
       };
     });
@@ -499,7 +508,9 @@ try {
     };
     await shot(op, 'code-delete-e2e-03-github-refused');
     assertEqual(modal.title, `‘${NAMES.team}’ 코드를 삭제할까요?`, 'dialog title');
-    assertEqual(modal.lines, ['이 코드로는 더 이상 들어올 수 없고, 이 코드로 남긴 하이라이트·메모·AI 기록도 함께 지워집니다.', '공용 서재의 논문·폴더·번역과 사용 비용 기록은 그대로 남습니다.'], 'dialog lines');
+    // Since code libraries the dialog also asks what happens to the code's own library (default: 서재도 함께 삭제).
+    assertEqual(modal.lines, ['이 코드로는 더 이상 들어올 수 없고, 전체 공용 서재에 남긴 하이라이트·메모·AI 기록도 지워집니다.', '전체 공용 서재의 논문·폴더·번역과 사용 비용 기록은 그대로 남습니다.'], 'dialog lines');
+    assertEqual(modal.choices, ['● 서재도 함께 삭제', '○ 다른 코드로 옮기기'], 'dialog choices');
     assertEqual(modal.buttons, ['취소', '삭제'], 'dialog buttons');
     assertEqual([failed.status, failed.body?.error?.message], [502, DELETE_FAILED], 'Worker answer');
     assertEqual(toast, DELETE_FAILED, 'toast');
@@ -599,7 +610,7 @@ try {
     const translateFrom = translateCalls().length;
     await openPaper(fp, state.paper.id, state.paper.title);
     const view = await readerViewOfOthers(fp, state.translated);
-    const info = await fp.evaluate(async () => (await indexedDB.databases()).map((d) => d.name).filter((n) => n.startsWith('paper-reader-shared-')));
+    const info = await fp.evaluate(async () => (await indexedDB.databases()).map((d) => d.name).filter((n) => n.startsWith('paper-reader-shared-team-')));
     await shot(fp, 'code-delete-e2e-06-recreated-new-browser');
     assertEqual(translateCalls().length - translateFrom, 0, 'translation calls');
     assertEqual([view.marks, view.paneMarked, view.notes, view.summary], [0, 0, 0, 0], 'old highlight / notes / summary');
@@ -618,7 +629,7 @@ try {
     const translateFrom = translateCalls().length;
     await openPaper(hp, state.paper.id, state.paper.title);
     const view = await readerViewOfOthers(hp, state.translated);
-    const dbs = await hp.evaluate(async () => (await indexedDB.databases()).map((d) => d.name).filter((n) => n.startsWith('paper-reader-shared-')).sort());
+    const dbs = await hp.evaluate(async () => (await indexedDB.databases()).map((d) => d.name).filter((n) => n.startsWith('paper-reader-shared-team-')).sort());
     const refusedKeys = await hp.evaluate(() => JSON.parse(localStorage.getItem('pr.relay.refused.v1') || '[]'));
     await shot(hp, 'code-delete-e2e-07-holder-again');
     await hp.locator('.reader-toolbar .tb-back').click();

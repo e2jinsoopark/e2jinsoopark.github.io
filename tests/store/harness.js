@@ -91,10 +91,14 @@ window.__libs = {};
 window.__eventsBy = {};
 window.__L = (key = 'mine') => (key === 'mine' ? window.__lib : window.__libs[key]);
 
-/** Open 공용 서재 through the (fake) relay with openSharedLibrary(). */
-window.__openShared = async ({ key = 'team', relayUrl, code, name, syncOptions } = {}) => {
+/**
+ * Open a relay library through the (fake) relay with openSharedLibrary(): 공용 서재 by default, or the code's own
+ * library with `lib: 'mine'` and GET /shared's `libraryId` (plus `personId` / `label` as the app passes them).
+ */
+window.__openShared = async ({ key = 'team', relayUrl, code, name, syncOptions, lib: libId, libraryId, personId, label } = {}) => {
   const { openSharedLibrary } = await import('/js/store/library.js');
-  const lib = await openSharedLibrary({ relayUrl, code, name, syncOptions });
+  const extra = Object.fromEntries(Object.entries({ lib: libId, libraryId, personId, label }).filter(([, v]) => v !== undefined));
+  const lib = await openSharedLibrary({ relayUrl, code, name, syncOptions, ...extra });
   const ev = { status: [], change: [], remote: [], errors: [] };
   lib.addEventListener('syncstatus', (e) => ev.status.push({ at: Date.now(), ...e.detail }));
   lib.addEventListener('change', (e) => ev.change.push({ at: Date.now(), ...e.detail }));
@@ -102,8 +106,11 @@ window.__openShared = async ({ key = 'team', relayUrl, code, name, syncOptions }
   lib.sync.addEventListener('remotechange', (e) => ev.remote.push({ at: Date.now(), ...e.detail }));
   window.__libs[key] = lib;
   window.__eventsBy[key] = ev;
-  return { id: lib.id, label: lib.label, prefix: lib.personalPrefix, status: lib.sync.status };
+  return { id: lib.id, label: lib.label, prefix: lib.personalPrefix, rootPrefix: lib.rootPrefix, status: lib.sync.status };
 };
+
+/** GET /shared of the (fake) relay for `code`, as the app asks it. */
+window.__sharedInfo = async (relayUrl, code) => (await fetch(`${relayUrl}/shared`, { headers: { Authorization: `Bearer ${code}` } })).json();
 
 window.__waitLib = async (key, { state = 'idle', pending = 0, timeout = 20000 } = {}) => {
   const lib = window.__L(key);

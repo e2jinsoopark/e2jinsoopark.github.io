@@ -59,6 +59,34 @@ await test('mergeRecords with base: rename on one side + move on the other both 
   return JSON.stringify(m.f);
 });
 
+await test('mergeLibrary with base: a record the relay moved out (gone on one side) stays gone — also when the other side edited it meanwhile; new records and base-less merges keep everything', () => {
+  const moral = { id: 'p_moral', title: 'Moral Sensitivity', folderId: null, addedBy: '봄당', updatedAt: 5 };
+  const proc = { id: 'p_proc', title: 'Procedures', folderId: 'f_chan', addedBy: '6기', updatedAt: 5 };
+  const chan = { id: 'f_chan', name: '찬영', parentId: null, updatedAt: 5 };
+  const lessons = { id: 'p_less', title: 'Lessons', deleted: true, deletedAt: 4, updatedAt: 4 };
+  const base = { version: 1, updatedAt: 5, folders: [chan], papers: [moral, proc, lessons] };
+  // The relay's split: Moral and Procedures moved to the code libraries (records removed), 찬영 tombstoned.
+  const remote = { version: 1, updatedAt: 9, folders: [{ ...chan, deleted: true, deletedAt: 9, deletedBy: '관리자', updatedAt: 9 }], papers: [lessons] };
+  // This device still had both records and made an unrelated change meanwhile (a new folder).
+  const local = { version: 1, updatedAt: 7, folders: [chan, { id: 'f_new', name: '새 폴더', parentId: null, updatedAt: 7 }], papers: [moral, proc, lessons] };
+  const m = mergeLibrary(local, remote, base);
+  const ids = (xs) => xs.map((x) => x.id).sort().join();
+  assert(ids(m.papers) === 'p_less' && ids(m.folders) === 'f_chan,f_new' && m.folders.find((f) => f.id === 'f_chan').deleted, `moved records must stay gone: ${JSON.stringify(m)}`);
+  // Same from the other direction (writeFile: memory is "local", the stored pull is "remote").
+  const back = mergeLibrary(remote, local, base);
+  assert(ids(back.papers) === 'p_less', `either side: ${ids(back.papers)}`);
+  // A record this device edited meanwhile (a rename, the reader's progress counts) is dropped too: its paper lives in
+  // the code library now and its files are gone here — pushing it back would leave a broken record.
+  const edited = mergeLibrary({ ...local, papers: [{ ...moral, title: 'Moral (고침)', translatedCount: 9, updatedAt: 8 }, proc, lessons] }, remote, base);
+  assert(ids(edited.papers) === 'p_less', ids(edited.papers));
+  // A tombstoned record the other side still has is a normal merge (tombstone wins), not a removal.
+  const tomb = mergeLibrary({ ...local, papers: [{ ...moral, deleted: true, deletedAt: 8, updatedAt: 8 }, proc, lessons] }, { ...base, papers: [moral, proc, lessons] }, base);
+  assert(tomb.papers.find((p) => p.id === 'p_moral')?.deleted === true && ids(tomb.papers) === 'p_less,p_moral,p_proc', JSON.stringify(tomb.papers));
+  assert(ids(mergeLibrary(local, remote).papers) === 'p_less,p_moral,p_proc', 'no base: union as before');
+  assert(mergeRecords([moral], [], [moral]).length === 1, 'mergeRecords without { removals } keeps the item (annotations etc.)');
+  return `kept [${ids(m.papers)}] + folders [${ids(m.folders)}]; an edited moved record is dropped too; tombstones and base-less merges unchanged`;
+});
+
 await test('mergeLibrary / mergeAnnotations keep both sides\' items', () => {
   const lib = mergeLibrary({ version: 1, updatedAt: 2, folders: [{ id: 'a', updatedAt: 1 }], papers: [] },
     { version: 1, updatedAt: 3, folders: [], papers: [{ id: 'p', updatedAt: 1 }] });
@@ -335,6 +363,79 @@ try {
     }
     assert(fake.log.length === before && external.length === 0, `requests: ${fake.log.length - before}, external ${external}`);
     return `401 → “${own.message}”; conflicts: ${conflicts.join(', ')}; invalid / missing / GitHub address → config error, 0 requests`;
+  });
+
+  await test('rootPrefix (an invite code\'s library in codes/<libraryId>/): listTree lists only that folder with library-relative paths, commit writes into it, the target names it; a truncated listing walks only the way down; bad prefixes and ../ paths are config errors with no request', async () => {
+    const pdf = new Uint8Array([37, 80, 68, 70, 45, 49]);
+    fake.createRepo('me', 'team', {
+      private: true,
+      files: {
+        'library.json': '{"version":1,"folders":[],"papers":[{"id":"t1"}]}',
+        'papers/t1/paper.pdf': Buffer.from('%PDF-team'),
+        'people/x/papers/t1/ai.json': '{}',
+        'codes/abc/library.json': '{"version":1,"folders":[],"papers":[{"id":"p1"}]}',
+        'codes/abc/papers/p1/paper.pdf': Buffer.from(pdf),
+        'codes/abc/people/x/papers/p1/ai.json': '{"version":1}',
+        'codes/def/library.json': '{"version":1,"folders":[],"papers":[]}',
+        'codes/abcd/library.json': '{"lookalike":true}',
+      },
+    });
+    const at = (rootPrefix, o = {}) => new GitHubClient({ owner: 'me', repo: 'team', token: 'good', apiBase: fake.url, rateLimitMaxWaitMs: 5000, rootPrefix, ...o });
+    const c = at('codes/abc/');
+    const head = await c.getHead();
+    const keys = (m) => [...m.keys()].sort().join();
+    const listed = await c.listTree(head.treeSha);
+    assert(keys(listed) === 'library.json,papers/p1/paper.pdf,people/x/papers/p1/ai.json', `code library listing: ${keys(listed)}`);
+    assert(listed.get('papers/p1/paper.pdf').sha === (await gitBlobSha(pdf)), 'sha of the folder file');
+    const rootList = await at('').listTree(head.treeSha);
+    assert(rootList.has('codes/abc/library.json') && rootList.has('library.json'), 'no prefix = whole repo (as before)');
+
+    const res = await c.commit([
+      { path: 'papers/p2/translation.json', text: '{"items":{}}' },
+      { path: 'people/x/papers/p1/ai.json', delete: true },
+    ], 'code library commit', { parent: head.commitSha, baseTree: head.treeSha });
+    const files = [...fake.files('me', 'team').keys()].sort();
+    assert(files.includes('codes/abc/papers/p2/translation.json') && !files.includes('codes/abc/people/x/papers/p1/ai.json'), `repo after commit: ${files}`);
+    assert(files.includes('people/x/papers/t1/ai.json') && files.includes('codes/def/library.json') && files.includes('library.json') && !files.includes('papers/p2/translation.json'), `outside the folder untouched: ${files}`);
+    assert(Object.keys(res.blobs).join() === 'papers/p2/translation.json', `blobs keyed by library path: ${Object.keys(res.blobs)}`);
+    assert(keys(await c.listTree(res.treeSha)) === 'library.json,papers/p1/paper.pdf,papers/p2/translation.json', 'listing after commit');
+
+    assert(c.target === `${fake.url}/me/team#main:codes/abc/` && at('').target === `${fake.url}/me/team#main` && c.rootPrefix === 'codes/abc/', `targets: ${c.target} / ${at('').target}`);
+
+    // Truncated recursive listing → level-by-level walk that never enters the root's papers/, people/ or codes/def/.
+    const repoNow = fake.repo('me', 'team');
+    const entryOf = (treeSha, name) => repoNow.get(treeSha, 'tree').entries.find((e) => e.name === name)?.sha;
+    const codesTree = entryOf(res.treeSha, 'codes');
+    const skipped = [entryOf(res.treeSha, 'papers'), entryOf(res.treeSha, 'people'), entryOf(codesTree, 'def'), entryOf(codesTree, 'abcd')];
+    fake.setTruncateRecursive(2);
+    fake.clearLog();
+    let walked;
+    try {
+      walked = await c.listTree(res.treeSha);
+    } finally {
+      fake.setTruncateRecursive(0);
+    }
+    const treeGets = fake.log.filter((e) => /\/git\/trees\//.test(e.path));
+    assert(keys(walked) === 'library.json,papers/p1/paper.pdf,papers/p2/translation.json', `walked: ${keys(walked)}`);
+    assert(!treeGets.some((e) => skipped.some((sha) => e.path.endsWith(sha))), `walked into other folders: ${treeGets.map((e) => e.path.split('/').pop().slice(0, 7))}`);
+
+    const before = fake.log.length;
+    const refusals = [];
+    for (const bad of ['../x/', 'codes/abc', '/codes/abc/', 'codes//', 'codes/a b/', 'codes/./']) {
+      const r = await at(bad).checkAccess({ quick: true });
+      assert(!r.ok && /저장 위치가 올바르지 않습니다/.test(r.message), `${bad}: ${JSON.stringify(r)}`);
+      let err = null;
+      try { await at(bad).getHead(); } catch (e) { err = e; }
+      assert(err?.code === 'config', `${bad}: ${err}`);
+      refusals.push(bad);
+    }
+    for (const path of ['../library.json', '/library.json', 'papers/../../library.json', 'papers//x.json']) {
+      let err = null;
+      try { await c.commit([{ path, sha: listed.get('library.json').sha }], 'escape', { parent: res.commitSha, baseTree: res.treeSha }); } catch (e) { err = e; }
+      assert(err?.code === 'config' && /잘못된 파일 경로/.test(err.message), `${path}: ${err}`);
+    }
+    assert(fake.log.length === before, `requests for bad prefixes / paths: ${fake.log.slice(before).map((e) => e.path)}`);
+    return `listing [${keys(listed)}]; commit landed in codes/abc/ only; target …#main:codes/abc/; truncated walk made ${treeGets.length} tree requests, none into papers/, people/, codes/def/ or codes/abcd/; refused prefixes ${refusals.join(' ')} and ../ paths with 0 requests`;
   });
 
   await test('5xx is retried; server down → network error (Korean)', async () => {

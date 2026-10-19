@@ -27,7 +27,7 @@ export const GLOBAL_LIMIT_USD = 1;
 export const TEAM_TOKEN = 'github_pat_team_test_token_0123456789';
 /** Shared libraries of the test Worker: the team library, a small one (size cap) and one whose repo is public. */
 export const SHARED_LIBRARIES = [
-  { id: 'team', name: '공용 서재', repo: 'dindoopark/paper-team-library', branch: 'main', maxBytes: 4_000_000_000 },
+  { id: 'team', name: '전체 공용 서재', repo: 'dindoopark/paper-team-library', branch: 'main', maxBytes: 4_000_000_000 },
   { id: 'small', name: '작은 서재', repo: 'dindoopark/paper-small-library', branch: 'main', maxBytes: 1_000_000, maxFiles: 8 },
   { id: 'lab', name: '연구실 서재', repo: 'dindoopark/lab-library', branch: 'main' },
 ];

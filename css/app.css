@@ -856,6 +856,35 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .relay-delete .keep { white-space: nowrap; }
 .relay-delete .modal-message + .modal-message { margin-top: 8px; }
 .relay-delete .modal-message:last-child { color: var(--text-2); font-size: 14px; }
+/* 삭제: what happens to the code's own library */
+.relay-lib-choice { margin: 14px 0 0; padding: 0; border: 0; min-width: 0; }
+.relay-lib-choice legend {
+  display: flex; align-items: center; gap: 6px; padding: 0; margin-bottom: 8px; font-size: 13.5px; font-weight: 700; color: var(--text);
+}
+.relay-lib-choice legend .icon { color: var(--accent-text); flex: none; }
+.relay-lib-choice .radio-cards { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.relay-lib-choice .radio-card { padding-top: 11px; padding-bottom: 11px; }
+.relay-lib-choice .radio-card:has(input:disabled) { cursor: default; opacity: 0.7; }
+.relay-lib-choice .relay-move-to { margin: 6px 0 2px; height: 34px; font-size: 14px; }
+.relay-lib-choice + .modal-message { margin-top: 12px; }
+.relay-code-meta .relay-code-lib { color: var(--text-2); }
+.relay-lib-cap .field-label { display: inline-flex; align-items: center; gap: 5px; }
+.relay-lib-cap .field-label .icon { color: var(--accent-text); flex: none; }
+/* 전체 공용 서재 → each uploader's code library (admin) */
+.relay-split .subsection-title .icon-users { color: var(--success); }
+.relay-split-hint { margin: 0 0 10px; }
+.split-plan .modal-message { margin: 0 0 10px; }
+.split-list { list-style: none; margin: 0; padding: 4px; display: grid; gap: 2px; border-radius: 10px; border: 1px solid var(--border); max-height: min(44vh, 340px); overflow-y: auto; }
+.split-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 10px; border-radius: 8px; }
+.split-row > .icon { color: var(--text-3); margin-top: 2px; }
+.split-title { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-where { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 2px; font-size: 12.5px; color: var(--text-3); }
+.split-where b { color: var(--accent-text); font-weight: 600; }
+.split-where .icon-lock { color: var(--accent-text); flex: none; margin-right: -6px; }
+.split-folder { display: inline-flex; align-items: center; gap: 4px; }
+.split-row.is-skipped .split-title { font-weight: 500; color: var(--text-2); }
+.split-skipped { margin-top: 12px; }
+.split-skipped > summary { cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
 .tone-success .message-icon { background: var(--success-soft); color: var(--success); }
 @media (max-width: 860px) {
   .relay-create { grid-template-columns: minmax(0, 1fr); }
@@ -877,6 +906,8 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .lib-sec-toggle > .icon:not(.lib-sec-chevron) { color: var(--text-3); flex: none; }
 .lib-sec.is-current .lib-sec-toggle > .icon:not(.lib-sec-chevron) { color: var(--accent); }
 .lib-sec.is-shared .lib-sec-toggle > .icon-users { color: var(--success); }
+/* an invite code's own library (only its holders see it): the lock in the mocha accent */
+.lib-sec.is-code .lib-sec-toggle > .icon-lock { color: var(--accent-text); }
 .lib-sec-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-sec-sync {
   display: grid; place-items: center; width: 28px; height: 28px; flex: none; padding: 0; border: 0; border-radius: 7px;
@@ -909,6 +940,8 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 }
 .shared-facts li > .icon { color: var(--accent); margin-top: 3px; flex: none; }
 .shared-facts b { color: var(--text); }
+.shared-intro.is-code .shared-intro-mark { background: var(--accent-soft); color: var(--accent-text); }
+.shared-intro.is-code .onboarding-hero { padding-bottom: 18px; }
 
 /* 휴지통 */
 .trash { max-width: 920px; }
@@ -962,8 +995,14 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .folder-picker .menu-item:has(input:checked) { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .folder-picker .menu-item > .icon { color: var(--text-3); flex: none; }
 .folder-picker .menu-item > .icon-users { color: var(--success); }
-.copy-dialog .modal-message { margin-bottom: 2px; }
-.copy-libs { margin-top: 10px; }
+.folder-picker .menu-item > .icon-lock { color: var(--accent-text); }
+.copy-dialog .modal-message { margin-bottom: 2px; word-break: keep-all; overflow-wrap: anywhere; }
+/* 다른 서재로 복사: one button per other library */
+.copy-libs { display: flex; flex-wrap: wrap; max-width: 100%; margin-top: 10px; }
+.copy-libs .btn { min-width: 0; max-width: 100%; }
+.copy-libs .btn .icon { flex: none; color: var(--text-3); }
+.copy-libs .btn[aria-pressed='true'] .icon-users { color: var(--success); }
+.copy-libs .btn[aria-pressed='true'] .icon-lock, .copy-libs .btn[aria-pressed='true'] .icon-library { color: var(--accent-text); }
 .copy-tools { display: flex; justify-content: flex-end; margin-top: 6px; }
 
 /* reader: the paper is in 공용 서재 */
@@ -974,6 +1013,7 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 }
 .tb-shared .icon { flex: none; }
 .tb-shared-note { font-weight: 500; color: var(--text-2); }
+.tb-shared.is-code { background: var(--accent-soft); color: var(--accent-text); }
 
 /* settings: 공용 서재 status */
 .settings-nav-shared .icon-users { color: var(--success); }
@@ -984,6 +1024,7 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .shared-lib + .shared-lib { margin-top: 8px; }
 .shared-lib-head { display: flex; align-items: center; gap: 8px; font-size: 14.5px; }
 .shared-lib-head .icon-users { color: var(--success); }
+.shared-lib-head .icon-lock { color: var(--accent-text); }
 .shared-row { justify-content: space-between; flex-wrap: wrap; }
 .shared-row .test-result { margin-top: 6px; flex: 1 1 260px; min-width: 0; }
 .btn-row-inline { display: flex; gap: 6px; flex-wrap: wrap; }

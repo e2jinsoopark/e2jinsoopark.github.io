@@ -8,7 +8,7 @@ import {
   button, contextMenu, hasOpenLayer, iconButton, messageScreen, modal, progressBar, spinner, toast, uiState,
 } from './components.js';
 import { icon, resolveIcon } from './icons.js';
-import { rememberSharedOpen, sharedIcon } from './library-view.js';
+import { libraryIcon, rememberSharedOpen } from './library-view.js';
 import { TranslationPane, isTranslatableSentence } from './translation-pane.js';
 
 const VIEW_MODES = [
@@ -413,13 +413,22 @@ class ReaderView {
     return this.#libId ? `#/s/${encodeURIComponent(this.#libId)}` : '#/';
   }
 
-  /** 공용 서재: what the others see of this paper. */
+  /**
+   * 공용 서재: what the others see of this paper. A code's own library ('<name> 서재') is seen only by the holders of
+   * that invite code; 전체 공용 서재 by everyone with a code (translations shared, notes one's own).
+   */
   #sharedBadge() {
     if (!this.#libId) return null;
-    const name = this.#deps.shared?.entry?.(this.#libId)?.name || '공용 서재';
-    const text = `${name} · 번역은 모두와 공유, 메모는 나만`;
-    return el('span', { class: 'tb-shared', title: `${text}\n(하이라이트·메모·AI 요약·채팅은 다른 사람에게 보이지 않습니다)`, role: 'note', 'aria-label': text },
-      sharedIcon(14), el('span', { class: 'tb-shared-name' }, name), el('span', { class: 'tb-shared-note' }, ' · 번역은 모두와 공유, 메모는 나만'));
+    const entry = this.#deps.shared?.entry?.(this.#libId);
+    const name = entry?.name || '공용 서재';
+    const code = entry?.kind === 'code';
+    const tail = code ? '이 코드만 보는 서재' : '번역은 모두와 공유, 메모는 나만';
+    const text = `${name} · ${tail}`;
+    const tip = code
+      ? `${name} · 이 초대 코드를 가진 사람만 봅니다`
+      : `${text}\n(하이라이트·메모·AI 요약·채팅은 다른 사람에게 보이지 않습니다)`;
+    return el('span', { class: `tb-shared${code ? ' is-code' : ''}`, title: tip, role: 'note', 'aria-label': text },
+      libraryIcon(code ? 'code' : 'team', 14), el('span', { class: 'tb-shared-name' }, name), el('span', { class: 'tb-shared-note' }, ` · ${tail}`));
   }
 
   #setTitle(paper) {

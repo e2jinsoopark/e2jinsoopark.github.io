@@ -1,16 +1,27 @@
 // Pure rules of the shared library ("공용 서재", docs/SHARED.md §1–§2): which repo paths a person may see, write and
 // delete, how tree listings are filtered, and how commit messages are rewritten. No I/O here (unit-tested).
 //
-//   library.json                                         shared
-//   papers/<paperId>/paper.pdf                           shared, immutable
-//   papers/<paperId>/translation.json                    shared
-//   people/<personId>/papers/<paperId>/annotations.json  only that person
-//   people/<personId>/papers/<paperId>/ai.json           only that person
-//   README.md                                            created once (bootstrap)
+// One repo holds two kinds of library (docs/CODE-LIBRARIES.md, 2026-10-19):
+//   the team library (전체 공용 서재) at the repo root — every active invite code:
+//     library.json                                         shared
+//     papers/<paperId>/paper.pdf                           shared, immutable
+//     papers/<paperId>/translation.json                    shared
+//     people/<personId>/papers/<paperId>/annotations.json  only that person
+//     people/<personId>/papers/<paperId>/ai.json           only that person
+//     README.md                                            created once (bootstrap)
+//   one code library per invite code under codes/<libraryId>/ — only the holders of that code, same layout:
+//     codes/<libraryId>/library.json, codes/<libraryId>/papers/<paperId>/…, codes/<libraryId>/people/<personId>/…
+// A library's `root` is '' (team) or 'codes/<libraryId>/' (a code library); its rules are the team rules under it.
 
 export const LIBRARY_PATH = 'library.json';
 export const README_PATH = 'README.md';
 export const PERSON_ID_RE = /^[0-9a-f]{16}$/;
+/** A code library's id (codes.library_id): 16 hex, random. */
+export const LIBRARY_ID_RE = /^[0-9a-f]{16}$/;
+/** The folder of the code libraries; the team library never shows or writes anything under it. */
+export const CODES_DIR = 'codes';
+/** The commit-message marker of the team library ({lib:team}); a code library's marker is its id. */
+export const TEAM_MARKER = 'team';
 const ID = '[A-Za-z0-9_-]{1,64}';
 const SHARED_FILE_RE = new RegExp(`^papers/(${ID})/(paper\\.pdf|translation\\.json)$`);
 const PERSONAL_FILE_RE = new RegExp(`^people/([0-9a-f]{16})/papers/(${ID})/(annotations|ai)\\.json$`);
@@ -20,10 +31,25 @@ const ENTRY_KEYS = new Set(['path', 'mode', 'type', 'sha']);
 const MAX_ENTRIES = 20_000;
 const COMMIT_MESSAGE_MAX = 200;
 const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g;
-// Person ids (a hash of the invite code: only 40 bits of code behind 64 bits of hash, so never show one to others)
-// and invite codes that a client put into a commit message.
+// Person ids (a hash of the invite code: only 40 bits of code behind 64 bits of hash, so never show one to others),
+// code library ids and invite codes that a client put into a commit message.
 const PERSON_IN_TEXT = /people\/[0-9a-f]{16}(?![0-9a-f])/gi;
+const LIBRARY_IN_TEXT = /codes\/[0-9a-f]{16}(?![0-9a-f])/gi;
 const CODE_IN_TEXT = /\bPR-?[0-9A-HJKMNP-TV-Z]{4}-?[0-9A-HJKMNP-TV-Z]{4}\b/g;
+/** "{lib:<marker>}": which library a commit (line) belongs to. Written only by the Worker; never shown in the app. */
+const MARKER_IN_TEXT = /\{\s*lib\s*:[^}\n]*\}/gi;
+const MARKER_LINE = /^\{lib:(team|[0-9a-f]{16})\}\s?(.*)$/;
+
+/** The root of code library `libraryId` in the repo: 'codes/<libraryId>/'. */
+export function codeRoot(libraryId) {
+  return `${CODES_DIR}/${libraryId}/`;
+}
+
+/** The commit marker of the library at `root` ('team', or the code library's id). */
+export function markerOf(root) {
+  if (!root) return TEAM_MARKER;
+  return root.slice(CODES_DIR.length + 1, -1);
+}
 
 /**
  * personId = first 16 hex chars of HMAC-SHA-256(secret, stored invite code), or of HMAC-SHA-256(secret,
@@ -82,7 +108,8 @@ export function personFiles(paths, personIds) {
 
 /** 최근 활동 line of the server commit that removes a deleted code's people/<id>/ files (no person id in it). */
 export const CODE_DELETE_SUMMARY = '초대 코드 삭제에 따라 개인 기록 정리';
-export const CODE_DELETE_MESSAGE = `[관리자] ${CODE_DELETE_SUMMARY}`;
+/** That commit's message in a library with only this change (the team library's marker). */
+export const CODE_DELETE_MESSAGE = `[관리자] {lib:team} ${CODE_DELETE_SUMMARY}`;
 
 export const isPaperId = (id) => typeof id === 'string' && PAPER_ID_RE.test(id);
 
@@ -102,8 +129,15 @@ export function classifyPath(path) {
   return null;
 }
 
+/** What a repo path is inside the library at `root` (classifyPath of the rest), or null outside that library. */
+export function classifyIn(path, root) {
+  if (typeof path !== 'string') return null;
+  if (!root) return classifyPath(path);
+  return path.startsWith(root) ? classifyPath(path.slice(root.length)) : null;
+}
+
 /**
- * Whether `path` (a file or directory, relative to the repo root) may appear in `me`'s tree listings:
+ * Whether `path` (a file or directory, relative to the library's root) may appear in `me`'s tree listings:
  * everything except other people's `people/<other>` directories and what is under them.
  */
 export function visibleTo(path, me) {
@@ -113,15 +147,27 @@ export function visibleTo(path, me) {
 }
 
 /**
- * Tree listing entries (paths relative to the listed tree, which sits at `prefix` in the repo) that `me` may see.
- * Each kept entry is reduced to GitHub's documented fields.
+ * Whether repo `path` ('' = the root tree) may appear in `me`'s listings of the library at `root`:
+ * - team library (root ''): everything but codes/ (the code libraries) and other people's people/<other>.
+ * - code library ('codes/<id>/'): the root, `codes` and `codes/<id>` (the way down), and what is under the
+ *   library's root except other people's people/<other>; nothing else of the repo.
  */
-export function filterEntries(entries, prefix, me) {
+export function visibleIn(path, root, me) {
+  if (!root) return path !== CODES_DIR && !path.startsWith(`${CODES_DIR}/`) && visibleTo(path, me);
+  if (path === '' || path === CODES_DIR || path === root.slice(0, -1)) return true;
+  return path.startsWith(root) && visibleTo(path.slice(root.length), me);
+}
+
+/**
+ * Tree listing entries (paths relative to the listed tree, which sits at `prefix` in the repo) that `me` may see
+ * in the library at `root` ('' = the team library). Each kept entry is reduced to GitHub's documented fields.
+ */
+export function filterEntries(entries, prefix, me, root = '') {
   const out = [];
   for (const e of Array.isArray(entries) ? entries : []) {
     if (!e || typeof e.path !== 'string') continue;
     const full = prefix ? `${prefix}/${e.path}` : e.path;
-    if (!visibleTo(full, me)) continue;
+    if (!visibleIn(full, root, me)) continue;
     const entry = { path: e.path, mode: e.mode, type: e.type, sha: e.sha };
     if (e.size !== undefined) entry.size = e.size;
     out.push(entry);
@@ -137,12 +183,14 @@ export function filterEntries(entries, prefix, me) {
  * - Deletions (sha: null) only of people/<me>/papers/<id>/(annotations|ai).json.
  * - Entries are plain files: { path, mode: '100644', type: 'blob', sha } and nothing else (no inline content, no
  *   symlinks, submodules or subtrees).
+ * In a code library (`root` 'codes/<id>/') every path must lie under the root and the same rules apply to the rest;
+ * in the team library (root '') nothing under codes/ is in the layout.
  * @param {any} entries
- * @param {{ me: string, baseFiles: Map<string, { sha: string }> | null }} opts baseFiles = the base tree's files
- *        (null when the branch does not exist yet, i.e. there is no base)
+ * @param {{ me: string, baseFiles: Map<string, { sha: string }> | null, root?: string }} opts baseFiles = the base
+ *        tree's files (null when the branch does not exist yet, i.e. there is no base); root = the library's root
  * @returns {{ entries: { path: string, mode: string, type: string, sha: string | null }[] } | { error: string }}
  */
-export function checkTreeEntries(entries, { me, baseFiles }) {
+export function checkTreeEntries(entries, { me, baseFiles, root = '' }) {
   if (!Array.isArray(entries)) return { error: '트리 항목(tree)은 배열이어야 합니다.' };
   if (entries.length > MAX_ENTRIES) return { error: `한 번에 바꿀 수 있는 파일은 ${MAX_ENTRIES}개까지입니다.` };
   const out = [];
@@ -151,7 +199,7 @@ export function checkTreeEntries(entries, { me, baseFiles }) {
       return { error: `트리 항목 형식이 올바르지 않습니다: ${shown(e)}` };
     }
     const { path, sha } = e;
-    const where = classifyPath(path);
+    const where = classifyIn(path, root);
     if (!where || where.kind === 'readme') return { error: `공용 서재에 둘 수 없는 경로입니다: ${shown(path)}` };
     if (e.mode !== '100644' || (e.type !== undefined && e.type !== 'blob')) {
       return { error: `일반 파일(mode 100644, blob)만 저장할 수 있습니다: ${shown(path)}` };
@@ -176,9 +224,15 @@ export function checkTreeEntries(entries, { me, baseFiles }) {
   return { entries: out };
 }
 
-/** Text without person ids, invite codes and control characters. */
+/** Text without person ids, code library ids, invite codes and control characters. */
 export function scrubText(text) {
-  return String(text ?? '').replace(CONTROL_CHARS, ' ').replace(PERSON_IN_TEXT, 'people/…').replace(CODE_IN_TEXT, '(초대 코드)');
+  return String(text ?? '').replace(CONTROL_CHARS, ' ').replace(PERSON_IN_TEXT, 'people/…').replace(LIBRARY_IN_TEXT, 'codes/…')
+    .replace(CODE_IN_TEXT, '(초대 코드)');
+}
+
+/** Text without library markers ({lib:…}): a client's own text never carries one into a commit message. */
+function unmarked(text) {
+  return String(text ?? '').replace(MARKER_IN_TEXT, ' ');
 }
 
 /** The name as written into commit messages: no brackets (they delimit the name), no control characters. */
@@ -186,19 +240,76 @@ function messageName(name) {
   return String(name ?? '').replace(CONTROL_CHARS, ' ').replace(/\[/g, '(').replace(/\]/g, ')').trim() || '이름 없음';
 }
 
-/** `[<code name>] <first line of the client's message>`, at most 200 characters. */
-export function commitMessageFor(name, message) {
-  const first = scrubText(String(message ?? '').split(/\r\n|\r|\n/)[0]).replace(/\s+/g, ' ').trim();
-  const text = first ? `[${messageName(name)}] ${first}` : `[${messageName(name)}]`;
+/**
+ * The summary a client's commit message becomes (its first line without markers, person ids, codes or runs of
+ * spaces): what commitMessageFor writes, and so what the quiet-summary check (shared.js createCommit) must look at.
+ */
+export function clientSummary(message) {
+  return scrubText(unmarked(String(message ?? '').split(/\r\n|\r|\n/)[0])).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * `[<code name>] <first line of the client's message>`, or with a library `marker` ('team' or a code library's id)
+ * `[<code name>] {lib:<marker>} <first line>` — at most 200 characters. Markers in the client's text are dropped.
+ */
+export function commitMessageFor(name, message, marker = null) {
+  const first = clientSummary(message);
+  const head = marker ? `[${messageName(name)}] {lib:${marker}}` : `[${messageName(name)}]`;
+  const text = first ? `${head} ${first}` : head;
   const chars = [...text];
   return chars.length <= COMMIT_MESSAGE_MAX ? text : `${chars.slice(0, COMMIT_MESSAGE_MAX - 1).join('')}…`;
 }
 
-/** { who, summary } of a commit message written by commitMessageFor (who is null for other commits). */
+/**
+ * A server-made commit message (관리자): one line per library it changed, `lines` = [{ marker, summary }] —
+ * `[관리자] {lib:<a>} <summary>` then `{lib:<b>} <summary>` … so each library's 최근 활동 shows its own line.
+ */
+export function adminMessage(lines) {
+  return lines.map(({ marker, summary }, i) => `${i === 0 ? '[관리자] ' : ''}{lib:${marker}} ${summary}`).join('\n');
+}
+
+/**
+ * Who made a commit and what it did per library: `{ who, lines: [{ marker, summary }] }`. The first line is
+ * `[who] {lib:<marker>} summary` (a commit from before library markers, or made outside the Worker, has no marker:
+ * it belongs to the team library); a server-made commit adds `{lib:<marker>} summary` lines for other libraries.
+ * Summaries are scrubbed (no person ids, codes) and never carry a marker.
+ */
+export function commitLines(message) {
+  const rows = String(message ?? '').split(/\r\n|\r|\n/);
+  const first = scrubText(rows[0]).trim();
+  // The name has no ']' (messageName) and at most 40 characters — up to 80 UTF-16 units with emoji and other
+  // characters outside the BMP. A bound below that would read a code library's line as a markerless one, i.e. as
+  // the team library's, and show its titles in 전체 공용 서재 (scrubText never lengthens the line).
+  const m = /^\[([^\]]{1,200})\]\s?(.*)$/.exec(first);
+  const who = m ? m[1] : null;
+  const rest = m ? m[2] : first;
+  const top = MARKER_LINE.exec(rest);
+  const lines = [top ? { marker: top[1], summary: unmarked(top[2]).trim() } : { marker: TEAM_MARKER, summary: unmarked(rest).trim() }];
+  for (const row of rows.slice(1)) {
+    const extra = MARKER_LINE.exec(row.trim());
+    if (extra && !lines.some((l) => l.marker === extra[1])) {
+      lines.push({ marker: extra[1], summary: unmarked(scrubText(extra[2])).trim() });
+    }
+  }
+  return { who, lines };
+}
+
+/**
+ * The commit message as the library with `marker` may see it: `[who] <its summary>` (no marker), or '' when the
+ * commit did not change that library (another code library's titles and names must not show).
+ */
+export function messageFor(message, marker) {
+  const { who, lines } = commitLines(message);
+  const line = lines.find((l) => l.marker === marker);
+  if (!line) return '';
+  if (who === null) return line.summary;
+  return line.summary ? `[${who}] ${line.summary}` : `[${who}]`;
+}
+
+/** { who, summary } of a commit message written by commitMessageFor (who is null for other commits; no marker). */
 export function parseCommitLine(message) {
-  const first = scrubText(String(message ?? '').split(/\r\n|\r|\n/)[0]).trim();
-  const m = /^\[([^\]]{1,60})\]\s?(.*)$/.exec(first);
-  return m ? { who: m[1], summary: m[2] } : { who: null, summary: first };
+  const { who, lines } = commitLines(message);
+  return { who, summary: lines[0].summary };
 }
 
 /**

@@ -1,11 +1,13 @@
-// Relay test runner:  node relay/test/run.mjs [unit|http|codes|sdk|shared|shared-client|code-delete ...]
+// Relay test runner:  node relay/test/run.mjs [unit|http|codes|sdk|shared|shared-client|code-libs|code-delete ...]
 // 1. unit tests (pure modules, no servers)
 // 2. a throwaway local D1 shaped like the deployed one after an update (the schema from before code deletion, then
 //    today's schema.sql twice: lib.mjs migratedDatabase) + fake Anthropic upstream (8788) + fake GitHub (8792, tests/store/fake-github.mjs) +
 //    `wrangler dev` (8787) with TEST_MODE=1
 // 3. HTTP tests (node fetch; `codes` = custom invite codes and the failed-attempt limiter) and SDK tests (real @anthropic-ai/sdk in Edge via Playwright, page on localhost:8789)
 // 4. shared library (공용 서재): HTTP tests of the GitHub proxy, then the app's GitHubClient through it (Node and Edge)
-// 5. code-delete: deleting an invite code (its people/<id>/ files in every shared library, D1 rows, usage history),
+// 5. code-libs: each invite code's own library (codes/<id>/ of the team repo, /shared/mine/gh): isolation, activity per
+//    library, the per-code size cap, code deletion with library=delete|move, the split by uploader, the library_id migration
+// 6. code-delete: deleting an invite code (its people/<id>/ files in every shared library, D1 rows, usage history),
 //    person salts and the schema migration
 // Results: C:/Users/dindoo/Projects/pr-tools/out/relay/results.json (+ run.log, wrangler.log; RELAY_OUT_DIR moves them).
 // No real API calls.
@@ -32,10 +34,12 @@ if (want('unit')) {
   const { tests } = await import('./unit.test.mjs');
   const { tests: sharedTests } = await import('./shared-unit.test.mjs');
   const { tests: codeTests } = await import('./codes-unit.test.mjs');
-  results.push(...await runTests('unit', [...tests, ...sharedTests, ...codeTests], {}, logLine));
+  const { tests: codeLibTests } = await import('./code-libs-unit.test.mjs');
+  results.push(...await runTests('unit', [...tests, ...sharedTests, ...codeTests, ...codeLibTests], {}, logLine));
 }
 
-const SERVER_SUITES = ['http', 'codes', 'sdk', 'shared', 'shared-client', 'code-delete'];
+// code-libs runs before code-delete: it checks that the legacy codes have no library id until they first need one.
+const SERVER_SUITES = ['http', 'codes', 'sdk', 'shared', 'shared-client', 'code-libs', 'code-delete'];
 if (SERVER_SUITES.some(want)) {
   const stateDir = STATE_DIR;
   let stopWrangler = () => {};

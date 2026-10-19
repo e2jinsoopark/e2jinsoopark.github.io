@@ -17,6 +17,9 @@ const RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
 const MAX_CONFLICT_RETRIES = 4;
 const TRANSFER_CONCURRENCY = 3;
 const COMMIT_BATCH_BYTES = 48 * 1024 * 1024;
+// An uploaded blob is reused (not uploaded again) for this long. The relay lets a tree name only blobs the person
+// uploaded within the last hour (relay/src/db.js SHARED_TREE_KEEP_MS) or can see already; GitHub keeps them longer.
+const UPLOAD_REUSE_MS = 45 * 60_000;
 const LOCK_NAME = 'paper-reader-sync';
 const VERIFY_EVERY_MS = 10 * 60_000; // re-check that the repo is still private while a tab stays open
 const VERIFY_BEFORE_PUSH_MS = 60_000; // …and shortly before uploading anything
@@ -70,7 +73,7 @@ export class SyncEngine extends EventTarget {
   #lastPullAt = 0;
   #meta = null; // cached RemoteMeta (invalidated by other tabs)
   #inflight = new Map(); // `${path}\n${sha}` → Promise (remote reads)
-  #uploaded = new Map(); // `${target}\n${path}\n${wid}` → blob sha (skip re-uploads on retry)
+  #uploaded = new Map(); // `${target}\n${path}\n${wid}` → { sha, at } (skip re-uploads on retry)
   #channel = null;
   #listeners = [];
   #lockName;
@@ -79,7 +82,10 @@ export class SyncEngine extends EventTarget {
   #texts;
 
   /**
-   * @param {{ db?: typeof defaultDb, getConfig: () => ({ owner, repo, branch?, token, apiBase?, proxy? } | null),
+   * Paths are the library's own ('library.json', 'papers/<id>/…', 'people/<id>/…') everywhere in the engine,
+   * its IndexedDB records and its events. A config with `rootPrefix` (a library kept in a folder of the repo,
+   * e.g. 'codes/<libId>/') is handed to GitHubClient, which maps them to and from repo paths.
+   * @param {{ db?: typeof defaultDb, getConfig: () => ({ owner, repo, branch?, token, apiBase?, proxy?, rootPrefix?, label? } | null),
    *           createClient?: (cfg) => GitHubClient, pushDelayMs?: number, pushMaxDelayMs?: number,
    *           pullIntervalMs?: number, retryDelaysMs?: number[], scope?: string, addReadme?: boolean,
    *           describeCommit?: (changes: { path: string, delete: boolean }[]) => string | null,
@@ -391,13 +397,15 @@ export class SyncEngine extends EventTarget {
         }
         for (let attempt = 1; ; attempt++) {
           try {
-            let meta = await this.#pull(client, ac.signal);
-            if (!meta.commitSha && (await this.#db.count('files', 'dirty', IDBKeyRange.only(PENDING))) && (await client.bootstrap({ signal: ac.signal }))) {
-              meta = await this.#pull(client, ac.signal); // empty repo: README.md commit first, data on top
-            }
+            const meta = await this.#pull(client, ac.signal);
             await this.#push(client, meta, ac.signal);
             break;
           } catch (err) {
+            if (err instanceof GitHubConflictError && attempt >= MAX_CONFLICT_RETRIES) {
+              // Still refused after pulling again: the next try uploads everything again (a relay accepts in a tree
+              // only blobs it saw this person upload recently).
+              this.#uploaded.clear();
+            }
             if (!(err instanceof GitHubConflictError) || attempt >= MAX_CONFLICT_RETRIES) throw err;
             console.warn('[store] push was not a fast-forward; pulling again', attempt);
             await sleep(150 * attempt + Math.random() * 250);
@@ -589,6 +597,9 @@ export class SyncEngine extends EventTarget {
     await this.#reconcileStale(client, meta, signal);
     const paths = (await this.#db.indexKeys('files', 'dirty', IDBKeyRange.only(PENDING)))
       .sort((x, y) => pushRank(x) - pushRank(y) || (x < y ? -1 : 1));
+    // Empty repo: README.md commit first, data on top (GitHub answers 409 to blobs in an empty repo). Decided on
+    // exactly the paths about to be uploaded, so a write that lands after the pull cannot hit the empty repo.
+    if (paths.length && !meta.commitSha && (await client.bootstrap({ signal }))) meta = await this.#pull(client, signal);
     let batch = [];
     let bytes = 0;
     for (let i = 0; i < paths.length; i += TRANSFER_CONCURRENCY) {
@@ -655,7 +666,8 @@ export class SyncEngine extends EventTarget {
 ${path}
 ${rec.wid}`;
     const bytes = typeof rec.data === 'string' ? utf8Encode(rec.data) : rec.data;
-    let sha = this.#uploaded.get(key);
+    const known = this.#uploaded.get(key);
+    let sha = known && Date.now() - known.at < UPLOAD_REUSE_MS ? known.sha : null;
     if (!sha) {
       const localSha = await gitBlobSha(bytes);
       if (localSha === remoteSha) sha = localSha;
@@ -671,7 +683,7 @@ ${rec.wid}`;
           throw err;
         }
       }
-      this.#uploaded.set(key, sha);
+      this.#uploaded.set(key, { sha, at: Date.now() });
     }
     return { path, wid: rec.wid, sha, unchanged: sha === remoteSha, text: baseTextFor(path, rec.data), size: bytes.byteLength, key };
   }
@@ -682,7 +694,8 @@ ${rec.wid}`;
     let next = meta;
     if (changes.length) {
       const files = changes.map((it) => (it.delete ? { path: it.path, delete: true } : { path: it.path, sha: it.sha }));
-      if (this.#opts.addReadme && !meta.tree[README_PATH]) files.push({ path: README_PATH, text: README_TEXT }); // "created if missing"
+      // "created if missing" — at the repo root only: a library kept in a folder of the repo has no README of its own.
+      if (this.#opts.addReadme && !client.rootPrefix && !meta.tree[README_PATH]) files.push({ path: README_PATH, text: README_TEXT });
       const res = await client.commit(files, this.#messageFor(changes), { parent: meta.commitSha, baseTree: meta.treeSha, signal });
       const tree = Object.fromEntries(
         [...(await client.listTree(res.treeSha, { signal }))].map(([p, v]) => [p, { sha: v.sha, size: v.size }]));

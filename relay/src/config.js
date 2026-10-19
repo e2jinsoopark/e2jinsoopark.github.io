@@ -18,6 +18,13 @@ export const MIN_ADMIN_TOKEN_LENGTH = 16;
 export const DEFAULT_SHARED_MAX_BYTES = 4_000_000_000;
 /** Default cap on the number of files in a shared library (stops filling the repo cheaply with tiny files). */
 export const DEFAULT_SHARED_MAX_FILES = 50_000;
+/** Default size cap of one invite code's own library (codes/<id>/ in the team repo); the admin may change it per code. */
+export const DEFAULT_CODE_LIBRARY_MAX_BYTES = 500_000_000;
+/** Bounds of a code library's size cap (admin input). */
+export const MIN_CODE_LIBRARY_MAX_BYTES = 1_000_000;
+export const MAX_CODE_LIBRARY_MAX_BYTES = 100_000_000_000;
+/** The URL id of the caller's own code library (/shared/mine/…); never a SHARED_LIBRARIES id. */
+export const CODE_LIBRARY_URL_ID = 'mine';
 const LIBRARY_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const BRANCH_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
@@ -27,7 +34,7 @@ const BRANCH_RE = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
  * @typedef {{ allowedOrigins: string[], upstreamUrl: string, defaultModels: string[], defaultDailyLimitUsd: number,
  *             globalDailyLimitUsd: number, maxTokensCap: number, apiKey: string, adminToken: string,
  *             testMode: boolean, githubApiBase: string, teamToken: string,
- *             sharedLibraries: SharedLibrary[] }} RelayConfig
+ *             sharedLibraries: SharedLibrary[], codeLibraryMaxBytes: number }} RelayConfig
  */
 
 /** @returns {RelayConfig} */
@@ -46,7 +53,19 @@ export function readConfig(env) {
     githubApiBase: String(env.GITHUB_API_BASE || 'https://api.github.com').trim().replace(/\/+$/, ''),
     teamToken: String(env.TEAM_GITHUB_TOKEN || '').trim(),
     sharedLibraries: parseSharedLibraries(env.SHARED_LIBRARIES),
+    codeLibraryMaxBytes: Math.floor(number(env.CODE_LIBRARY_MAX_BYTES, DEFAULT_CODE_LIBRARY_MAX_BYTES,
+      MIN_CODE_LIBRARY_MAX_BYTES, MAX_CODE_LIBRARY_MAX_BYTES)),
   };
+}
+
+/**
+ * The library whose repo also holds every invite code's own library (codes/<id>/, docs/CODE-LIBRARIES.md): the entry
+ * with id 'team', else the first one; null without shared libraries.
+ * @param {RelayConfig} config
+ * @returns {SharedLibrary | null}
+ */
+export function hostLibrary(config) {
+  return config.sharedLibraries.find((l) => l.id === 'team') ?? config.sharedLibraries[0] ?? null;
 }
 
 /**
@@ -74,8 +93,8 @@ export function parseSharedLibraries(value) {
     const name = typeof item?.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 40) : '공용 서재';
     const maxBytes = number(item?.maxBytes, DEFAULT_SHARED_MAX_BYTES, 1, Number.MAX_SAFE_INTEGER);
     const maxFiles = Math.floor(number(item?.maxFiles, DEFAULT_SHARED_MAX_FILES, 1, Number.MAX_SAFE_INTEGER));
-    if (!LIBRARY_ID_RE.test(id) || !REPO_RE.test(repo) || !BRANCH_RE.test(branch) || branch.includes('..')
-      || out.some((l) => l.id === id)) {
+    if (!LIBRARY_ID_RE.test(id) || id === CODE_LIBRARY_URL_ID || !REPO_RE.test(repo) || !BRANCH_RE.test(branch)
+      || branch.includes('..') || out.some((l) => l.id === id)) {
       console.error('[relay] skipping a malformed SHARED_LIBRARIES entry', JSON.stringify(item));
       continue;
     }

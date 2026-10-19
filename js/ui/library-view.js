@@ -1,6 +1,8 @@
 // Library view (#/ 내 서재 · #/s/<lib> 공용 서재): each library's folder tree, counts and sync chip in the sidebar,
 // paper list with search/sort, PDF upload, drag-drop, 휴지통 and (공용 서재) 최근 활동 — docs/SHARED.md §3.2.
-// Without an invite code the sidebar shows 내 서재 alone, exactly as before.
+// Without an invite code the sidebar shows 내 서재 alone, exactly as before. With one, the sections are 내 서재 (when
+// used, or for the owner), '<code name> 서재' (#/s/mine: only the holders of this invite code see it; an invitee's
+// default) and 전체 공용 서재 (#/s/team: every code). Papers and folders copy between any two of them.
 import { LIMITS } from '../core/config.js';
 import { settings } from '../core/settings.js';
 import { debounce, el, formatBytes, formatDate } from '../core/util.js';
@@ -29,6 +31,12 @@ const PAGES = {
 const MINE = 'mine';
 const MINE_LABEL = '내 서재';
 const SHARED_LABEL = '공용 서재';
+/** uiState: the library an invitee's #/ opens ('mine' or 'shared:<id>'; js/app.js SharedLibraries.homeHash). */
+const HOME_KEY = 'homeLibrary';
+/** uiState: the library last picked in '다른 서재로 복사…' (the dialog starts there). */
+const COPY_TARGET_KEY = 'copyTarget';
+/** Sidebar order of the libraries behind the relay: the code's own, then 전체 공용 서재. */
+const KIND_RANK = { code: 0, team: 1 };
 /** Deleted items stay restorable this long; the owner's 30일 지난 항목 비우기 removes older ones' files. */
 const TRASH_DAYS = 30;
 const DAY_MS = 86_400_000;
@@ -75,6 +83,16 @@ export function sharedIcon(size = 18, className = '') {
     svg.append(s);
   }
   return svg;
+}
+
+/**
+ * Icon of a library by kind: 'mine' (내 서재) books, 'code' (an invite code's own library, seen only by its holders) a
+ * lock, 'team' (전체 공용 서재, every code) two people.
+ */
+export function libraryIcon(kind, size = 18, className = '') {
+  if (kind === 'mine') return icon('library', { size, className });
+  if (kind === 'code') return icon('lock', { size, className });
+  return sharedIcon(size, className);
 }
 
 /**
@@ -163,7 +181,7 @@ class LibraryView {
     this.#key = key;
     this.#page = page;
     this.#autoHome = Boolean(route.home) && key === MINE;
-    if (route.lib) uiState.set('libraryHome', key);
+    if (route.lib) uiState.set(HOME_KEY, key);
     // The library shown is never folded away in the sidebar.
     const src = this.#source(key);
     if (src && this.#isCollapsed(src)) this.#toggleSection(src, false, { render: false });
@@ -302,30 +320,52 @@ class LibraryView {
   // ------------------------------------------------------------ libraries
 
   /**
-   * The libraries in the sidebar: 내 서재, then each team library (or one placeholder while the list is loading
-   * or could not be read).
+   * The libraries in the sidebar: 내 서재 (unless hidden, see #mineShown), then the code's own library and 전체 공용
+   * 서재 (or one placeholder while the list is loading or could not be read).
+   * Each: { key: 'mine'|'shared:<id>', id, kind: 'mine'|'code'|'team', shared, label, lib, status, error, placeholder? }
    */
   #sources() {
-    const out = [{ key: MINE, id: null, shared: false, label: MINE_LABEL, lib: this.#deps.library, status: 'ready', error: '' }];
+    const mine = { key: MINE, id: null, kind: 'mine', shared: false, label: MINE_LABEL, lib: this.#deps.library, status: 'ready', error: '' };
     const sh = this.#shared;
-    if (!sh?.enabled) return out;
+    if (!sh?.enabled) return [mine];
+    const out = this.#mineShown() ? [mine] : [];
     const list = sh.state === 'ready' ? sh.libraries : [];
     if (list.length) {
-      for (const e of list) {
-        out.push({ key: `shared:${e.id}`, id: e.id, shared: true, label: e.name || SHARED_LABEL, lib: e.library, status: e.status, error: e.error });
+      const sorted = [...list].sort((a, b) => (KIND_RANK[a.kind] ?? 2) - (KIND_RANK[b.kind] ?? 2));
+      for (const e of sorted) {
+        out.push({
+          key: `shared:${e.id}`, id: e.id, kind: e.kind || 'team', shared: true, label: e.name || SHARED_LABEL,
+          lib: e.library, status: e.status, error: e.error,
+        });
       }
     } else {
       out.push({
-        key: 'shared:', id: null, shared: true, label: SHARED_LABEL, lib: null, placeholder: true,
+        key: 'shared:', id: null, kind: 'team', shared: true, label: SHARED_LABEL, lib: null, placeholder: true,
         status: sh.state === 'error' ? 'error' : 'loading', error: sh.message,
       });
     }
     return out;
   }
 
+  /**
+   * 내 서재 in the sidebar: always without an invite code; for an invitee (code, no GitHub sync, AI through the code)
+   * only when it is in use (papers or folders), when they opened it on purpose (#/trash, a 내 서재 paper's link), or
+   * for the owner (admin token saved) — the code's own library is their place.
+   */
+  #mineShown() {
+    const sh = this.#shared;
+    if (!sh?.enabled || !sh.isInvitee?.()) return true;
+    if (this.#key === MINE && !this.#autoHome) return true;
+    if (String(settings.get().relay?.adminToken || '').trim()) return true;
+    const lib = this.#deps.library;
+    return Boolean(lib?.papers?.length || lib?.folders?.length);
+  }
+
   #source(key) { return this.#sources().find((s) => s.key === key) || null; }
   #current() { return this.#source(this.#key); }
   #multi() { return this.#sources().length > 1; }
+  /** Name the library in headers and prompts: several in the sidebar, or one behind the relay (not '라이브러리'). */
+  #named(src) { return Boolean(src?.shared) || this.#multi(); }
 
   #stateOf(key) {
     let st = this.#states.get(key);
@@ -362,7 +402,7 @@ class LibraryView {
 
   #renderNav() {
     const sources = this.#sources();
-    if (sources.length === 1) {
+    if (sources.length === 1 && sources[0].key === MINE) {
       this.#els.nav.replaceChildren(...this.#libraryNav(sources[0]));
       return;
     }
@@ -371,7 +411,7 @@ class LibraryView {
 
   /** One library's section: header (name + sync chip, folds), then its lists. */
   #sectionNav(src) {
-    const current = src.placeholder ? this.#key.startsWith('shared:') : this.#key === src.key;
+    const current = src.placeholder ? !this.#current() || this.#key.startsWith('shared:') : this.#key === src.key;
     const collapsed = this.#isCollapsed(src);
     const toggle = el('button', {
       type: 'button', class: 'lib-sec-toggle', 'aria-expanded': String(!collapsed),
@@ -379,13 +419,13 @@ class LibraryView {
       onclick: () => this.#toggleSection(src, !collapsed),
     },
     icon('chevron-right', { size: 14, className: 'lib-sec-chevron' }),
-    src.shared ? sharedIcon(16) : icon('library', { size: 16 }),
+    libraryIcon(src.kind, 16),
     el('span', { class: 'lib-sec-label', title: src.label }, src.label));
     const head = el('div', { class: 'lib-sec-head' }, toggle, src.lib ? this.#miniSync(src) : null);
     if (src.lib) this.#makeDropTarget(head, src, null, { acceptPapers: false, acceptFolders: false });
     const body = collapsed ? null : el('div', { class: 'lib-sec-body' }, this.#sectionBody(src));
     return el('section', {
-      class: `lib-sec${current ? ' is-current' : ''}${src.shared ? ' is-shared' : ''}`,
+      class: `lib-sec is-${src.kind}${current ? ' is-current' : ''}${src.shared ? ' is-shared' : ''}`,
       'data-lib': src.key, 'aria-label': src.label,
     }, head, body);
   }
@@ -428,7 +468,7 @@ class LibraryView {
 
     const heading = el('div', { class: 'lib-nav-heading' },
       el('span', {}, '폴더'),
-      iconButton('folder-plus', this.#multi() ? `${src.label}에 새 폴더` : '새 폴더', () => this.#createFolder(src, null), { size: 'sm' }));
+      iconButton('folder-plus', this.#named(src) ? `${src.label}에 새 폴더` : '새 폴더', () => this.#createFolder(src, null), { size: 'sm' }));
     this.#makeDropTarget(heading, src, null, { acceptPapers: false });
 
     const tree = this.#folderTree(src, folders, null, 0, counts);
@@ -546,7 +586,7 @@ class LibraryView {
   #go(key, page = 'list') {
     this.#autoHome = false;
     this.#toggleDrawer(false);
-    if (key === MINE) uiState.set('libraryHome', MINE); // an invitee chose 내 서재: #/ stays there from now on
+    if (key === MINE) uiState.set(HOME_KEY, MINE); // an invitee chose 내 서재: #/ stays there from now on
     this.#navigate(hrefFor(key, page));
   }
 
@@ -574,7 +614,7 @@ class LibraryView {
 
   #setHeader(src, title, crumbs = null) {
     const els = this.#els;
-    els.crumbs.replaceChildren(...(crumbs || [el('span', {}, this.#multi() ? src?.label || SHARED_LABEL : '라이브러리')]));
+    els.crumbs.replaceChildren(...(crumbs || [el('span', {}, this.#named(src) || !src ? src?.label || SHARED_LABEL : '라이브러리')]));
     els.title.textContent = title;
     document.title = src?.shared ? `${title} · ${src.label} · 갈피` : '갈피';
   }
@@ -591,7 +631,7 @@ class LibraryView {
     if (folder) {
       const chain = this.#chain(src.lib, folder.id).slice(1).reverse();
       const crumb = (label, target) => el('button', { type: 'button', onclick: () => this.#select(src.key, target) }, label);
-      crumbs = [crumb(this.#multi() ? src.label : '전체', 'all')];
+      crumbs = [crumb(this.#named(src) ? src.label : '전체', 'all')];
       for (const f of chain) crumbs.push(icon('chevron-right', { size: 12 }), crumb(f.name, `folder:${f.id}`));
     }
     this.#setHeader(src, folder ? folder.name : SMART[collection]?.label || '전체', crumbs);
@@ -764,10 +804,18 @@ class LibraryView {
         step(3, false, 'PDF 올리고 읽기', '논문을 열고 ‘번역 시작’을 누르면 현재 페이지부터 번역됩니다. 번역은 저장되어 다시 열 때 비용이 들지 않습니다.')));
   }
 
-  /** An empty team library: what is shared with whom, and where to start. */
+  /** An empty library behind the relay: who sees it, and where to start. */
   #sharedEmpty(src) {
-    const mine = this.#deps.library;
-    const canCopy = Boolean(mine?.papers?.length && typeof mine.copyPaperTo === 'function');
+    if (src.kind === 'code') {
+      // The code's own library: one line on who can see it, then the drop zone.
+      return el('section', { class: 'onboarding shared-intro is-code', 'aria-label': `${src.label} 시작하기` },
+        el('div', { class: 'onboarding-hero' },
+          el('div', { class: 'shared-intro-mark', 'aria-hidden': 'true' }, libraryIcon('code', 26)),
+          el('h2', {}, `${src.label}에 첫 논문을 올려 보세요`),
+          el('p', { class: 'shared-intro-line' }, '이 초대 코드를 가진 사람만 볼 수 있어요.')),
+        this.#dropzone());
+    }
+    const canCopy = this.#sources().some((s) => s.key !== src.key && s.lib?.papers?.length && typeof s.lib.copyPaperTo === 'function');
     return el('section', { class: 'onboarding shared-intro', 'aria-label': `${src.label} 시작하기` },
       el('div', { class: 'onboarding-hero' },
         el('div', { class: 'shared-intro-mark', 'aria-hidden': 'true' }, sharedIcon(26)),
@@ -778,7 +826,7 @@ class LibraryView {
         el('li', {}, icon('languages', { size: 16 }), el('span', {}, el('b', {}, '번역은 함께'), ' — 누군가 번역한 문장은 모두가 다시 비용 없이 봅니다.')),
         el('li', {}, icon('highlighter', { size: 16 }), el('span', {}, el('b', {}, '메모는 나만'), ' — 하이라이트·메모·AI 결과는 다른 사람에게 보이지 않습니다.')),
         el('li', {}, icon('trash', { size: 16 }), el('span', {}, el('b', {}, '휴지통'), ` — 누구나 지울 수 있는 대신 ${TRASH_DAYS}일 동안 복구할 수 있고, 최근 활동에 누가 무엇을 했는지 남습니다.`)),
-        canCopy ? el('li', {}, icon('copy', { size: 16 }), el('span', {}, el('b', {}, '내 서재에서 가져오기'), ' — 내 서재의 논문·폴더 메뉴(⋯)에서 ‘공용 서재로 복사…’를 고르세요.')) : null));
+        canCopy ? el('li', {}, icon('copy', { size: 16 }), el('span', {}, el('b', {}, '다른 서재에서 가져오기'), ' — 논문·폴더 메뉴(⋯)에서 ‘다른 서재로 복사…’를 고르세요.')) : null));
   }
 
   /** The route names a team library that is not open (yet). */
@@ -786,7 +834,10 @@ class LibraryView {
     const els = this.#els;
     const sh = this.#shared;
     const content = els.content;
-    const toMine = button(`${MINE_LABEL}로`, { icon: 'arrow-left', onClick: () => this.#go(MINE) });
+    // (내 서재 hidden for an invitee whose own library is empty: no way back there to offer.)
+    const toMine = this.#key !== MINE && this.#mineShown()
+      ? button(`${MINE_LABEL}로`, { icon: 'arrow-left', onClick: () => this.#go(MINE) })
+      : null;
     const pending = (text) => el('div', { class: 'empty-state', role: 'status' }, el('div', {},
       el('div', { class: 'icon-wrap' }, spinner(22)), el('h2', {}, text)));
     this.#setHeader(src, src?.label || SHARED_LABEL);
@@ -797,7 +848,7 @@ class LibraryView {
     }
     let title = '공용 서재에 연결되어 있지 않습니다';
     let text = '초대 코드를 등록하면 동료들과 공용 서재를 함께 쓸 수 있습니다.';
-    const actions = [toMine];
+    const actions = [toMine].filter(Boolean);
     if (src?.status === 'error' || (!src && state === 'error')) {
       title = '공용 서재를 열지 못했습니다';
       text = src?.error || sh?.message || '잠시 후 다시 시도해 주세요.';
@@ -811,7 +862,7 @@ class LibraryView {
       actions.push(button('설정 열기', { kind: 'primary', icon: 'key', onClick: () => this.#navigate('#/settings/ai') }));
     }
     content.replaceChildren(el('div', { class: 'empty-state' }, el('div', {},
-      el('div', { class: 'icon-wrap' }, sharedIcon(24)), el('h2', {}, title), el('p', {}, text),
+      el('div', { class: 'icon-wrap' }, libraryIcon(src?.kind || 'team', 24)), el('h2', {}, title), el('p', {}, text),
       el('div', { class: 'btn-row', style: { justifyContent: 'center' } }, actions))));
   }
 
@@ -882,10 +933,13 @@ class LibraryView {
       el('div', { class: 'paper-side' }, restore));
   }
 
-  /** The owner (admin token saved) can remove the files of papers deleted more than 30 days ago. */
+  /**
+   * The owner (admin token saved) can remove the files of papers deleted more than 30 days ago — in 전체 공용 서재
+   * (the relay's purge is per team library; a code library has none).
+   */
   #trashAdmin(src, old) {
     const relay = this.#deps.relay;
-    if (!src.shared || !settings.get().relay?.adminToken || typeof relay?.purgeShared !== 'function') return null;
+    if (!src.shared || src.kind !== 'team' || !settings.get().relay?.adminToken || typeof relay?.purgeShared !== 'function') return null;
     const expiredPapers = old.filter((x) => x.kind === 'paper').length;
     return el('div', { class: 'trash-admin' },
       el('div', {},
@@ -1042,18 +1096,21 @@ class LibraryView {
     contextMenu(items, x, y);
   }
 
-  /** '공용 서재로 복사…' for 내 서재 items (disabled while 공용 서재 is still connecting). */
+  /**
+   * '다른 서재로 복사…' whenever the sidebar shows another library (disabled while none of them is open yet, e.g.
+   * 공용 서재 still connecting).
+   */
   #copyItem(src, kind, onClick) {
-    if (src.key !== MINE || !this.#shared?.enabled) return null;
     const method = kind === 'paper' ? 'copyPaperTo' : 'copyFolderTo';
-    if (typeof src.lib[method] !== 'function') return null;
-    const ready = this.#copyTargets().length > 0;
-    return { label: '공용 서재로 복사…', icon: 'copy', disabled: !ready, onClick };
+    if (typeof src.lib?.[method] !== 'function') return null;
+    if (!this.#sources().some((s) => s.key !== src.key)) return null;
+    const ready = this.#copyTargets(src).length > 0;
+    return { label: '다른 서재로 복사…', icon: 'copy', disabled: !ready, onClick };
   }
 
-  /** Team libraries that are open (copy targets). */
-  #copyTargets() {
-    return this.#sources().filter((s) => s.shared && s.lib);
+  /** The other libraries that are open (copy targets), in sidebar order. */
+  #copyTargets(src) {
+    return this.#sources().filter((s) => s.key !== src.key && s.lib && !s.placeholder);
   }
 
   #toggleStar(src, paper) {
@@ -1070,7 +1127,7 @@ class LibraryView {
 
   async #createFolder(src, parentId) {
     const parent = parentId ? src.lib.getFolder(parentId) : null;
-    const where = this.#multi() && !parent ? `${src.label}에 만들 ` : '';
+    const where = this.#named(src) && !parent ? `${src.label}에 만들 ` : '';
     const name = await promptDialog(parent ? `‘${parent.name}’ 안에 만들 폴더 이름` : `${where}새 폴더 이름`, { placeholder: '예: 섬망 연구', okLabel: '만들기', title: '새 폴더' });
     if (name == null || !name.trim()) return;
     try {
@@ -1178,28 +1235,37 @@ class LibraryView {
     else this.#go(key, 'list');
   }
 
-  // ------------------------------------------------------ 공용 서재로 복사
+  // ------------------------------------------------------ 다른 서재로 복사
 
   /**
-   * Pick where in 공용 서재 a paper or folder of 내 서재 goes. Only the PDF and the translation are copied (never the
-   * owner's highlights, notes or AI results).
+   * Pick the library (any other one in the sidebar) and the folder a paper or folder goes to. Only the PDF and the
+   * translation are copied (never this person's highlights, notes or AI results); a PDF the target already has
+   * (sha256) is placed, not uploaded again.
    */
   #copyDialog(src, { paper = null, folder = null }) {
-    const targets = this.#copyTargets();
-    if (!targets.length) { toast('공용 서재가 아직 열리지 않았습니다. 잠시 후 다시 시도해 주세요.', { kind: 'warning' }); return; }
-    let target = targets[0];
+    const targets = this.#copyTargets(src);
+    if (!targets.length) { toast('다른 서재가 아직 열리지 않았습니다. 잠시 후 다시 시도해 주세요.', { kind: 'warning' }); return; }
+    const last = uiState.get(COPY_TARGET_KEY, '');
+    let target = targets.find((t) => t.key === last) || targets[0];
     let chosen = null;
     const pickerHost = el('div', { class: 'copy-picker' });
+    const noteHost = el('div', {});
     const renderPicker = () => {
-      pickerHost.replaceChildren(folderRadios(target.lib, chosen, `${target.label} (최상위)`, (id) => { chosen = id; }, { rootIcon: sharedIcon(16) }));
+      pickerHost.replaceChildren(folderRadios(target.lib, chosen, `${target.label} (최상위)`, (id) => { chosen = id; }, { rootIcon: libraryIcon(target.kind, 16) }));
+      noteHost.replaceChildren(note('info', copyNote(target)));
     };
-    const libChoice = targets.length > 1 ? el('div', { class: 'segmented copy-libs', role: 'group', 'aria-label': '복사할 공용 서재' }) : null;
-    if (libChoice) {
-      const draw = () => libChoice.replaceChildren(...targets.map((t) => button(t.label, {
-        size: 'sm', pressed: t === target, onClick: () => { target = t; chosen = null; draw(); renderPicker(); },
-      })));
-      draw();
-    }
+    // The target picker: every other library the person has (one button each, the chosen one pressed).
+    const libChoice = el('div', { class: 'segmented copy-libs', role: 'group', 'aria-label': '복사할 서재' });
+    const draw = () => libChoice.replaceChildren(...targets.map((t) => {
+      const b = button(t.label, {
+        size: 'sm', pressed: t === target, className: `copy-lib is-${t.kind}`,
+        onClick: () => { if (t === target) return; target = t; chosen = null; draw(); renderPicker(); },
+      });
+      b.dataset.lib = t.key;
+      b.prepend(libraryIcon(t.kind, 15));
+      return b;
+    }));
+    draw();
     renderPicker();
     const newFolder = button('새 폴더', {
       icon: 'folder-plus', size: 'sm', kind: 'ghost',
@@ -1217,18 +1283,21 @@ class LibraryView {
     const count = folder ? folderPaperCount(src.lib, folder.id) : 0;
     const what = paper ? `‘${shorten(paperTitle(paper))}’` : `‘${folder.name}’ 폴더(하위 폴더 포함 논문 ${count}편)`;
     modal({
-      title: '공용 서재로 복사',
+      title: '다른 서재로 복사',
       size: 'sm',
       className: 'copy-dialog',
       body: el('div', {},
-        el('p', { class: 'modal-message' }, `${what}을(를) 복사할 위치를 고르세요.`),
+        el('p', { class: 'modal-message' }, `${what}을(를) 복사할 서재와 폴더를 고르세요.`),
         libChoice,
         pickerHost,
         el('div', { class: 'copy-tools' }, newFolder),
-        note('info', 'PDF와 번역이 복사되어 공용 서재의 모든 사람이 함께 봅니다. 내 하이라이트·메모·AI 결과는 복사되지 않고 내 서재에 그대로 남습니다.')),
+        noteHost),
       actions: [
         { label: '취소' },
-        { label: '복사', kind: 'primary', onClick: () => { this.#runCopy(src, target, chosen, { paper, folder }); } },
+        { label: '복사', kind: 'primary', onClick: () => {
+          uiState.set(COPY_TARGET_KEY, target.key);
+          this.#runCopy(src, target, chosen, { paper, folder });
+        } },
       ],
     });
   }
@@ -1266,7 +1335,7 @@ class LibraryView {
       message = `‘${name}’ 폴더를 ${target.label} ${place}에 복사했습니다 (${parts.join(', ')}).`;
     }
     const reveal = paper ? (folderId ? `folder:${folderId}` : 'all') : (out.folderId ? `folder:${out.folderId}` : (folderId ? `folder:${folderId}` : 'all'));
-    toast(message, { kind: 'success', timeout: 8000, action: { label: '공용 서재에서 보기', onClick: () => this.#reveal(target.key, reveal) } });
+    toast(message, { kind: 'success', timeout: 8000, action: { label: '보기', onClick: () => this.#reveal(target.key, reveal) } });
     if (out.failed.length) {
       const lines = out.failed.slice(0, 4).map((f) => `• ${shorten(f.title || f.id, 40)}: ${f.message}`);
       if (out.failed.length > 4) lines.push(`외 ${out.failed.length - 4}편`);
@@ -1274,7 +1343,7 @@ class LibraryView {
     }
   }
 
-  /** A 내 서재 item dropped on 공용 서재: copy after one question. */
+  /** A paper or folder dropped on another library: copy after one question. */
   async #dropCopy(drag, target, folderId) {
     const src = this.#source(drag.key);
     if (!src?.lib) return;
@@ -1283,7 +1352,7 @@ class LibraryView {
     const folder = folderId ? target.lib.getFolder(folderId) : null;
     const what = drag.kind === 'paper' ? `‘${shorten(paperTitle(item))}’을(를)` : `‘${item.name}’ 폴더를`;
     const ok = await confirmDialog(`${what} ${target.label}${folder ? `의 ‘${folder.name}’ 폴더` : ''}로 복사할까요?\nPDF와 번역만 복사되고 내 하이라이트·메모·AI 결과는 복사되지 않습니다.`,
-      { okLabel: '복사', title: '공용 서재로 복사' });
+      { okLabel: '복사', title: '다른 서재로 복사' });
     if (!ok) return;
     this.#runCopy(src, target, folderId, drag.kind === 'paper' ? { paper: item } : { folder: item });
   }
@@ -1292,7 +1361,7 @@ class LibraryView {
 
   /**
    * Accept drags on a node of library `src`: files (upload), papers / folders of the same library (move) and papers /
-   * folders of 내 서재 onto 공용 서재 (copy).
+   * folders of another library (copy).
    * @param {HTMLElement} node
    * @param {object} src  the library the node belongs to
    * @param {string|null} folderId  target folder (null = top level)
@@ -1345,9 +1414,9 @@ class LibraryView {
   }
 
   #canCopy(drag, target) {
-    if (drag.key !== MINE || !target.shared || !target.lib) return false;
-    const mine = this.#deps.library;
-    return typeof mine?.[drag.kind === 'paper' ? 'copyPaperTo' : 'copyFolderTo'] === 'function';
+    if (drag.key === target.key || !target.lib || target.placeholder) return false;
+    const from = this.#source(drag.key)?.lib;
+    return typeof from?.[drag.kind === 'paper' ? 'copyPaperTo' : 'copyFolderTo'] === 'function';
   }
 
   #canDropFolder(lib, dragId, targetId) {
@@ -1616,6 +1685,14 @@ function folderRadios(lib, chosen, rootLabel, onPick, { rootIcon = null } = {}) 
   };
   walk(null, 0);
   return list;
+}
+
+/** Who sees a copy in `target`, and what is not copied (the copy dialog's note). */
+function copyNote(target) {
+  const notCopied = '내 하이라이트·메모·AI 결과는 복사되지 않습니다.';
+  if (target.kind === 'mine') return `PDF와 번역이 내 서재에 복사됩니다. ${notCopied}`;
+  if (target.kind === 'code') return `PDF와 번역이 복사되어 이 초대 코드를 가진 사람만 봅니다. ${notCopied}`;
+  return `PDF와 번역이 복사되어 ${target.label}의 모든 사람이 함께 봅니다. ${notCopied}`;
 }
 
 /** Papers in a folder and its sub-folders. */

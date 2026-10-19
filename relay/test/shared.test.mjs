@@ -146,9 +146,14 @@ export const tests = [
       const mark = gh.log.length;
       const res = await req('/shared', { code: A.code });
       assert.equal(res.status, 200, res.text);
+      // Since code libraries (docs/SHARED.md §6): the code's own library first, then the team libraries.
+      assert.match(res.json?.libraryId ?? '', /^[0-9a-f]{16}$/, res.text);
       assert.deepEqual(res.json, {
-        libraries: [{ id: 'team', name: '공용 서재' }, { id: 'small', name: '작은 서재' }, { id: 'lab', name: '연구실 서재' }],
-        personId: A.id, name: '김민지',
+        libraries: [
+          { id: 'mine', name: '김민지 서재', kind: 'code' }, { id: 'team', name: '전체 공용 서재', kind: 'team' },
+          { id: 'small', name: '작은 서재', kind: 'team' }, { id: 'lab', name: '연구실 서재', kind: 'team' },
+        ],
+        personId: A.id, name: '김민지', libraryId: res.json.libraryId,
       });
       const typed = await req('/shared', { headers: { 'x-api-key': A.code.toLowerCase().replace(/-/g, ' ') } });
       assert.equal(typed.json?.personId, A.id, typed.text);
@@ -410,11 +415,14 @@ export const tests = [
       const ok = await postCommit(A.code, { message: `논문 제목 바꿈: people/${A.id}/papers/p1/ai.json\n둘째 줄`, tree: t2, parents: [H2.commit] });
       assert.equal(ok.status, 201, ok.text);
       assert.equal(ok.json.message, '[김민지] 논문 제목 바꿈: people/…/papers/p1/ai.json');
-      assert.equal(gh.repo(...TEAM).get(ok.json.sha, 'commit').message, ok.json.message);
+      // Stored with the team library's marker; the answer (and GET git/commits) leaves it out.
+      assert.equal(gh.repo(...TEAM).get(ok.json.sha, 'commit').message, '[김민지] {lib:team} 논문 제목 바꿈: people/…/papers/p1/ai.json');
       assert.ok(!ok.text.includes('fake@example.test'));
       const empty = await postCommit(A.code, { message: long, tree: H2.tree, parents: [H2.commit] });
       assert.equal(empty.status, 201, empty.text);
-      assert.equal([...empty.json.message].length, 200);
+      // The stored message (with its {lib:team} marker) is capped at 200 characters; the answer leaves the marker out.
+      assert.equal([...gh.repo(...TEAM).get(empty.json.sha, 'commit').message].length, 200);
+      assert.equal(`[김민지] {lib:team} ${empty.json.message.slice('[김민지] '.length)}`, gh.repo(...TEAM).get(empty.json.sha, 'commit').message);
       return `[] / 2 parents / author → 403; stale parent → 409 "${stale}"; old tree on new head → 403 "${revert}"; message "${ok.json.message}"`;
     },
   },
@@ -468,7 +476,7 @@ export const tests = [
       });
       assert.equal(boot.status, 201, boot.text);
       assert.equal(boot.json.commit.sha, headOf(gh).commit);
-      assert.equal(gh.commits(...TEAM)[0].message, '[김민지] 논문 리더 데이터 저장소 시작');
+      assert.equal(gh.commits(...TEAM)[0].message, '[김민지] {lib:team} 논문 리더 데이터 저장소 시작');
       const again = ghErr(await proxy('team', '/contents/README.md', { code: A.code, method: 'PUT', body: { message: 'x', content } }), 422);
 
       // A non-empty repo whose branch does not exist yet.
@@ -609,7 +617,7 @@ export const tests = [
       for (const [p, f] of tree) if (!doomed.includes(p)) assert.equal(after.get(p)?.sha, f.sha, `${p} must stay`);
       const [last] = gh.commits(...TEAM);
       assert.equal(last.sha, purge.json.commitSha);
-      assert.equal(last.message, `[관리자] 휴지통 비우기: 30일 지난 논문 2개의 파일 ${doomed.length}개 삭제`);
+      assert.equal(last.message, `[관리자] {lib:team} 휴지통 비우기: 30일 지난 논문 2개의 파일 ${doomed.length}개 삭제`);
       assert.deepEqual(last.changed, doomed);
       const again = await call('/relay/admin/shared/team/purge', { method: 'POST', admin: true, body: {} });
       assert.deepEqual(again.json, { purged: [], files: 0, freedBytes: 0, commitSha: null });

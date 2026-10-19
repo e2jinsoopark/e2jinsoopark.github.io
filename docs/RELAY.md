@@ -191,7 +191,7 @@ Additions and precisions on top of §1–§2, verified end to end with the real 
 ## 5. Deleting a code and person salts (2026-10-19)
 
 Owner: "초대코드 중지는 있는데 삭제는 없네?". 중지 (stop) is reversible; **삭제** (delete) is not. Built on the Worker
-(`relay/src/index.js deleteCode`, `shared.js removePersonFiles`, `db.js`), the app (`docs/notes/relay-client.md` ›
+(`relay/src/index.js deleteCode`, `shared.js removePersonFiles` — since code libraries `removeCodeData`, `db.js`), the app (`docs/notes/relay-client.md` ›
 Deleting a code) and verified end to end with the real Worker (`tests/code-delete/run.mjs`).
 
 **`DELETE /relay/admin/codes/:code`** (admin token; any spelling of the code, as `PATCH`):
@@ -203,6 +203,9 @@ Deleting a code) and verified end to end with the real Worker (`tests/code-delet
    `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` (최근 활동: who `관리자`; no person id in it). The 30-day purge and this
    share one ref-update loop (`deletionCommit`). `library.json`, `papers/*` (PDF, translation) and other people's folders
    are never touched. A pre-salt code with `PERSON_ID_SECRET` set also loses its plain-SHA-256 folder, if any.
+   The code's own library (`?library=delete|move`, [`CODE-LIBRARIES.md`](CODE-LIBRARIES.md) §4) goes in the commit of the
+   repo that holds code libraries, which is done **after** every other library, so a failure elsewhere never leaves
+   the code without its library.
 3. Then, in one D1 batch: the `codes` row and the person's `shared_trees` rows are deleted; the **usage rows stay** as
    history, renamed `deleted:<ISO time>:<code>` — still in `todayTotalUsd` / `monthTotalUsd`, `deletedUsage` and the
    global daily budget, never attached to a code made later with the same letters.
@@ -212,6 +215,11 @@ the code gets its previous on/off state back, `502 api_error` "공용 서재(Git
 libraries already cleaned. Unknown code → 404. Without `TEAM_GITHUB_TOKEN` (공용 서재 off) only the D1 rows go.
 A deleted code is then unknown everywhere: 401 "초대 코드가 올바르지 않거나 사용이 중지되었습니다." (and it counts as a failed
 attempt in the limiter, unlike a stopped code).
+
+**Since code libraries** ([`docs/CODE-LIBRARIES.md`](CODE-LIBRARIES.md) §4): `DELETE …?library=delete|move&to=<code>` also
+deletes the code's own library (`codes/<libraryId>/`) or moves it into another code's library, in the same commit as step
+2 (whose message is now `[관리자] {lib:team} 초대 코드 삭제에 따라 개인 기록 정리`); the answer gains
+`library: { action, papers, files, renamed? }` when that library had files.
 
 **Person salt**: `codes.person_salt` (nullable TEXT, 32 hex = 128 random bits) is set for every code created from now
 on (random or custom). personId = first 16 hex of HMAC-SHA-256(`PERSON_ID_SECRET`, `code + "\n" + salt`) when a salt

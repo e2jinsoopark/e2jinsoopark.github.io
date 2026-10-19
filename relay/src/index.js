@@ -5,10 +5,13 @@
 // Contracts: docs/RELAY.md §1, docs/SHARED.md §2.
 import { checkAdminToken, checkInviteCode } from './auth.js';
 import { codeKey, generateCode, newPersonSalt, validateCodeInput } from './codes.js';
-import { KNOWN_MODELS, MAX_ADMIN_BODY_BYTES, MAX_BODY_BYTES, MIN_ADMIN_TOKEN_LENGTH, MODEL_NAMES, readConfig } from './config.js';
 import {
-  codesWithUsage, deleteCodeRecord, deletedCodesUsage, findCodeByKey, insertCode, parseModels, recordUsage, updateCode,
-  usageByDay,
+  hostLibrary, KNOWN_MODELS, MAX_ADMIN_BODY_BYTES, MAX_BODY_BYTES, MAX_CODE_LIBRARY_MAX_BYTES, MIN_ADMIN_TOKEN_LENGTH,
+  MIN_CODE_LIBRARY_MAX_BYTES, MODEL_NAMES, readConfig,
+} from './config.js';
+import {
+  codesWithUsage, deleteCodeRecord, deletedCodesUsage, ensureLibraryId, findCodeByKey, insertCode, newLibraryId,
+  parseModels, recordUsage, setLibraryMaxBytes, updateCode, usageByDay,
 } from './db.js';
 import { UpstreamError } from './github.js';
 import {
@@ -17,8 +20,8 @@ import {
 import { tooManyAttempts } from './limiter.js';
 import { meterBody } from './meter.js';
 import { costUsd } from './pricing.js';
-import { handleShared, handleSharedAdmin, removePersonFiles } from './shared.js';
-import { personIdsOfDeletedCode } from './shared-paths.js';
+import { codeLibraryReport, handleShared, handleSharedAdmin, libraryMaxBytes, removeCodeData } from './shared.js';
+import { LIBRARY_ID_RE, personIdForRow, personIdsOfDeletedCode } from './shared-paths.js';
 import { kstDay, kstDaysBack, kstMonth, nextKstMidnight, requestNow } from './time.js';
 
 /** Upstream response headers the client may need (content type, ids, retry hints). */
@@ -280,7 +283,13 @@ async function handleAdmin(request, url, deps) {
   const one = /^\/codes\/([^/]+)$/.exec(path);
   if (one) {
     if (method === 'PATCH') return patchCode(request, safeDecode(one[1]), deps);
-    if (method === 'DELETE') return deleteCode(safeDecode(one[1]), deps);
+    if (method === 'DELETE') return deleteCode(safeDecode(one[1]), url, deps);
+    return notAllowed(method);
+  }
+  const own = /^\/codes\/([^/]+)\/library$/.exec(path);
+  if (own) {
+    if (method === 'GET') return codeLibrary(safeDecode(own[1]), deps);
+    if (method === 'PATCH') return patchCodeLibrary(request, safeDecode(own[1]), deps);
     return notAllowed(method);
   }
   if (path === '/usage') return method === 'GET' ? usageReport(url, deps) : notAllowed(method);
@@ -324,8 +333,11 @@ async function createCode(request, { env, config, now }) {
   });
   if (checked.error) return apiError(400, 'invalid_request_error', checked.error);
   const { name, allowedModels, dailyLimitUsd, active = true, code: chosen } = checked.value;
-  // Every new code gets its own person salt: a custom code deleted and made again is a new person in 공용 서재.
-  const fields = { name, active, allowedModels, dailyLimitUsd, createdAt: now, personSalt: newPersonSalt() };
+  // Every new code gets its own person salt (a custom code deleted and made again is a new person in 공용 서재) and
+  // its own library id (its library is codes/<id>/ in the team repo, docs/CODE-LIBRARIES.md).
+  const fields = {
+    name, active, allowedModels, dailyLimitUsd, createdAt: now, personSalt: newPersonSalt(), libraryId: newLibraryId(),
+  };
   if (chosen) {
     if (await insertCode(env.DB, { code: chosen, ...fields })) {
       return json(await codeReport(env.DB, chosen, now), 201);
@@ -365,19 +377,44 @@ async function patchCode(request, rawCode, { env, now }) {
  * If GitHub cannot be reached or refuses in step 2, nothing is deleted: the code gets its previous on/off state back
  * and the answer is 502 with a Korean message, so the admin can simply delete again (libraries already cleaned are
  * skipped). There is never a deleted code whose notes were silently left behind.
- * → { deleted: true, purgedFiles }
+ * The code's own library (codes/<libraryId>/, docs/CODE-LIBRARIES.md) goes in step 2 too, in the same commit as its
+ * team-library notes: `?library=delete` (the default) removes it, `?library=move&to=<other code>` moves its papers,
+ * folders, translations and the holder's notes into that code's library (the notes become that code holder's).
+ * → { deleted: true, purgedFiles } (+ `library: { action, papers, files, renamed? }` when its library had files)
  */
-async function deleteCode(rawCode, deps) {
+async function deleteCode(rawCode, url, deps) {
   const { env, now } = deps;
   const parsed = codeKey(rawCode);
   const found = parsed ? await findCodeByKey(env.DB, parsed.key) : null;
   if (!found) return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${parsed?.code ?? rawCode}`);
-  const personIds = await personIdsOfDeletedCode(found, env.PERSON_ID_SECRET || '');
+  const action = url.searchParams.get('library') || 'delete';
+  if (action !== 'delete' && action !== 'move') {
+    return apiError(400, 'invalid_request_error', '서재 처리(library)는 delete 또는 move여야 합니다.');
+  }
+  const secret = env.PERSON_ID_SECRET || '';
+  const personIds = await personIdsOfDeletedCode(found, secret);
+  let library = null;
+  if (action === 'move') {
+    const rawTo = url.searchParams.get('to') || '';
+    const toKey = rawTo ? codeKey(rawTo) : null;
+    const target = toKey ? await findCodeByKey(env.DB, toKey.key) : null;
+    if (!rawTo) return apiError(400, 'invalid_request_error', '서재를 옮길 코드(to)를 정해 주세요.');
+    if (!target) return apiError(404, 'not_found_error', `서재를 옮길 코드를 찾을 수 없습니다: ${toKey?.code ?? rawTo}`);
+    if (target.code === found.code) return apiError(400, 'invalid_request_error', '삭제할 코드와 같은 코드로는 옮길 수 없습니다.');
+    if (LIBRARY_ID_RE.test(found.library_id || '') && hostLibrary(deps.config)) {
+      library = {
+        action, libraryId: found.library_id,
+        to: { libraryId: await ensureLibraryId(env.DB, target), personId: await personIdForRow(target, secret) },
+      };
+    }
+  } else if (LIBRARY_ID_RE.test(found.library_id || '')) {
+    library = { action, libraryId: found.library_id };
+  }
   const wasActive = Boolean(found.active);
   if (wasActive) await updateCode(env.DB, found.code, { active: false });
   let removed;
   try {
-    removed = await removePersonFiles(deps, personIds);
+    removed = await removeCodeData(deps, { personIds, library });
   } catch (err) {
     if (wasActive) {
       await updateCode(env.DB, found.code, { active: true })
@@ -390,7 +427,58 @@ async function deleteCode(rawCode, deps) {
     throw err;
   }
   await deleteCodeRecord(env.DB, { code: found.code, personIds, now });
-  return json({ deleted: true, purgedFiles: removed.files });
+  return json({ deleted: true, purgedFiles: removed.files, ...(removed.library ? { library: removed.library } : {}) });
+}
+
+/** The code of an admin path segment (any spelling), or a 404 response. */
+async function codeOrMissing(env, rawCode) {
+  const parsed = codeKey(rawCode);
+  const found = parsed ? await findCodeByKey(env.DB, parsed.key) : null;
+  return found ? { found } : { error: apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${parsed?.code ?? rawCode}`) };
+}
+
+/**
+ * GET /relay/admin/codes/<code>/library → the code's own library: { code, name, libraryId, papers, trashed, files,
+ * bytes, maxBytes } (the delete dialog shows `papers`). libraryId null and zeros until the code first opens it.
+ */
+async function codeLibrary(rawCode, deps) {
+  const { found, error } = await codeOrMissing(deps.env, rawCode);
+  if (error) return error;
+  if (!deps.config.teamToken) return apiError(503, 'api_error', '공용 서재가 아직 준비되지 않았습니다(서버에 TEAM_GITHUB_TOKEN이 없습니다).');
+  try {
+    return json(await codeLibraryReport(deps, found));
+  } catch (err) {
+    if (err instanceof UpstreamError) return apiError(err.status >= 500 ? err.status : 502, 'api_error', err.message);
+    throw err;
+  }
+}
+
+/**
+ * PATCH /relay/admin/codes/<code>/library { maxBytes: number | null } → { code, name, libraryId, maxBytes }: the size
+ * cap of the code's own library (null = the default CODE_LIBRARY_MAX_BYTES, 500 MB unless configured).
+ */
+async function patchCodeLibrary(request, rawCode, deps) {
+  const { env, config } = deps;
+  const { found, error } = await codeOrMissing(env, rawCode);
+  if (error) return error;
+  const body = await readAdminJson(request);
+  if (body.error) return body.error;
+  const value = body.value;
+  const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : null;
+  const max = value?.maxBytes;
+  const valid = max === null || (Number.isInteger(max) && max >= MIN_CODE_LIBRARY_MAX_BYTES && max <= MAX_CODE_LIBRARY_MAX_BYTES);
+  if (!keys || keys.length !== 1 || keys[0] !== 'maxBytes' || !valid) {
+    return apiError(400, 'invalid_request_error', `서재 용량(maxBytes)은 ${MIN_CODE_LIBRARY_MAX_BYTES}~${MAX_CODE_LIBRARY_MAX_BYTES} 사이의 `
+      + '정수(바이트)이거나, 기본값으로 되돌리려면 null이어야 합니다.');
+  }
+  if (!(await setLibraryMaxBytes(env.DB, found.code, max))) {
+    return apiError(404, 'not_found_error', `초대 코드를 찾을 수 없습니다: ${found.code}`);
+  }
+  const row = { ...found, library_max_bytes: max };
+  return json({
+    code: found.code, name: found.name, libraryId: LIBRARY_ID_RE.test(found.library_id || '') ? found.library_id : null,
+    maxBytes: libraryMaxBytes(row, config),
+  });
 }
 
 /** GET /relay/admin/usage?days=30[&code=PR-… or a custom code]: every KST day in the window (newest first), zeros included. */

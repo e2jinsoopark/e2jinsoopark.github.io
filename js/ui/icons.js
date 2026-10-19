@@ -94,6 +94,8 @@ const ICONS = {
   // 홈 화면에 추가 (the square-plus of iOS's own menu item) and the iOS share glyph (a box with an arrow up).
   'square-plus': [rect(3, 3, 18, 18, 2), p('M8 12h8'), p('M12 8v8')],
   share: [p('M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8'), poly('16 6 12 2 8 6'), line(12, 2, 12, 15)],
+  // An invite code's own library (seen only by the holders of that code).
+  lock: [rect(4, 11, 16, 10, 2), p('M8 11V7a4 4 0 0 1 8 0v4')],
 };
 
 /** All available icon names. */

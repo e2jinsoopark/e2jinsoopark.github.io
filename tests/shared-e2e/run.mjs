@@ -51,6 +51,8 @@ const COPIED = ['kiekkas2012', 'simwright2005']; // 내 서재 folder ‘섬망 
 const PRIVATE = 'cohen1960'; // stays in 내 서재 only
 const UPLOADED = 'lu2025'; // 김간호사 uploads it into 공용 서재 (CC BY)
 const SHARED_NOTE = '번역은 모두와 공유, 메모는 나만';
+/** relay/wrangler.jsonc SHARED_LIBRARIES 'team' (the library every code sees). */
+const TEAM_NAME = '전체 공용 서재';
 const headed = process.argv.includes('--headed');
 
 mkdirSync(OUT, { recursive: true });
@@ -261,6 +263,17 @@ async function syncShared(page) {
   }, null, { timeout: 30000 });
 }
 
+/**
+ * An invitee's first screen after joining: their code's own library ('<name> 서재', #/s/mine — since code libraries,
+ * docs/CODE-LIBRARIES.md), with 전체 공용 서재 below it in the sidebar.
+ */
+async function inviteeHome(page, name) {
+  await page.waitForFunction(() => location.hash === '#/s/mine', null, { timeout: 15000 });
+  await sharedReady(page);
+  const label = await page.locator('.lib-sec[data-lib="shared:mine"] .lib-sec-label').textContent();
+  assertEqual(label, `${name} 서재`, 'the code library section');
+}
+
 /** Open the join link (`#/join/<CODE>`, a fragment no server sees) and continue to the library. */
 async function joinWithLink(page, code, name) {
   await page.goto(`${APP_ORIGIN}/#/join/${code}`);
@@ -432,9 +445,11 @@ try {
     const hash = await hashOf(op);
     const info = await asPerson(state.codes.owner, '/shared');
     assertEqual(hash, '#/', 'owner home');
-    assertEqual(sections.map((s) => [s.key, s.label, s.all]), [['mine', '내 서재', '0'], ['shared:team', '공용 서재', '0']], 'sidebar sections');
+    // Since code libraries (docs/CODE-LIBRARIES.md): the code's own library ('<name> 서재') comes before 전체 공용 서재.
+    assertEqual(sections.map((s) => [s.key, s.label, s.all]), [['mine', '내 서재', '0'], ['shared:mine', `${NAMES.owner} 서재`, '0'], ['shared:team', TEAM_NAME, '0']], 'sidebar sections');
     assertEqual([info.status, info.body.libraries, info.body.personId, info.body.name],
-      [200, [{ id: 'team', name: '공용 서재' }], state.pid.owner, NAMES.owner], 'GET /shared for the owner code');
+      [200, [{ id: 'mine', name: `${NAMES.owner} 서재`, kind: 'code' }, { id: 'team', name: TEAM_NAME, kind: 'team' }], state.pid.owner, NAMES.owner], 'GET /shared for the owner code');
+    assert(/^[0-9a-f]{16}$/.test(info.body.libraryId || ''), `libraryId ${info.body.libraryId}`);
     return `“${title}”; #/ = 내 서재; sections ${sections.map((s) => `${s.label}(전체 ${s.all})`).join(' + ')}; GET /shared → ${JSON.stringify(info.body)}`;
   });
 
@@ -463,14 +478,15 @@ try {
     return `personal repo ${MINE.owner}/${MINE.repo}: ${[...mineFiles().keys()].length} files, papers ${pdfs.papers.map((p) => `${p.fileName}${p.folderId ? ' (섬망 연구)' : ''}`).join(', ')}; team repo still empty`;
   });
 
-  await step('owner: ‘섬망 연구’ → 공용 서재로 복사… → bootstraps the empty team repo through the Worker, copies 2 PDFs, nothing personal', async () => {
+  await step('owner: ‘섬망 연구’ → 다른 서재로 복사… → 전체 공용 서재 → bootstraps the empty team repo through the Worker, copies 2 PDFs, nothing personal', async () => {
     await sec(op, 'mine').locator('.tree-item.is-folder', { hasText: '섬망 연구' }).click({ button: 'right' });
-    await op.locator('.menu .menu-item', { hasText: '공용 서재로 복사…' }).click();
+    await op.locator('.menu .menu-item', { hasText: '다른 서재로 복사…' }).click();
     await op.waitForSelector('.copy-dialog .folder-picker');
     const message = (await op.locator('.copy-dialog .modal-message').textContent()).trim();
+    await op.locator('.copy-dialog .copy-libs .btn', { hasText: TEAM_NAME }).click();
     await op.locator('.copy-dialog .modal-footer .btn', { hasText: '복사' }).click();
-    await op.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /‘섬망 연구’ 폴더를 공용 서재 최상위에 복사했습니다/.test(t.textContent)), null, { timeout: 60000 });
-    const toast = (await toastTexts(op)).find((t) => t.includes('폴더를 공용 서재 최상위에 복사했습니다'));
+    await op.waitForFunction((lib) => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes(`‘섬망 연구’ 폴더를 ${lib} 최상위에 복사했습니다`)), TEAM_NAME, { timeout: 60000 });
+    const toast = (await toastTexts(op)).find((t) => t.includes(`폴더를 ${TEAM_NAME} 최상위에 복사했습니다`));
     const lib = await waitFor(() => {
       const l = teamJson('library.json');
       return l && teamPdfs().length === 2 && l.papers.filter((p) => !p.deleted).length === 2 && l.folders.some((f) => f.name === '섬망 연구') ? l : null;
@@ -488,7 +504,8 @@ try {
     }
     assert(!files.some((p) => p.startsWith('people/')), `personal files in the team repo: ${files}`);
     assert(!lib.papers.some((p) => p.fileName === `${PRIVATE}.pdf`), `${PRIVATE} copied`);
-    assertEqual(commits.at(-1), `[${NAMES.owner}] 논문 리더 데이터 저장소 시작`, 'bootstrap commit (oldest)');
+    // The Worker marks which library a commit changed ({lib:team}); the app never shows the marker.
+    assertEqual(commits.at(-1), `[${NAMES.owner}] {lib:team} 논문 리더 데이터 저장소 시작`, 'bootstrap commit (oldest)');
     assert(commits.slice(0, -1).every((m) => m.startsWith(`[${NAMES.owner}] `)) && commits.some((m) => /폴더 복사 ‘섬망 연구’/.test(m)), `commits ${JSON.stringify(commits)}`);
     await op.waitForFunction(() => /2/.test([...document.querySelectorAll('.lib-sec[data-lib="shared:team"] .tree-item.is-folder')].find((e) => e.textContent.includes('섬망 연구'))?.querySelector('.tree-count')?.textContent || ''));
     await shot(op, 'shared-e2e-03-owner-copied');
@@ -499,20 +516,19 @@ try {
   people.push(kim);
   const kp = kim.page;
 
-  await step('김간호사 (fresh browser, join link): 공용 서재 opens by default with the owner’s folder and its 2 papers', async () => {
+  await step('김간호사 (fresh browser, join link): her code’s own ‘김간호사 서재’ opens by default, no 내 서재; 전체 공용 서재 has the owner’s folder and its 2 papers', async () => {
     const title = await joinWithLink(kp, state.codes.kim, NAMES.kim);
-    await kp.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 15000 });
-    await sharedReady(kp);
+    await inviteeHome(kp, NAMES.kim);
     const folder = sec(kp, 'shared:team').locator('.tree-item.is-folder', { hasText: '섬망 연구' });
     await folder.waitFor({ timeout: 30000 });
     await folder.click();
     await kp.waitForFunction(() => document.querySelectorAll('.paper-row').length === 2, null, { timeout: 30000 });
     const titles = await rowTitles(kp);
-    const mineExpanded = await sec(kp, 'mine').locator('.lib-sec-toggle').getAttribute('aria-expanded');
+    const mineShown = await sec(kp, 'mine').count();
     assert(COPIED.every((f) => titles.includes(state.titles[f])), `rows ${titles}`);
-    assertEqual(mineExpanded, 'false', '내 서재 folded for an invitee');
+    assertEqual(mineShown, 0, '내 서재 hidden for an invitee while it is empty');
     await shot(kp, 'shared-e2e-04-kim-home');
-    return `“${title}” → #/s/team; ‘섬망 연구’ lists [${titles.map((t) => t.slice(0, 40))}]; 내 서재 folded`;
+    return `“${title}” → #/s/mine (김간호사 서재); 전체 공용 서재 ‘섬망 연구’ lists [${titles.map((t) => t.slice(0, 40))}]; 내 서재 hidden`;
   });
 
   await step('김간호사: new folder ‘ICU 섬망’, uploads lu2025.pdf into it (shared PDF on the team repo)', async () => {
@@ -580,8 +596,7 @@ try {
 
   await step('이간호사 (fresh browser): sees ‘ICU 섬망’ and the paper, gets the translation with ZERO translation calls, not 김간호사’s highlight', async () => {
     const title = await joinWithLink(lp, state.codes.lee, NAMES.lee);
-    await lp.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 15000 });
-    await sharedReady(lp);
+    await inviteeHome(lp, NAMES.lee);
     await sec(lp, 'shared:team').locator('.tree-item.is-folder', { hasText: 'ICU 섬망' }).waitFor({ timeout: 30000 });
     const folders = await sec(lp, 'shared:team').locator('.tree-item.is-folder .tree-label').allTextContents();
     await sec(lp, 'shared:team').locator('.tree-item.is-folder', { hasText: 'ICU 섬망' }).click();
@@ -716,8 +731,7 @@ try {
     const page = lee2.page;
     const translateFrom = translateCalls(fake).length;
     await joinWithLink(page, state.codes.lee, NAMES.lee);
-    await page.waitForFunction(() => location.hash === '#/s/team', null, { timeout: 15000 });
-    await sharedReady(page);
+    await inviteeHome(page, NAMES.lee);
     await sec(page, 'shared:team').locator('.tree-item.is-folder', { hasText: 'ICU 섬망' }).click();
     await page.locator(`.paper-row[data-id="${state.ids.lu}"] .paper-link`).click();
     await page.waitForFunction((id) => location.hash === `#/s/team/paper/${id}`, state.ids.lu, { timeout: 10000 });

@@ -440,31 +440,58 @@ export function saveRelayUrl(raw) {
 /** Library ids the Worker uses in paths (`/shared/<lib>/…`). */
 const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SHARED_NAME = '공용 서재';
+/** The id of the caller's own code library in `/shared/<lib>/…` (docs/SHARED.md: one library per invite code). */
+export const CODE_LIBRARY_ID = 'mine';
+/** A code library's folder in the team repo: `codes/<libraryId>/` (codes.library_id, random hex). */
+const LIBRARY_KEY = /^[A-Za-z0-9_-]{1,64}$/;
+/** Sidebar order: the code's own library, then the library everyone with a code sees, then anything else. */
+const KIND_ORDER = { code: 0, team: 1 };
 
 /**
- * The team libraries this code may use: GET /shared → libraries, the code's personId (its per-person folder in the
- * team repo) and name. The code goes as `Authorization: Bearer` like the GitHub proxy's.
+ * The libraries this code may use: GET /shared → `libraries` (each `{ id, name, kind }`: kind 'code' = this invite
+ * code's own library (id 'mine', seen only by the holders of this code), 'team' = 전체 공용 서재 (every code)), the
+ * code's personId (its per-person folder), name, and `libraryId` — the code library's folder in the team repo
+ * (`codes/<libraryId>/`). The code goes as `Authorization: Bearer` like the GitHub proxy's. A server from before code
+ * libraries lists only `team` (no kinds, no libraryId); a code library without a libraryId cannot be opened and is left
+ * out.
  * @param {{ code?: string, url?: string, signal?: AbortSignal }} [opts] default: the saved code and server
- * @returns {Promise<{ libraries: { id: string, name: string }[], personId: string, name: string }>}
+ * @returns {Promise<{ libraries: { id: string, name: string, kind: 'code'|'team' }[], personId: string, name: string,
+ *                     libraryId: string }>}
  */
 export async function fetchShared({ code = settings.get().relay?.code, url, signal } = {}) {
   const key = normalizeInviteCode(code);
   if (!key) throw aiError(NO_CODE_MESSAGE, { code: 'no_key' });
   const d = await relayFetch('/shared', { bearer: key, url, signal });
+  const libraryId = typeof d.libraryId === 'string' && LIBRARY_KEY.test(d.libraryId) ? d.libraryId : '';
+  const person = typeof d.name === 'string' ? d.name : '';
   const seen = new Set();
   const libraries = [];
   for (const x of Array.isArray(d.libraries) ? d.libraries : []) {
     const id = String(x?.id ?? '');
     if (!LIBRARY_ID.test(id) || seen.has(id)) continue;
+    const kind = x?.kind === 'code' || x?.kind === 'team' ? x.kind : (id === CODE_LIBRARY_ID ? 'code' : 'team');
+    if (kind === 'code' && !libraryId) {
+      console.warn('[relay] GET /shared: a code library without libraryId is skipped', id);
+      continue;
+    }
     seen.add(id);
-    const name = typeof x?.name === 'string' && x.name.trim() ? x.name.trim().slice(0, 60) : SHARED_NAME;
-    libraries.push({ id, name });
+    const given = typeof x?.name === 'string' ? x.name.trim().slice(0, 60) : '';
+    const name = given || (kind === 'code' ? codeLibraryName(person) : SHARED_NAME);
+    libraries.push({ id, name, kind });
   }
+  libraries.sort((a, b) => (KIND_ORDER[a.kind] ?? 2) - (KIND_ORDER[b.kind] ?? 2));
   return {
     libraries,
     personId: typeof d.personId === 'string' && /^[0-9a-f]{16}$/.test(d.personId) ? d.personId : '',
-    name: typeof d.name === 'string' ? d.name : '',
+    name: person,
+    libraryId,
   };
+}
+
+/** '<code name> 서재' — the Worker names a code library so; this is only the fallback when it sends no name. */
+export function codeLibraryName(name) {
+  const n = String(name || '').trim();
+  return n ? `${n} 서재` : '우리 서재';
 }
 
 /**
@@ -508,6 +535,29 @@ export async function purgeShared(lib, { token, signal } = {}) {
   const list = [d.purged, d.papers, d.removed, d.paperIds].find(Array.isArray);
   const purged = list ? list.length : Math.round(toNumber(d.purged ?? d.removed ?? d.count ?? d.papers));
   return { purged, bytes: toNumber(d.bytes ?? d.freedBytes), raw: d };
+}
+
+/**
+ * Admin: split 전체 공용 서재 by uploader — every live paper whose `addedBy` is exactly the name of one existing code
+ * moves (PDF, translation, that person's notes, its folder path) into that code's library and leaves 전체 공용 서재.
+ * `dryRun: true` only answers the plan; `false` applies it in one commit. Unmatched, ambiguous and deleted papers stay.
+ * @returns {Promise<{ moves: { paperId: string, title: string, toCode: string, folderPath: string }[],
+ *                     skipped: { paperId: string, title: string, reason: string }[], applied: boolean, commitSha: string }>}
+ */
+export async function splitSharedByUploader({ dryRun = true, token, signal } = {}) {
+  const d = await adminFetch('/relay/admin/shared/team/split-by-uploader', {
+    method: 'POST', body: { dryRun: Boolean(dryRun) }, token, signal, timeoutMs: DELETE_TIMEOUT_MS,
+  });
+  const text = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+  // folderPath: the folder names from the top, ' / ' between ('' = top level) — kept as the Worker wrote it (a folder
+  // name may itself contain '/'). skipped[].reason: the Worker's Korean words (shown as they are).
+  const moves = (Array.isArray(d.moves) ? d.moves : []).map((m) => ({
+    paperId: text(m?.paperId), title: text(m?.title), toCode: text(m?.toCode), folderPath: text(m?.folderPath),
+  })).filter((m) => m.paperId);
+  const skipped = (Array.isArray(d.skipped) ? d.skipped : []).map((s) => ({
+    paperId: text(s?.paperId), title: text(s?.title), reason: text(s?.reason),
+  })).filter((s) => s.paperId);
+  return { moves, skipped, applied: !dryRun, commitSha: text(d.commitSha) };
 }
 
 /** GitHub-API-compatible proxy root for a team library (the GitHubClient's `apiBase`). */
@@ -576,18 +626,71 @@ export async function updateCode(code, patch, { token, signal } = {}) {
  * Delete a code for good: the Worker removes its files (people/<personId>/: highlights, notes, AI results) from every
  * team library, then the code. Its usage stays in the totals. A GitHub failure is a 502 with a Korean message and the
  * code is kept (try again); a code that is already gone is a 404.
- * @returns {Promise<{ deleted: boolean, purgedFiles: number }>}
+ * The code's own library (codes/<libraryId>/): `library: 'delete'` removes it with the code; `library: 'move'` moves
+ * its folders, papers, translations and the holder's notes into the library of code `to` first (that code's holders
+ * then see them). Without `library` the Worker's default applies (delete).
+ * @param {string} code
+ * @param {{ library?: 'delete'|'move', to?: string, token?: string, signal?: AbortSignal }} [opts]
+ * @returns {Promise<{ deleted: boolean, purgedFiles: number, movedPapers: number|null }>}
  */
-export async function deleteCode(code, { token, signal } = {}) {
+export async function deleteCode(code, { library, to, token, signal } = {}) {
+  const query = new URLSearchParams();
+  if (library === 'move') {
+    const target = String(to ?? '').trim();
+    if (!target) throw aiError('서재를 옮길 코드를 골라 주세요.', { code: 'bad_request' });
+    if (inviteCodeKey(target) && inviteCodeKey(target) === inviteCodeKey(code)) throw aiError('삭제하는 코드와 다른 코드를 골라 주세요.', { code: 'bad_request' });
+    query.set('library', 'move');
+    query.set('to', target);
+  } else if (library === 'delete') {
+    query.set('library', 'delete');
+  } else if (library !== undefined) {
+    throw aiError('서재를 어떻게 할지 골라 주세요.', { code: 'bad_request' });
+  }
+  const qs = query.toString();
   let d;
   try {
-    d = await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}`, { method: 'DELETE', token, signal, timeoutMs: DELETE_TIMEOUT_MS });
+    d = await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}${qs ? `?${qs}` : ''}`, { method: 'DELETE', token, signal, timeoutMs: DELETE_TIMEOUT_MS });
   } catch (err) {
     // A Worker from before deleting existed: DELETE is not one of its methods.
     if (err?.status === 405) throw aiError(NO_DELETE_MESSAGE, { code: 'not_found', status: 405 });
     throw err;
   }
-  return { deleted: d.deleted !== false, purgedFiles: Math.round(toNumber(d.purgedFiles)) };
+  // The Worker reports what happened to the code's library as `library: { action, papers, files, renamed? }` (only
+  // when that library had files).
+  const moved = d.library?.action === 'move' ? d.library.papers : null;
+  return {
+    deleted: d.deleted !== false,
+    purgedFiles: Math.round(toNumber(d.purgedFiles)),
+    movedPapers: moved == null ? null : Math.round(toNumber(moved)),
+  };
+}
+
+/**
+ * The code's own library ('<name> 서재', codes/<libraryId>/): GET /relay/admin/codes/<code>/library → live papers,
+ * papers in its 휴지통, files, bytes and its size cap (`libraryId` null and zeros until the code first opens it).
+ * @returns {Promise<{ code: string, libraryId: string, papers: number, trashed: number, files: number, bytes: number,
+ *                     maxBytes: number }>}
+ */
+export async function codeLibrary(code, { token, signal } = {}) {
+  const d = await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}/library`, { token, signal, timeoutMs: DELETE_TIMEOUT_MS });
+  const int = (v) => Math.max(0, Math.round(toNumber(v)));
+  return {
+    code: String(d.code ?? code),
+    libraryId: typeof d.libraryId === 'string' ? d.libraryId : '',
+    papers: int(d.papers), trashed: int(d.trashed), files: int(d.files), bytes: int(d.bytes), maxBytes: int(d.maxBytes),
+  };
+}
+
+/**
+ * The size cap of a code's own library: PATCH /relay/admin/codes/<code>/library { maxBytes } (bytes; null = the
+ * server's default). The Worker answers 400 (Korean) outside its allowed range.
+ * @returns {Promise<{ maxBytes: number }>}
+ */
+export async function setCodeLibraryMaxBytes(code, maxBytes, { token, signal } = {}) {
+  const value = maxBytes === null ? null : Math.round(Number(maxBytes));
+  if (value !== null && (!Number.isFinite(value) || value <= 0)) throw aiError('서재 용량을 숫자로 입력해 주세요.', { code: 'bad_request' });
+  const d = await adminFetch(`/relay/admin/codes/${encodeURIComponent(code)}/library`, { method: 'PATCH', body: { maxBytes: value }, token, signal });
+  return { maxBytes: Math.max(0, Math.round(toNumber(d.maxBytes))) };
 }
 
 /** Daily totals for the last `days` days (KST calendar days). */

@@ -10,13 +10,18 @@ CREATE TABLE IF NOT EXISTS codes (
   daily_limit_usd REAL NOT NULL,
   created_at INTEGER NOT NULL,         -- epoch ms
   last_used_at INTEGER,                -- epoch ms of the last forwarded request
-  person_salt TEXT                     -- 32 hex (128 random bits) mixed into the personId of 공용 서재; NULL = a code made
+  person_salt TEXT,                    -- 32 hex (128 random bits) mixed into the personId of 공용 서재; NULL = a code made
                                        -- before code deletion (2026-10-19), which keeps its saltless personId
+  library_id TEXT,                     -- 16 hex: the code's own library, codes/<library_id>/ in the team repo
+                                       -- (docs/SHARED.md §6); NULL until a code from before code libraries first opens it
+  library_max_bytes INTEGER            -- size cap of that library; NULL = CODE_LIBRARY_MAX_BYTES (500 MB by default)
 );
--- person_salt and databases made before 2026-10-19: CREATE TABLE IF NOT EXISTS leaves an existing codes table as it
--- is, and SQLite/D1 has no "ADD COLUMN IF NOT EXISTS" (a plain ALTER TABLE here would fail on the second run). So the
--- Worker adds the column itself the first time it creates a code after the update (src/db.js ensureSaltColumn:
--- PRAGMA table_info, then ALTER TABLE codes ADD COLUMN person_salt TEXT). Everything else reads it as optional.
+-- person_salt, library_id, library_max_bytes and databases made before 2026-10-19: CREATE TABLE IF NOT EXISTS leaves
+-- an existing codes table as it is, and SQLite/D1 has no "ADD COLUMN IF NOT EXISTS" (a plain ALTER TABLE here would
+-- fail on the second run). So the Worker adds the missing columns itself the first time it needs them after the
+-- update (src/db.js ensureCodeColumns: PRAGMA table_info, then ALTER TABLE codes ADD COLUMN … for each, and the unique
+-- index codes_by_library on library_id — not created here, because on an old database the column does not exist yet
+-- when this file runs). Everything else reads them as optional.
 
 CREATE TABLE IF NOT EXISTS usage (
   code TEXT NOT NULL,                  -- the code; "deleted:<ISO time>:<code>" once that code was deleted (kept as history)
@@ -56,7 +61,7 @@ CREATE INDEX IF NOT EXISTS auth_failures_by_window ON auth_failures (window_star
 -- built on. POST git/commits accepts a tree only on top of its own base (so a commit cannot revert other people's
 -- files), and only for the person who created it. Rows older than an hour are pruned on every insert.
 CREATE TABLE IF NOT EXISTS shared_trees (
-  lib TEXT NOT NULL,                   -- SHARED_LIBRARIES id, e.g. "team"
+  lib TEXT NOT NULL,                   -- SHARED_LIBRARIES id, e.g. "team"; "code:<library_id>" for a code library
   tree TEXT NOT NULL,                  -- tree sha GitHub returned
   base TEXT NOT NULL,                  -- its base_tree sha ('' when the branch did not exist yet)
   person TEXT NOT NULL,                -- personId of the invite code that created it

@@ -1,6 +1,7 @@
 // App bootstrap: theme, module loading with graceful degradation, Library, hash router.
 // Routes: #/ (내 서재) · #/trash (내 서재 휴지통) · #/paper/<id> (reader) · #/settings[/<section>] · #/join/<CODE> (invite link)
 //         #/s/<lib> (공용 서재) · #/s/<lib>/trash · #/s/<lib>/activity · #/s/<lib>/paper/<id>   (docs/SHARED.md)
+//         lib 'mine' = this invite code's own library ('<name> 서재'), 'team' = 전체 공용 서재
 // A fresh visitor (no AI, no invite code, nothing in 내 서재) sees the first screen (ui/start-view.js) instead of the
 // library; docs/notes/onboarding.md.
 import { bus } from './core/bus.js';
@@ -30,8 +31,18 @@ const MODULES = [
 
 /** Last GET /shared answer, so 공용 서재 opens from this device's copy at once (offline too). */
 const SHARED_CACHE_KEY = 'pr.shared.v1';
+/** Shape of the remembered answer: 2 = libraries with kinds + the code library's libraryId (code libraries). */
+const SHARED_CACHE_VERSION = 2;
 /** IndexedDB name prefix of the team libraries (one database per library and person). */
 const SHARED_DB_PREFIX = 'paper-reader-shared-';
+/** The code library's id in routes and on the relay (js/ai/relay.js CODE_LIBRARY_ID). */
+const CODE_LIBRARY_ID = 'mine';
+/**
+ * uiState key of the library an invitee's #/ opens: 'mine' (내 서재) or 'shared:<id>' (js/ui/library-view.js HOME_KEY).
+ * Unset → the code library. ('libraryHome', from before code libraries, is read only for an explicit 내 서재 choice.)
+ */
+const HOME_KEY = 'homeLibrary';
+const OLD_HOME_KEY = 'libraryHome';
 /** First visit of an invitee without a remembered library list: wait this long for GET /shared before routing. */
 const INVITEE_FIRST_WAIT_MS = 2500;
 /** js/ai/relay.js CODE_REFUSED_EVENT: the saved invite code (one that worked here before) got a 401. */
@@ -119,7 +130,12 @@ async function boot() {
   // A configured model that no longer exists was replaced (js/ai/models.js): say so once.
   bus.on('ai:model-change', ({ message } = {}) => { if (message) toast(message, { kind: 'warning', timeout: 8000 }); });
 
-  const shared = new SharedLibraries({ store: modules.library, relay: modules.providers?.relay ?? null });
+  const shared = new SharedLibraries({
+    store: modules.library,
+    relay: modules.providers?.relay ?? null,
+    // 내 서재 in use (papers or folders): an invitee's earlier choice of it as home still counts.
+    mineUsed: () => Boolean(library.papers?.length || library.folders?.length),
+  });
   const deps = buildDeps(modules, library, failures, shared);
   if (failures.length) showBanner(bannerHost, failures);
   // The owner deleted (or stopped) the saved invite code: forget it once, say so (also before the router starts).
@@ -278,8 +294,11 @@ function buildDeps(m, library, failures, shared) {
 // ------------------------------------------------------- 공용 서재 (shared)
 
 /**
- * The team libraries ("공용 서재", docs/SHARED.md) the saved invite code may use, each a Library of its own
- * (separate IndexedDB, synced through the relay's GitHub-compatible proxy with the code as the token).
+ * The libraries behind the relay ("공용 서재", docs/SHARED.md) the saved invite code may use, each a Library of its
+ * own (separate IndexedDB, synced through the relay's GitHub-compatible proxy with the code as the token):
+ * - kind 'code' (id 'mine'): this invite code's own library, seen only by the holders of this code ('<name> 서재');
+ *   its files live under `codes/<libraryId>/` in the team repo (the store's rootPrefix);
+ * - kind 'team' (id 'team'): 전체 공용 서재, seen by every code.
  * Local-first like 내 서재: the last GET /shared answer is remembered, so the libraries open from this device's copy
  * at once (offline too) while the list is re-read in the background. Views get it as `deps.shared`.
  *
@@ -290,17 +309,19 @@ function buildDeps(m, library, failures, shared) {
 class SharedLibraries extends EventTarget {
   #store;
   #relay;
+  #mineUsed;
   #state = 'off';
   #message = '';
-  #info = null; // { libraries: [{ id, name }], personId, name }
-  #entries = new Map(); // id → { id, name, library, status: 'opening'|'ready'|'error', error, promise }
+  #info = null; // { libraries: [{ id, name, kind }], personId, name, libraryId }
+  #entries = new Map(); // id → { id, name, kind, libraryId, library, status: 'opening'|'ready'|'error', error, promise }
   #run = 0; // bumped by every (re)start; late answers of an older run are dropped
   #starting = Promise.resolve();
 
-  constructor({ store, relay }) {
+  constructor({ store, relay, mineUsed = () => false }) {
     super();
     this.#store = store;
     this.#relay = relay;
+    this.#mineUsed = mineUsed;
   }
 
   get state() { return this.#state; }
@@ -311,16 +332,22 @@ class SharedLibraries extends EventTarget {
   get personId() { return this.#info?.personId || ''; }
   /** The invite code's name (the relay's), shown in 설정 and as "who" of this person's changes. */
   get personName() { return this.#info?.name || settings.get().relay?.name || ''; }
-  /** [{ id, name, library, status, error }] in the server's order. */
+  /** The code library's folder id in the team repo ('' without a code library). */
+  get libraryId() { return this.#info?.libraryId || ''; }
+  /** [{ id, name, kind, library, status, error }]: the code library first, then 전체 공용 서재 (the server's order). */
   get libraries() {
-    return [...this.#entries.values()].map(({ id, name, library, status, error }) => ({ id, name, library, status, error }));
+    return [...this.#entries.values()].map((e) => this.#public(e));
   }
 
   /** The opened Library of team library `id`, or null (unknown, still opening, failed). */
   get(id) { return this.#entries.get(id)?.library ?? null; }
   entry(id) {
     const e = this.#entries.get(id);
-    return e ? { id: e.id, name: e.name, library: e.library, status: e.status, error: e.error } : null;
+    return e ? this.#public(e) : null;
+  }
+
+  #public(e) {
+    return { id: e.id, name: e.name, kind: e.kind, library: e.library, status: e.status, error: e.error };
   }
 
   /** Wait until team library `id` is open (null when it is unknown or failed to open). */
@@ -346,14 +373,20 @@ class SharedLibraries extends EventTarget {
     return provider === 'relay';
   }
 
-  /** Where #/ goes: '#/s/<lib>' for an invitee who has not chosen 내 서재, else null (내 서재). */
+  /**
+   * Where #/ goes: '#/s/<lib>' for an invitee, else null (내 서재). The library they opened last (HOME_KEY), else
+   * their code library, else the first. 내 서재 only when they chose it and it is in use (an empty 내 서재 is not
+   * even shown to an invitee).
+   */
   homeHash() {
     if (!this.isInvitee() || this.#state !== 'ready') return null;
-    const pref = uiState.get('libraryHome', '');
-    if (pref === 'mine') return null;
-    const ids = [...this.#entries.keys()];
-    const id = typeof pref === 'string' && pref.startsWith('shared:') && ids.includes(pref.slice(7)) ? pref.slice(7) : ids[0];
-    return id ? `#/s/${encodeURIComponent(id)}` : null;
+    let pref = uiState.get(HOME_KEY, '');
+    if (!pref && uiState.get(OLD_HOME_KEY, '') === 'mine') pref = 'mine';
+    if (pref === 'mine' && this.#mineUsed()) return null;
+    const list = [...this.#entries.values()];
+    const chosen = typeof pref === 'string' && pref.startsWith('shared:') ? list.find((e) => e.id === pref.slice(7)) : null;
+    const e = chosen || list.find((x) => x.kind === 'code') || list[0];
+    return e ? `#/s/${encodeURIComponent(e.id)}` : null;
   }
 
   /** Resolves when the latest (re)start has its list: the remembered one at once, else the first GET /shared answer. */
@@ -391,7 +424,9 @@ class SharedLibraries extends EventTarget {
       this.#set('loading');
     }
     const fresh = this.#refresh(run, fp, Boolean(cached));
-    if (!cached) await fresh;
+    // A list remembered before code libraries existed (no kinds) lacks the code library: wait for the fresh one too
+    // (app.js gives it 2.5 s), so an invitee's first #/ after the update is their code library.
+    if (!cached || cached.stale) await fresh;
   }
 
   async #refresh(run, fp, hadCache) {
@@ -419,34 +454,48 @@ class SharedLibraries extends EventTarget {
       this.#set('unavailable');
       return;
     }
-    safeStorage.set(SHARED_CACHE_KEY, { fp, libraries: info.libraries, personId: info.personId, name: info.name, at: Date.now() });
+    safeStorage.set(SHARED_CACHE_KEY, {
+      v: SHARED_CACHE_VERSION, fp, libraries: info.libraries, personId: info.personId, name: info.name,
+      libraryId: info.libraryId || '', at: Date.now(),
+    });
     this.#apply(info, run);
     this.#set('ready');
   }
 
-  /** Open libraries that are new, drop those that are gone, take over names. */
+  /** Open libraries that are new, drop those that are gone, take over names (a code library that moved: reopened). */
   #apply(info, run) {
     if (this.#info?.personId && this.#info.personId !== info.personId) {
       for (const e of this.#entries.values()) e.library?.close?.().catch(() => {});
       this.#entries.clear();
     }
-    this.#info = { libraries: info.libraries, personId: info.personId, name: info.name || '' };
-    const wanted = new Map(info.libraries.map((l) => [l.id, l]));
+    const libraryId = info.libraryId || '';
+    this.#info = { libraries: info.libraries, personId: info.personId, name: info.name || '', libraryId };
+    const wanted = new Map(info.libraries.map((l) => [l.id, { ...l, kind: l.kind || 'team', libraryId: l.kind === 'code' ? libraryId : '' }]));
     for (const [id, e] of this.#entries) {
-      if (wanted.has(id)) continue;
+      const w = wanted.get(id);
+      if (w && w.kind === e.kind && w.libraryId === e.libraryId) continue;
       this.#entries.delete(id);
       e.library?.close?.().catch(() => {});
     }
-    for (const lib of info.libraries) {
-      const e = this.#entries.get(lib.id);
-      if (e) e.name = lib.name;
-      else this.#openEntry(lib, run);
+    // Rebuilt in the server's order (the sidebar shows them so).
+    const kept = new Map(this.#entries);
+    this.#entries.clear();
+    for (const lib of wanted.values()) {
+      const e = kept.get(lib.id);
+      if (e) {
+        e.name = lib.name;
+        this.#entries.set(lib.id, e);
+      } else {
+        this.#openEntry(lib, run);
+      }
     }
     this.#emit();
   }
 
   #openEntry(lib, run) {
-    const entry = { id: lib.id, name: lib.name, library: null, status: 'opening', error: '', promise: null };
+    const entry = {
+      id: lib.id, name: lib.name, kind: lib.kind, libraryId: lib.libraryId || '', library: null, status: 'opening', error: '', promise: null,
+    };
     this.#entries.set(lib.id, entry);
     entry.promise = (async () => {
       try {
@@ -482,23 +531,31 @@ class SharedLibraries extends EventTarget {
   /**
    * docs/SHARED.md §3.1: a Library with its own database (one per library and person), synced through the relay's
    * proxy. The store's openSharedLibrary() builds exactly that; Library.open() with the contract's options is the
-   * fallback for a store without it.
+   * fallback for a store without it. A code library (kind 'code') is `/shared/mine/gh` with every repo path under
+   * `codes/<libraryId>/` (rootPrefix) and its own database `paper-reader-shared-mine-<libraryId>-<personId>`, so a code
+   * replaced on this device never mixes two code libraries.
    */
   #openLibrary(lib) {
     const personId = this.#info.personId;
     const personName = () => this.personName; // tombstones' deletedBy (휴지통: who deleted it)
+    const code = lib.kind === 'code';
+    const libraryId = code ? lib.libraryId : '';
+    const rootPrefix = code ? `codes/${libraryId}/` : '';
+    const dbName = code ? `${SHARED_DB_PREFIX}${lib.id}-${libraryId}-${personId}` : `${SHARED_DB_PREFIX}${lib.id}-${personId}`;
     if (typeof this.#store.openSharedLibrary === 'function') {
       return this.#store.openSharedLibrary({
         relayUrl: settings.relayUrl(), code: this.#code(), lib: lib.id, personId, name: personName, label: lib.name,
+        ...(code ? { libraryId, rootPrefix, dbName } : {}),
       });
     }
     return this.#store.Library.open({
       settings,
       id: `shared:${lib.id}`,
       label: lib.name,
-      dbName: `${SHARED_DB_PREFIX}${lib.id}-${personId}`,
+      dbName,
       getConfig: () => this.#syncConfig(lib.id),
       personalPrefix: `people/${personId}/`,
+      ...(code ? { rootPrefix } : {}),
       retainPdfOnDelete: true,
       shared: true,
       personName,
@@ -567,13 +624,22 @@ class SharedLibraries extends EventTarget {
   #emit() { this.dispatchEvent(new CustomEvent('change', { detail: { state: this.#state } })); }
 }
 
-/** Remembered GET /shared answer, if it belongs to this code and server. */
+/**
+ * Remembered GET /shared answer, if it belongs to this code and server. `stale`: remembered before code libraries
+ * (no kinds), so the fresh answer may add this code's own library.
+ */
 function readSharedCache(fp) {
   const c = safeStorage.get(SHARED_CACHE_KEY, null);
   if (!c || c.fp !== fp || !Array.isArray(c.libraries) || !c.libraries.length || typeof c.personId !== 'string' || !c.personId) return null;
+  const stale = c.v !== SHARED_CACHE_VERSION;
+  const libraryId = !stale && typeof c.libraryId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(c.libraryId) ? c.libraryId : '';
   const libraries = c.libraries.filter((l) => l && typeof l.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(l.id))
-    .map((l) => ({ id: l.id, name: typeof l.name === 'string' && l.name ? l.name : '공용 서재' }));
-  return libraries.length ? { libraries, personId: c.personId, name: typeof c.name === 'string' ? c.name : '' } : null;
+    .map((l) => {
+      const kind = l.kind === 'code' || l.kind === 'team' ? l.kind : (l.id === CODE_LIBRARY_ID && !stale ? 'code' : 'team');
+      return { id: l.id, name: typeof l.name === 'string' && l.name ? l.name : '공용 서재', kind };
+    })
+    .filter((l) => l.kind !== 'code' || libraryId);
+  return libraries.length ? { libraries, personId: c.personId, name: typeof c.name === 'string' ? c.name : '', libraryId, stale } : null;
 }
 
 /** A short one-way fingerprint (the code itself is never stored twice). */

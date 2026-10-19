@@ -21,7 +21,7 @@ const MAX_COMMITS = 500;
 /** Root-tree indexes kept: the head, a tree just made on it, and a few recent heads (blob reads after a push). */
 const MAX_INDEXES = 4;
 const MAX_LEARNED = 20_000;
-const MAX_BLOB_SIZES = 5_000;
+const MAX_UPLOADS = 5_000;
 const MAX_LIBRARIES = 4;
 const MAX_TREE_NOTES = 200;
 /** At most this many commits are walked back when looking for a recent head (subrequests are limited). */
@@ -62,7 +62,7 @@ function cacheFor(key) {
   if (!c) {
     c = {
       head: null, info: null, commits: new Map(), indexes: new Map(), learned: new Map(), learnedBlobs: new Map(),
-      blobSizes: new Map(), libraries: new Map(), treeNotes: new Map(),
+      uploads: new Map(), libraries: new Map(), treeNotes: new Map(),
     };
     caches.set(key, c);
   }
@@ -370,13 +370,21 @@ export class TeamRepo {
     return remember(this.cache.libraries, sha, value, MAX_LIBRARIES);
   }
 
-  /** Upper bound of the size of a blob uploaded through this Worker (bytes), or null when not known here. */
-  blobSize(sha) {
-    return this.cache.blobSizes.get(sha) ?? null;
+  /**
+   * Whether `uploader` (a person in one library, e.g. 'team
+<personId>' — never anyone else) uploaded blob `sha`
+   * through this isolate. The cache is shared by every caller of the repo, so the answer is per uploader: a sha that
+   * another person (or another code's library) uploaded is not "theirs".
+   */
+  uploadedBy(sha, uploader) {
+    return Boolean(this.cache.uploads.get(sha)?.has(uploader));
   }
 
-  rememberBlobSize(sha, size) {
-    remember(this.cache.blobSizes, sha, size, MAX_BLOB_SIZES);
+  /** Remember that `uploader` uploaded blob `sha` (see uploadedBy). */
+  rememberUpload(sha, uploader) {
+    const who = new Set(this.cache.uploads.get(sha) || []);
+    who.add(uploader);
+    remember(this.cache.uploads, sha, who, MAX_UPLOADS);
   }
 
   /** What tree `tree` changed on top of `base` (computed when it was made here), or null. */

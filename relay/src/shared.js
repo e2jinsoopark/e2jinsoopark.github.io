@@ -3,17 +3,27 @@
 // 'library' and the invite code as its token. The Worker checks the code, allows only the routes and repo paths
 // of the layout (everyone may change the shared files, nobody another person's people/<id>/ files), hides other
 // people's files from tree listings, rewrites commit messages with the code's name and calls GitHub with its own
-// token (TEAM_GITHUB_TOKEN). Also GET /shared, GET /shared/<lib>/activity, the admin stats / purge, and removing a
-// deleted invite code's people/<id>/ files (removePersonFiles, for DELETE /relay/admin/codes/<code> in index.js).
+// token (TEAM_GITHUB_TOKEN). Also GET /shared, GET /shared/<lib>/activity, the admin stats / purge / split, and
+// removing a deleted invite code's people/<id>/ files and its own library (removeCodeData, for
+// DELETE /relay/admin/codes/<code> in index.js).
+//
+// Two kinds of library share one repo (docs/CODE-LIBRARIES.md): the team library ('전체 공용 서재', the repo root,
+// /shared/team/gh) and one library per invite code (codes/<libraryId>/, /shared/mine/gh — only that code's holders).
+// The client of a code library uses 'codes/<libraryId>/' as the prefix of every path; the proxy enforces it.
 import { checkInviteCode } from './auth.js';
-import { hasSharedTree, insertSharedTree } from './db.js';
+import { applySplit, planLibraryDelete, planLibraryMove, planSplit } from './code-libraries.js';
+import { CODE_LIBRARY_URL_ID, hostLibrary } from './config.js';
+import {
+  allCodes, ensureLibraryId, hasSharedTree, insertSharedBlob, insertSharedTree, SHARED_TREE_KEEP_MS, uploadedBlobs,
+} from './db.js';
 import { encodeBranch, JSON_MEDIA, RAW_MEDIA, TeamRepo, UpstreamError } from './github.js';
 import { apiError, bearer, json, parseJson, readBody } from './http.js';
 import { TOO_MANY_MESSAGE, tooManyAttempts } from './limiter.js';
 import {
-  checkTreeEntries, classifyPath, CODE_DELETE_MESSAGE, commitMessageFor, compareLibraries, confirmedPurgeIds,
-  describeSharedChange, filterEntries, LIBRARY_PATH, paperFiles, parseCommitLine, parseLibrary, PERSONAL_SUMMARY,
-  personFiles, personIdForRow, QUIET_LIBRARY_SUMMARY, QUIET_SUMMARIES, scrubText, visibleTo,
+  adminMessage, checkTreeEntries, classifyIn, clientSummary, CODE_DELETE_SUMMARY, codeRoot, commitLines,
+  commitMessageFor, compareLibraries, confirmedPurgeIds, describeSharedChange, filterEntries, LIBRARY_ID_RE,
+  LIBRARY_PATH, markerOf, messageFor, paperFiles, parseLibrary, PERSONAL_SUMMARY, personFiles, personIdForRow,
+  personIdsOfDeletedCode, QUIET_LIBRARY_SUMMARY, QUIET_SUMMARIES, TEAM_MARKER, visibleIn,
 } from './shared-paths.js';
 
 /** "A tree the client got from this proxy in the last 10 min": heads (and trees made here) stay usable this long. */
@@ -65,16 +75,89 @@ const MSG = {
   unknownKeys: (keys) => `공용 서재에서는 다음 항목을 쓸 수 없습니다: ${keys.join(', ')}`,
   full: (used, max, size) => `공용 서재 저장 공간이 부족해 이 PDF(${mb(size)})를 올릴 수 없습니다 `
     + `(사용 중 ${mb(used)} / ${mb(max)}). 휴지통을 비우거나 관리자에게 알려 주세요.`,
+  codeFull: (name, used, max, size) => `${name}의 저장 공간이 부족해 이 PDF(${mb(size)})를 올릴 수 없습니다 `
+    + `(사용 중 ${mb(used)} / ${mb(max)}). 휴지통을 비우거나 관리자에게 알려 주세요.`,
+  notHost: '이 서재에는 코드별 서재가 없습니다.',
+  // The same answer whether or not GitHub has such a blob (it is not asked): 409 makes the app pull, upload again
+  // (js/store/sync.js) and save.
+  notUploaded: '이 서재에 올린 기록이 없는 파일이 있어 저장할 수 없습니다. 파일을 다시 올린 뒤 저장합니다.',
 };
 
+/** Commit pages read for 최근 활동 (100 commits each): other libraries' commits are skipped, so read a few. */
+const ACTIVITY_PAGES = 3;
+/** Summaries of the server-made commits (최근 활동; the app hides none of them). */
+export const SPLIT_SUMMARY = '올린 사람의 코드 서재로 나누기';
+const SPLIT_TARGET_SUMMARY = (n) => `전체 공용 서재에서 논문 ${n}편 옮겨 옴`;
+const MOVE_SUMMARY = (n) => `삭제된 코드의 서재에서 논문 ${n}편 옮겨 옴`;
+const LIBRARY_DELETE_SUMMARY = '코드 삭제로 서재 비움';
+const PURGE_SUMMARY = (papers, files) => `휴지통 비우기: 30일 지난 논문 ${papers}개의 파일 ${files}개 삭제`;
+
 /**
- * Libraries an invite code may use. Today every active code may use every library in SHARED_LIBRARIES; a
- * code_libraries table can restrict this here later (the only place that decides it).
+ * Libraries an invite code may use, as GET /shared lists them: its own code library first ('mine', when the repo
+ * that holds code libraries is configured), then every library of SHARED_LIBRARIES ('team' = 전체 공용 서재). The
+ * only place that decides which libraries a code sees (the proxy and activity resolve through libraryView).
  * @param {import('./db.js').CodeRow} row
  * @param {import('./config.js').RelayConfig} config
+ * @returns {{ id: string, name: string, kind: 'code' | 'team' }[]}
  */
 export function librariesFor(row, config) {
-  return row?.active ? config.sharedLibraries : [];
+  if (!row?.active) return [];
+  const own = hostLibrary(config) ? [{ id: CODE_LIBRARY_URL_ID, name: codeLibraryName(row), kind: 'code' }] : [];
+  return [...own, ...config.sharedLibraries.map((l) => ({ id: l.id, name: l.name, kind: 'team' }))];
+}
+
+/** "<code name> 서재": what the app shows for a code's own library. */
+export function codeLibraryName(row) {
+  return `${row.name} 서재`;
+}
+
+/**
+ * One library as the proxy works with it.
+ * @typedef {{ urlId: string, kind: 'team' | 'code', lib: import('./config.js').SharedLibrary, root: string,
+ *             marker: string, treeKey: string, name: string, maxBytes: number | null }} LibraryView
+ *   lib: the SHARED_LIBRARIES entry whose repo holds it (repo-wide caps); root: '' or 'codes/<libraryId>/';
+ *   marker: the commit marker ('team' or the library id); treeKey: shared_trees.lib ('team', 'code:<libraryId>');
+ *   maxBytes: the code library's own size cap (null for a team library).
+ */
+
+/** @returns {LibraryView} */
+function teamView(lib) {
+  return { urlId: lib.id, kind: 'team', lib, root: '', marker: TEAM_MARKER, treeKey: lib.id, name: lib.name, maxBytes: null };
+}
+
+/** @returns {LibraryView} */
+export function codeView(host, row, libraryId, config) {
+  return {
+    urlId: CODE_LIBRARY_URL_ID, kind: 'code', lib: host, root: codeRoot(libraryId), marker: libraryId,
+    treeKey: `code:${libraryId}`, name: codeLibraryName(row), maxBytes: libraryMaxBytes(row, config),
+  };
+}
+
+/** A code library's size cap: the admin's per-code value, else CODE_LIBRARY_MAX_BYTES. */
+export function libraryMaxBytes(row, config) {
+  const own = Number(row?.library_max_bytes);
+  return Number.isFinite(own) && own > 0 ? own : config.codeLibraryMaxBytes;
+}
+
+/**
+ * The library `urlId` names for the calling code ('mine' = its own code library, made now if it has no id yet), or
+ * null when the code may not use it. Call only with TEAM_GITHUB_TOKEN set (a first visit writes the id).
+ * @returns {Promise<LibraryView | null>}
+ */
+async function libraryView(who, urlId, deps) {
+  const { config, env } = deps;
+  if (!who.row?.active) return null;
+  if (urlId === CODE_LIBRARY_URL_ID) {
+    const host = hostLibrary(config);
+    return host ? codeView(host, who.row, await ensureLibraryId(env.DB, who.row), config) : null;
+  }
+  const lib = config.sharedLibraries.find((l) => l.id === urlId);
+  return lib ? teamView(lib) : null;
+}
+
+/** Whether `urlId` names a library this code may use (no D1 write). */
+function knownLibrary(who, urlId, config) {
+  return librariesFor(who.row, config).some((l) => l.id === urlId);
 }
 
 // ───────────────────────────── routing ─────────────────────────────
@@ -130,35 +213,55 @@ function ghRefusal(error) {
     : ghError(401, error.message);
 }
 
-/** GET /shared → { libraries: [{ id, name }], personId, name } for the calling code. */
+/**
+ * GET /shared → { libraries: [{ id, name, kind }], personId, name, libraryId } for the calling code: its own library
+ * ('mine', kind 'code') and the team libraries (kind 'team'); libraryId = the id of its own library (the client's path
+ * prefix 'codes/<libraryId>/'), made on the first call. No libraries (and libraryId null) while TEAM_GITHUB_TOKEN is
+ * missing.
+ */
 async function sharedInfo(request, deps) {
   const who = await identify(request, deps);
   if (who.error) return refusal(who.error);
-  const libraries = deps.config.teamToken ? librariesFor(who.row, deps.config) : [];
-  return json({ libraries: libraries.map(({ id, name }) => ({ id, name })), personId: who.personId, name: who.row.name });
+  const { config, env } = deps;
+  const libraries = config.teamToken ? librariesFor(who.row, config) : [];
+  const libraryId = libraries.some((l) => l.kind === 'code') ? await ensureLibraryId(env.DB, who.row) : null;
+  return json({ libraries, personId: who.personId, name: who.row.name, libraryId });
 }
 
-/** GET /shared/<lib>/activity?limit=50 → { items: [{ ts, who, summary }] } from the branch's latest commits. */
-async function activity(request, url, libId, deps) {
+/**
+ * GET /shared/<lib>/activity?limit=50 → { items: [{ ts, who, summary }] }: this library's lines of the branch's
+ * latest commits (the {lib:…} marker of each commit says which library it changed; never sent).
+ */
+async function activity(request, url, urlId, deps) {
   const who = await identify(request, deps);
   if (who.error) return refusal(who.error);
-  const lib = librariesFor(who.row, deps.config).find((l) => l.id === libId);
-  if (!lib) return apiError(404, 'not_found_error', '공용 서재를 찾을 수 없습니다.');
+  if (!knownLibrary(who, urlId, deps.config)) return apiError(404, 'not_found_error', '공용 서재를 찾을 수 없습니다.');
   if (!deps.config.teamToken) return apiError(503, 'api_error', MSG.noToken);
   const limit = clampInt(url.searchParams.get('limit'), 50, 1, 100);
-  const repo = new TeamRepo(lib, deps.config);
   try {
-    const res = await repo.call('GET', `/commits?sha=${encodeURIComponent(lib.branch)}&per_page=${limit}`);
-    if (res.status === 404 || res.status === 409) {
-      await res.body?.cancel();
-      return json({ items: [] });
+    const view = await libraryView(who, urlId, deps);
+    if (!view) return apiError(404, 'not_found_error', '공용 서재를 찾을 수 없습니다.');
+    const repo = new TeamRepo(view.lib, deps.config);
+    const items = [];
+    let from = view.lib.branch;
+    for (let page = 0; page < ACTIVITY_PAGES && from && items.length < limit; page++) {
+      const res = await repo.call('GET', `/commits?sha=${encodeURIComponent(from)}&per_page=100`);
+      if (res.status === 404 || res.status === 409) {
+        await res.body?.cancel();
+        break;
+      }
+      if (res.status !== 200) throw await repo.passThrough(res);
+      const list = await res.json().catch(() => null);
+      const commits = Array.isArray(list) ? list : [];
+      for (const c of commits) {
+        const { who: name, lines } = commitLines(c?.commit?.message);
+        const line = lines.find((l) => l.marker === view.marker);
+        if (line) items.push({ ts: c?.commit?.committer?.date || c?.commit?.author?.date || null, who: name, summary: line.summary });
+        if (items.length >= limit) break;
+      }
+      const parent = commits.at(-1)?.parents?.[0]?.sha;
+      from = commits.length >= 100 && SHA_RE.test(parent || '') ? parent : null;
     }
-    if (res.status !== 200) throw await repo.passThrough(res);
-    const list = await res.json().catch(() => null);
-    const items = (Array.isArray(list) ? list : []).slice(0, limit).map((c) => {
-      const { who: name, summary } = parseCommitLine(c?.commit?.message);
-      return { ts: c?.commit?.committer?.date || c?.commit?.author?.date || null, who: name, summary };
-    });
     return json({ items });
   } catch (err) {
     if (err instanceof UpstreamError) return apiError(err.status >= 500 ? err.status : 502, 'api_error', err.message);
@@ -174,20 +277,26 @@ function ghError(status, message, headers = {}) {
 }
 
 /**
- * @typedef {{ request: Request, url: URL, deps: any, lib: import('./config.js').SharedLibrary, repo: TeamRepo,
- *             me: string, name: string, now: number }} ProxyCtx
+ * @typedef {{ request: Request, url: URL, deps: any, view: LibraryView, lib: import('./config.js').SharedLibrary,
+ *             repo: TeamRepo, me: string, name: string, now: number }} ProxyCtx
+ *   lib = view.lib (the repo, its branch and its repo-wide caps)
  */
 
-/** /shared/<lib>/gh/<sub>: only the routes of SHARED.md §2.1 on /repos/team/library; everything else is 404. */
-async function proxy(request, url, libId, sub, deps) {
+/**
+ * /shared/<lib>/gh/<sub>: only the routes of SHARED.md §2.1 on /repos/team/library; everything else is 404.
+ * <lib> is 'team' (or another SHARED_LIBRARIES id) or 'mine' (the calling code's own library, codes/<libraryId>/).
+ */
+async function proxy(request, url, urlId, sub, deps) {
   const who = await identify(request, deps);
   if (who.error) return ghRefusal(who.error);
-  const lib = librariesFor(who.row, deps.config).find((l) => l.id === libId);
   const m = /^\/repos\/([^/]+)\/([^/]+)(\/.*)?$/.exec(sub);
-  if (!lib || !m || m[1] !== PROXY_OWNER || m[2] !== PROXY_REPO) return ghError(404, MSG.notFound);
+  if (!knownLibrary(who, urlId, deps.config) || !m || m[1] !== PROXY_OWNER || m[2] !== PROXY_REPO) return ghError(404, MSG.notFound);
   if (!deps.config.teamToken) return ghError(503, MSG.noToken);
+  const view = await libraryView(who, urlId, deps);
+  if (!view) return ghError(404, MSG.notFound);
   const ctx = {
-    request, url, deps, lib, repo: new TeamRepo(lib, deps.config), me: who.personId, name: who.row.name, now: deps.now,
+    request, url, deps, view, lib: view.lib, repo: new TeamRepo(view.lib, deps.config), me: who.personId,
+    name: who.row.name, now: deps.now,
   };
   try {
     const res = await proxyRoute(ctx, request.method, m[3] || '');
@@ -249,8 +358,9 @@ async function getCommit(ctx, sha) {
   const c = await ctx.repo.commit(sha);
   if (!c) return notFound();
   const date = Number.isFinite(c.date) ? new Date(c.date).toISOString() : null;
+  // Only this library's line of the message: another code library's titles and names never show here.
   return json({
-    sha, tree: { sha: c.tree }, parents: c.parents.map((p) => ({ sha: p })), message: scrubText(c.message),
+    sha, tree: { sha: c.tree }, parents: c.parents.map((p) => ({ sha: p })), message: messageFor(c.message, ctx.view.marker),
     author: { date }, committer: { date },
   });
 }
@@ -263,7 +373,7 @@ async function getCommit(ctx, sha) {
  */
 async function treeLocation(ctx, sha) {
   const { repo, now, me } = ctx;
-  const pick = (paths) => paths.find((p) => visibleTo(p, me)) ?? null;
+  const pick = (paths) => paths.find((p) => visibleIn(p, ctx.view.root, me)) ?? null;
   const fromHead = async (head) => {
     if (head.state !== 'ok') return null;
     if (head.treeSha === sha) return '';
@@ -278,15 +388,19 @@ async function treeLocation(ctx, sha) {
   where = await fromHead(head);
   if (where !== null) return where;
   if (await repo.recentHead(now, RECENT_MS, (_, commit) => commit.tree === sha, head)) return '';
-  if (await hasSharedTree(ctx.deps.env.DB, { lib: ctx.lib.id, tree: sha, person: me, since: now - RECENT_MS })) return '';
+  if (await hasSharedTree(ctx.deps.env.DB, { lib: ctx.view.treeKey, tree: sha, person: me, since: now - RECENT_MS })) return '';
   return null;
 }
 
-/** GET git/trees/<sha>[?recursive=1]: GitHub's listing without other people's people/<id>/ entries. */
+/**
+ * GET git/trees/<sha>[?recursive=1]: GitHub's listing without other people's people/<id>/ entries — and, for the team
+ * library, without codes/ (the code libraries); for a code library, without anything outside codes/<libraryId>/
+ * (its listings of the root and of codes/ show only the way down).
+ */
 async function getTree(ctx, sha) {
   const recursive = ctx.url.searchParams.has('recursive');
   const where = await treeLocation(ctx, sha);
-  if (where === null || !visibleTo(where, ctx.me)) return notFound();
+  if (where === null || !visibleIn(where, ctx.view.root, ctx.me)) return notFound();
   let entries;
   let truncated;
   if (where === '' && recursive) {
@@ -299,7 +413,7 @@ async function getTree(ctx, sha) {
     entries = data.tree;
     truncated = Boolean(data.truncated);
   }
-  const tree = filterEntries(entries, where, ctx.me);
+  const tree = filterEntries(entries, where, ctx.me, ctx.view.root);
   ctx.repo.learnTrees(tree, where, ctx.now);
   return json({ sha, tree, truncated });
 }
@@ -312,12 +426,13 @@ async function getTree(ctx, sha) {
  */
 async function blobVisible(ctx, sha) {
   const { repo, me, now } = ctx;
-  if (repo.blobSize(sha) !== null) return true; // this person uploaded exactly these bytes
-  if (repo.learnedBlobPaths(sha, now).some((p) => visibleTo(p, me))) return true;
+  const visible = (p) => visibleIn(p, ctx.view.root, me);
+  if (repo.uploadedBy(sha, uploaderKey(ctx))) return true; // this person uploaded exactly these bytes, to this library
+  if (repo.learnedBlobPaths(sha, now).some(visible)) return true;
   const inHead = async (head) => {
     if (head.state !== 'ok') return false;
     const index = await repo.index(head.treeSha);
-    return (index?.blobs.get(sha) || []).some((p) => visibleTo(p, me));
+    return (index?.blobs.get(sha) || []).some(visible);
   };
   if (await inHead(await repo.head(now))) return true;
   const head = await repo.head(now, { maxAgeMs: 0 });
@@ -326,7 +441,7 @@ async function blobVisible(ctx, sha) {
   // reading): walk recent heads and accept the blob when it sat at a path visible to them.
   return repo.recentHead(now, RECENT_MS, async (_, commit) => {
     const index = await repo.index(commit.tree);
-    return (index?.blobs.get(sha) || []).some((p) => visibleTo(p, me));
+    return (index?.blobs.get(sha) || []).some(visible);
   }, head);
 }
 
@@ -346,10 +461,10 @@ async function getBlob(ctx, sha) {
 
 /**
  * POST git/blobs: streamed to GitHub. Bodies over 100 MB are refused; a PDF (or any blob over 8 MB) that would push
- * the library past its maxBytes is refused with 413 before anything is sent.
+ * the repo past its maxBytes — or a code library past its own cap — is refused with 413 before anything is sent.
  */
 async function createBlob(ctx) {
-  const { request, lib, repo, now } = ctx;
+  const { request, lib, repo, now, view } = ctx;
   const length = Number(request.headers.get('content-length'));
   if (!request.body || !Number.isFinite(length) || length <= 0) {
     // Read what was sent before answering: a reply in the middle of an upload reaches a browser as a network
@@ -369,21 +484,34 @@ async function createBlob(ctx) {
       await discard(reader, MAX_BLOB_BODY_BYTES);
       return ghError(413, MSG.full(used, lib.maxBytes, size));
     }
+    if (view.root) {
+      const own = bytesUnder(index, view.root);
+      if (own + size > view.maxBytes) {
+        await discard(reader, MAX_BLOB_BODY_BYTES);
+        return ghError(413, MSG.codeFull(view.name, own, view.maxBytes, size));
+      }
+    }
   }
   const res = await repo.call('POST', '/git/blobs', { body: fixedLengthBody(prefix, reader, length) });
   if (res.status !== 201) throw await repo.passThrough(res);
   const data = await res.json().catch(() => null);
   if (!SHA_RE.test(data?.sha || '')) throw new UpstreamError(502, 'GitHub에서 파일 sha를 받지 못했습니다.');
-  repo.rememberBlobSize(data.sha, size); // this person's own upload, for the blob-read check and the size estimate
+  repo.rememberUpload(data.sha, uploaderKey(ctx)); // this person's own upload, for the blob-read and tree checks
+  // The same proof for a tree that reaches another isolate (createTree). Best effort: the upload itself succeeded,
+  // and a tree refused for want of it makes the app upload again.
+  await insertSharedBlob(ctx.deps.env.DB, { lib: view.treeKey, sha: data.sha, person: ctx.me, now })
+    .catch((err) => console.error('[relay] upload proof not stored', err));
   return json({ sha: data.sha }, 201);
 }
 
 /**
- * POST git/trees: on top of the current head's tree (or a head of the last 10 min), only allowlisted paths, deletions
- * only under people/<me>/. Remembered (D1) so POST git/commits can check the commit's parent.
+ * POST git/trees: on top of the current head's tree (or a head of the last 10 min), only allowlisted paths of this
+ * library (under codes/<libraryId>/ for a code library; nothing under codes/ for the team library), deletions only
+ * under people/<me>/. Remembered (D1) so POST git/commits can check the commit's parent.
  */
 async function createTree(ctx) {
-  const { repo, now, me, lib } = ctx;
+  const { repo, now, me, lib, view } = ctx;
+  const libraryPath = `${view.root}${LIBRARY_PATH}`;
   const body = await readJsonObject(ctx.request, MAX_TREE_BODY_BYTES);
   if (body.error) return body.error;
   const extra = Object.keys(body.value).filter((k) => k !== 'base_tree' && k !== 'tree');
@@ -392,6 +520,7 @@ async function createTree(ctx) {
   const head = await repo.head(now, { maxAgeMs: 0 });
   if (head.state === 'empty') return ghError(409, MSG.empty);
   let baseFiles = null;
+  let baseIndex = null;
   if (head.state === 'missing') {
     if (base !== undefined) return ghError(403, MSG.noBranchBase);
   } else {
@@ -399,12 +528,17 @@ async function createTree(ctx) {
     if (base !== head.treeSha && !(await repo.recentHead(now, RECENT_MS, (_, c) => c.tree === base, head))) {
       return ghError(409, MSG.staleBase);
     }
-    const index = await repo.index(base);
-    if (!index) return ghError(409, MSG.staleBase);
-    baseFiles = index.files;
+    baseIndex = await repo.index(base);
+    if (!baseIndex) return ghError(409, MSG.staleBase);
+    baseFiles = baseIndex.files;
   }
-  const checked = checkTreeEntries(tree, { me, baseFiles });
+  const checked = checkTreeEntries(tree, { me, baseFiles, root: view.root });
   if (checked.error) return ghError(403, checked.error);
+  // Before GitHub (or this Worker) touches any blob the tree names: each must be one this person uploaded through
+  // this library or can already see in it. GitHub accepts any blob of the repo, so otherwise a tree would tell
+  // whether some other library (or the history) holds a file whose bytes one can guess — a published PDF — and
+  // copy another library's file in by its sha.
+  if ((await unprovenBlobs(ctx, checked.entries, baseIndex)).length) return ghError(409, MSG.notUploaded);
   // Cap the number of files: without this a single code could fill the repo (and GitHub's tree) cheaply with
   // countless tiny per-paper JSON files (every papers/<anything>/translation.json or people/<me>/papers/<anything>/…).
   let fileCount = baseFiles ? baseFiles.size : 0;
@@ -416,12 +550,12 @@ async function createTree(ctx) {
   // library.json is the index everyone shares. A client may change it, but not make a folder or paper vanish from
   // the list: deletes must be tombstones (휴지통, restorable 30 days). So a new library.json may not drop any record
   // the base had — this keeps a malicious or buggy client from wiping entries with no recoverable trail.
-  const libEntry = checked.entries.find((e) => e.path === LIBRARY_PATH && e.sha !== null);
+  const libEntry = checked.entries.find((e) => e.path === libraryPath && e.sha !== null);
   let cmp = null;
   if (libEntry) {
     const next = await loadLibrary(repo, libEntry.sha);
     if (!next.value) return ghError(422, MSG.badLibrary);
-    const baseSha = baseFiles?.get(LIBRARY_PATH)?.sha;
+    const baseSha = baseFiles?.get(libraryPath)?.sha;
     const baseLib = baseSha ? (await loadLibrary(repo, baseSha)).value ?? null : null;
     cmp = compareLibraries(baseLib, next.value);
     if (cmp.dropped.length) return ghError(403, MSG.dropsRecords(cmp.dropped.slice(0, 5)));
@@ -432,17 +566,18 @@ async function createTree(ctx) {
   if (res.status !== 201) throw await repo.passThrough(res);
   const data = await res.json().catch(() => null);
   if (!SHA_RE.test(data?.sha || '')) throw new UpstreamError(502, 'GitHub에서 트리 sha를 받지 못했습니다.');
-  repo.rememberTreeNote(data.sha, baseFiles ? base : '', summariseBatch(checked.entries, me, cmp));
-  await insertSharedTree(ctx.deps.env.DB, { lib: lib.id, tree: data.sha, base: baseFiles ? base : '', person: me, now });
-  return json({ sha: data.sha, tree: filterEntries(data.tree, '', me), truncated: Boolean(data.truncated) }, 201);
+  repo.rememberTreeNote(data.sha, noteKey(view, baseFiles ? base : ''), summariseBatch(checked.entries, me, cmp, view.root));
+  await insertSharedTree(ctx.deps.env.DB, { lib: view.treeKey, tree: data.sha, base: baseFiles ? base : '', person: me, now });
+  return json({ sha: data.sha, tree: filterEntries(data.tree, '', me, view.root), truncated: Boolean(data.truncated) }, 201);
 }
 
 /**
  * POST git/commits: parents = [current head] (none while the branch does not exist), the tree made here by this
- * person on top of that head's tree; message → "[<code name>] <first line>".
+ * person through this library on top of that head's tree; message → "[<code name>] {lib:<marker>} <first line>"
+ * (the answer leaves the marker out).
  */
 async function createCommit(ctx) {
-  const { repo, now, me, lib } = ctx;
+  const { repo, now, me, view } = ctx;
   const body = await readJsonObject(ctx.request, MAX_SMALL_BODY_BYTES);
   if (body.error) return body.error;
   const extra = Object.keys(body.value).filter((k) => !['message', 'tree', 'parents'].includes(k));
@@ -459,24 +594,25 @@ async function createCommit(ctx) {
   const baseKey = head.state === 'missing' ? '' : head.treeSha;
   if (head.state === 'missing') {
     if (parents.length) return ghError(403, MSG.badParents);
-    if (!(await hasSharedTree(db, { lib: lib.id, tree, base: '', person: me, since }))) return ghError(403, MSG.badTree);
+    if (!(await hasSharedTree(db, { lib: view.treeKey, tree, base: '', person: me, since }))) return ghError(403, MSG.badTree);
   } else {
     if (parents.length !== 1) return ghError(403, MSG.badParents);
     if (parents[0] !== head.commitSha) return ghError(409, MSG.staleParent);
-    if (tree !== head.treeSha && !(await hasSharedTree(db, { lib: lib.id, tree, base: head.treeSha, person: me, since }))) {
+    if (tree !== head.treeSha && !(await hasSharedTree(db, { lib: view.treeKey, tree, base: head.treeSha, person: me, since }))) {
       return ghError(403, MSG.badTree);
     }
   }
   // The commit message becomes the 최근 활동 line, so a client must not label a real change (adding, deleting or
   // wiping folders/papers) as one the app hides ('논문 정보 갱신', '내 메모·AI 결과 동기화'). The Worker allows a quiet
   // summary only when the tree really is that quiet; otherwise it writes its own visible summary of the change.
-  const first = scrubText(String(message ?? '').split(/\r\n|\r|\n/)[0]).trim();
+  // The check looks at the summary exactly as it will be written (markers, codes and runs of spaces removed).
+  const first = clientSummary(message);
   let effective = message;
   if (QUIET_SUMMARIES.has(first)) {
-    const note = repo.treeNote(tree, baseKey) ?? await changeNote(ctx, tree, baseKey);
+    const note = repo.treeNote(tree, noteKey(view, baseKey)) ?? await changeNote(ctx, tree, baseKey);
     if (!note.allowedQuiet.has(first)) effective = note.summary;
   }
-  const text = commitMessageFor(ctx.name, effective);
+  const text = commitMessageFor(ctx.name, effective, view.marker);
   const res = await repo.call('POST', '/git/commits', { json: { message: text, tree, parents } });
   if (res.status !== 201) throw await repo.passThrough(res);
   const data = await res.json().catch(() => null);
@@ -484,7 +620,7 @@ async function createCommit(ctx) {
   repo.rememberCommit(data.sha, {
     tree, parents: [...parents], message: text, date: Date.parse(data.committer?.date || '') || now,
   });
-  return json({ sha: data.sha, tree: { sha: tree }, parents: parents.map((p) => ({ sha: p })), message: text }, 201);
+  return json({ sha: data.sha, tree: { sha: tree }, parents: parents.map((p) => ({ sha: p })), message: messageFor(text, view.marker) }, 201);
 }
 
 /** PATCH git/refs/heads/<branch>: force must be false; GitHub's 422 (not a fast-forward) passes through. */
@@ -521,7 +657,7 @@ async function createRef(ctx) {
   // Only a first commit made here (no parents, a tree this person built without a base), not e.g. another branch's.
   const commit = await ctx.repo.commit(sha);
   if (!commit || commit.parents.length || !(await hasSharedTree(ctx.deps.env.DB, {
-    lib: ctx.lib.id, tree: commit.tree, base: '', person: ctx.me, since: ctx.now - RECENT_MS,
+    lib: ctx.view.treeKey, tree: commit.tree, base: '', person: ctx.me, since: ctx.now - RECENT_MS,
   }))) {
     return ghError(403, MSG.badTree);
   }
@@ -549,7 +685,7 @@ async function bootstrapReadme(ctx) {
   const head = await ctx.repo.head(ctx.now, { maxAgeMs: 0 });
   if (head.state !== 'empty') return ghError(422, MSG.notEmpty);
   const res = await ctx.repo.call('PUT', '/contents/README.md', {
-    json: { message: commitMessageFor(ctx.name, message), content, branch },
+    json: { message: commitMessageFor(ctx.name, message, ctx.view.marker), content, branch },
   });
   ctx.repo.forgetHead();
   if (res.status !== 201 && res.status !== 200) throw await ctx.repo.passThrough(res);
@@ -568,27 +704,44 @@ async function bootstrapReadme(ctx) {
 // ───────────────────────────── admin ─────────────────────────────
 
 /**
- * /relay/admin/shared/<lib>/stats and /purge (the caller checked the admin token). `path` is after /relay/admin.
+ * /relay/admin/shared/<lib>/stats, /purge and /split-by-uploader (the caller checked the admin token). `path` is
+ * after /relay/admin.
  * @returns {Promise<Response | null>} null when the path is not a shared-library admin path
  */
 export async function handleSharedAdmin(request, path, deps) {
-  const m = /^\/shared\/([^/]+)\/(stats|purge)$/.exec(path);
+  const m = /^\/shared\/([^/]+)\/(stats|purge|split-by-uploader)$/.exec(path);
   if (!m) return null;
-  const lib = deps.config.sharedLibraries.find((l) => l.id === m[1]);
+  const { config } = deps;
+  const lib = config.sharedLibraries.find((l) => l.id === m[1]);
   if (!lib) return apiError(404, 'not_found_error', `공용 서재를 찾을 수 없습니다: ${m[1]}`);
   const wanted = m[2] === 'stats' ? 'GET' : 'POST';
   if (request.method !== wanted) return notAllowed(request.method);
-  if (!deps.config.teamToken) return apiError(503, 'api_error', MSG.noToken);
-  const repo = new TeamRepo(lib, deps.config);
+  if (!config.teamToken) return apiError(503, 'api_error', MSG.noToken);
+  let dryRun = true;
+  if (m[2] === 'split-by-uploader') {
+    if (lib !== hostLibrary(config)) return apiError(400, 'invalid_request_error', MSG.notHost);
+    const read = await readBody(request, MAX_SMALL_BODY_BYTES);
+    const body = read.tooLarge ? undefined : read.bytes.byteLength ? parseJson(read.bytes) : {};
+    if (!body || typeof body !== 'object' || Array.isArray(body) || (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')) {
+      return apiError(400, 'invalid_request_error', '요청 본문은 { "dryRun": true | false } 형식이어야 합니다.');
+    }
+    dryRun = body.dryRun !== false;
+  }
+  const repo = new TeamRepo(lib, config);
   try {
-    return m[2] === 'stats' ? await stats(repo, lib, deps) : await purge(repo, deps);
+    if (m[2] === 'stats') return await stats(repo, lib, deps);
+    if (m[2] === 'purge') return await purge(repo, deps);
+    return await splitByUploader(repo, deps, { dryRun });
   } catch (err) {
     if (err instanceof UpstreamError) return apiError(err.status >= 500 ? err.status : 502, 'api_error', err.message);
     throw err;
   }
 }
 
-/** { bytes, papers, people, maxBytes }: totals of the head tree (papers = paper.pdf files, people = people/<id>/). */
+/**
+ * { bytes, papers, people, maxBytes }: totals of the head tree (bytes = the whole repo, which maxBytes caps; papers =
+ * the team library's paper.pdf files, people = its people/<id>/ folders — code libraries are not counted there).
+ */
 async function stats(repo, lib, { now }) {
   const head = await repo.head(now, { maxAgeMs: 0 });
   const index = head.state === 'ok' ? await repo.index(head.treeSha) : null;
@@ -604,7 +757,8 @@ async function stats(repo, lib, { now }) {
 
 /**
  * One server-side commit deleting the files (papers/<id>/* and everyone's people/<x>/papers/<id>/*) of papers that
- * were tombstoned in library.json more than 30 days ago. The tombstone records stay in library.json.
+ * were tombstoned more than 30 days ago — in the team library and in every code library of the repo (each by its own
+ * library.json; one 최근 활동 line per library). The tombstone records stay in library.json.
  * → { purged: [paperId], files, freedBytes, commitSha }
  */
 async function purge(repo, { now }) {
@@ -613,49 +767,120 @@ async function purge(repo, { now }) {
   // everyone's notes on it at once). A paper is purged only when it was already tombstoned, with the same deletion
   // time, in the newest commit that is itself at least 30 days old by GitHub's commit date.
   const beforeCommit = await repo.commitBefore(now - PURGE_AFTER_MS);
-  let before = null;
-  if (beforeCommit) {
-    const beforeIndex = await repo.index(beforeCommit.tree);
-    const beforeLib = beforeIndex?.files.get(LIBRARY_PATH);
-    if (beforeLib) before = (await loadLibrary(repo, beforeLib.sha)).value?.top ?? null;
-  }
-  const done = await deletionCommit(repo, now, async (head) => {
+  const beforeIndex = beforeCommit ? await repo.index(beforeCommit.tree) : null;
+  const beforeOf = async (root) => {
+    const file = beforeIndex?.files.get(`${root}${LIBRARY_PATH}`);
+    return file ? (await loadLibrary(repo, file.sha)).value?.top ?? null : null;
+  };
+  const done = await serverCommit(repo, now, async (head) => {
     const index = await repo.index(head.treeSha);
-    const libraryFile = index?.files.get(LIBRARY_PATH);
-    if (!index || !libraryFile) return null;
-    const res = await repo.call('GET', `/git/blobs/${libraryFile.sha}`, { accept: RAW_MEDIA });
-    if (res.status !== 200) throw await repo.passThrough(res);
-    const library = parseJson(new Uint8Array(await res.arrayBuffer()));
-    const ids = confirmedPurgeIds(library, before, now, PURGE_AFTER_MS);
-    const paths = paperFiles(index.files.keys(), ids);
+    if (!index) return null;
+    const lines = [];
+    const paths = [];
+    const purged = [];
+    let freedBytes = 0;
+    for (const root of libraryRoots(index)) {
+      const libraryFile = index.files.get(`${root}${LIBRARY_PATH}`);
+      if (!libraryFile) continue;
+      const library = (await loadLibrary(repo, libraryFile.sha)).value?.top ?? null;
+      const ids = confirmedPurgeIds(library, await beforeOf(root), now, PURGE_AFTER_MS);
+      if (!ids.length) continue;
+      const own = paperFiles(relativePaths(index.files, root), ids);
+      if (!own.length) continue;
+      const done = ids.filter((id) => own.some((p) => p.startsWith(`papers/${id}/`) || p.includes(`/papers/${id}/`)));
+      const full = own.map((p) => `${root}${p}`);
+      paths.push(...full);
+      purged.push(...done);
+      freedBytes += full.reduce((sum, p) => sum + (index.files.get(p)?.size ?? 0), 0);
+      lines.push({ marker: markerOf(root), summary: PURGE_SUMMARY(done.length, full.length) });
+    }
     if (!paths.length) return null;
-    const purged = ids.filter((id) => paths.some((p) => p.startsWith(`papers/${id}/`) || p.includes(`/papers/${id}/`)));
-    const freedBytes = paths.reduce((sum, p) => sum + (index.files.get(p)?.size ?? 0), 0);
-    const message = `[관리자] 휴지통 비우기: 30일 지난 논문 ${purged.length}개의 파일 ${paths.length}개 삭제`;
-    return { paths, message, purged, freedBytes };
+    return { entries: paths.map((path) => ({ path, sha: null })), message: adminMessage(lines), purged, freedBytes };
   });
   if (!done) return json({ purged: [], files: 0, freedBytes: 0, commitSha: null });
-  return json({ purged: done.purged, files: done.paths.length, freedBytes: done.freedBytes, commitSha: done.commitSha });
+  return json({ purged: done.purged, files: done.entries.length, freedBytes: done.freedBytes, commitSha: done.commitSha });
 }
 
 /**
- * One server-side commit on the library's branch that deletes the files `plan(head)` picks — `{ paths, message, … }`,
- * or null when there is nothing to delete — on top of the current head. When someone pushes in between (GitHub's 422
- * on the ref update) it starts again from the new head, at most MAX_PURGE_ATTEMPTS times. Used by the 30-day purge
- * and by code deletion. Throws UpstreamError when GitHub cannot be reached or refuses.
+ * The split (POST /relay/admin/shared/team/split-by-uploader { dryRun }): every paper of the team library whose
+ * addedBy is exactly the name of exactly one code (active or stopped) and that is not in the 휴지통 moves into that
+ * code's own library — PDF, translation and that code holder's notes, in folders of the same names — and leaves the
+ * team library (its record removed, folders left empty tombstoned). The dry run only plans; the apply is one commit
+ * "[관리자] {lib:team} 올린 사람의 코드 서재로 나누기" (+ one line per receiving code library), planned again on the
+ * newest head. A re-run finds nothing more to move.
+ * → { moves: [{ paperId, title, toCode, folderPath }], skipped: [{ paperId, title, reason }] } (+ commitSha on apply)
+ */
+async function splitByUploader(repo, deps, { dryRun }) {
+  const { env, now } = deps;
+  const secret = env.PERSON_ID_SECRET || '';
+  const codes = await allCodes(env.DB);
+  const read = async (head) => {
+    const index = await repo.index(head.treeSha);
+    if (!index || index.truncated) throw new UpstreamError(502, MSG.noListing);
+    const file = index.files.get(LIBRARY_PATH);
+    return { index, library: file ? (await loadLibrary(repo, file.sha)).value?.top ?? null : null };
+  };
+  const shown = ({ moves, skipped }) => ({ moves: moves.map(({ code, ...move }) => move), skipped });
+  if (dryRun) {
+    const head = await repo.head(now, { maxAgeMs: 0 });
+    if (head.state !== 'ok') return json({ moves: [], skipped: [] });
+    const { library } = await read(head);
+    return json(shown(planSplit({ library, codes })));
+  }
+  let latest = { moves: [], skipped: [] };
+  const done = await serverCommit(repo, now, async (head) => {
+    const { index, library } = await read(head);
+    const plan = planSplit({ library, codes });
+    const targets = new Map();
+    const moves = [];
+    for (const move of plan.moves) {
+      if (!targets.has(move.code)) {
+        const row = codes.find((c) => c.code === move.code);
+        const libraryId = await ensureLibraryId(env.DB, row);
+        const root = codeRoot(libraryId);
+        const file = index.files.get(`${root}${LIBRARY_PATH}`);
+        const parsed = file ? (await loadLibrary(repo, file.sha)).value : null;
+        const personIds = await personIdsOfDeletedCode(row, secret);
+        // A code library whose library.json cannot be read is left alone (its papers would be hidden).
+        targets.set(move.code, file && !parsed ? null : {
+          root, marker: libraryId, library: parsed?.top ?? null, personIds, personId: personIds[0],
+        });
+      }
+      if (targets.get(move.code)) moves.push(move);
+      else plan.skipped.push({ paperId: move.paperId, title: move.title, reason: '코드 서재의 목록(library.json)을 읽을 수 없음' });
+    }
+    latest = { moves, skipped: plan.skipped };
+    if (!moves.length) return null;
+    const result = applySplit({ library, files: index.files, moves, targets, now });
+    const entries = [...result.entries, { path: LIBRARY_PATH, sha: await createJsonBlob(repo, result.team) }];
+    const lines = [{ marker: TEAM_MARKER, summary: SPLIT_SUMMARY }];
+    for (const [root, lib] of result.libraries) entries.push({ path: `${root}${LIBRARY_PATH}`, sha: await createJsonBlob(repo, lib) });
+    for (const [code, n] of result.counts) lines.push({ marker: targets.get(code).marker, summary: SPLIT_TARGET_SUMMARY(n) });
+    return { entries, message: adminMessage(lines) };
+  });
+  return json({ ...shown(latest), commitSha: done?.commitSha ?? null });
+}
+
+/**
+ * One server-side commit on the library's branch with the changes `plan(head)` picks — `{ entries: [{ path, sha }],
+ * message, … }` (sha null = delete), or null when there is nothing to change — on top of the current head. When
+ * someone pushes in between (GitHub's 422 on the ref update) it starts again from the new head, at most
+ * MAX_PURGE_ATTEMPTS times. Used by the 30-day purge, code deletion and the split. Throws UpstreamError when GitHub
+ * cannot be reached or refuses.
  * @param {TeamRepo} repo
  * @param {number} now
- * @param {(head: { commitSha: string, treeSha: string }) => Promise<{ paths: string[], message: string } | null>} plan
- * @returns {Promise<({ paths: string[], message: string, commitSha: string } & Record<string, any>) | null>}
+ * @param {(head: { commitSha: string, treeSha: string }) => Promise<{ entries: { path: string, sha: string | null }[],
+ *          message: string } | null>} plan
+ * @returns {Promise<({ entries: any[], message: string, commitSha: string } & Record<string, any>) | null>}
  */
-async function deletionCommit(repo, now, plan) {
+async function serverCommit(repo, now, plan) {
   for (let attempt = 1; ; attempt++) {
     const head = await repo.head(now, { maxAgeMs: 0 });
     if (head.state !== 'ok') return null; // an empty repo or a missing branch holds no files
     const planned = await plan(head);
-    if (!planned?.paths.length) return null;
+    if (!planned?.entries.length) return null;
     const treeRes = await repo.call('POST', '/git/trees', {
-      json: { base_tree: head.treeSha, tree: planned.paths.map((path) => ({ path, mode: '100644', type: 'blob', sha: null })) },
+      json: { base_tree: head.treeSha, tree: planned.entries.map(({ path, sha }) => ({ path, mode: '100644', type: 'blob', sha })) },
     });
     if (treeRes.status !== 201) throw await repo.passThrough(treeRes);
     const tree = (await treeRes.json().catch(() => null))?.sha;
@@ -681,34 +906,117 @@ async function deletionCommit(repo, now, plan) {
 }
 
 /**
- * Code deletion (index.js): remove everything under people/<id>/ of `personIds` from every library in
- * SHARED_LIBRARIES — one server-side commit per library that holds such files, with the 최근 활동 line
- * "[관리자] 초대 코드 삭제에 따라 개인 기록 정리" (no person id in it); a library without them gets no commit. Shared
- * files (library.json, papers/*) and other people's folders are never touched. Throws UpstreamError when GitHub
- * cannot be reached or refuses, so the caller keeps the code; a retry skips the libraries already cleaned.
- * Without TEAM_GITHUB_TOKEN the shared libraries are switched off (GET /shared lists none, the proxy answers 503), so
- * nothing can be stored through this Worker: nothing to remove.
+ * Code deletion (index.js), in every library of SHARED_LIBRARIES: remove everything under the team library's
+ * people/<id>/ of `personIds` (the 최근 활동 line "[관리자] 초대 코드 삭제에 따라 개인 기록 정리", no person id in it),
+ * and — in the repo that holds code libraries — the deleted code's own library at the same time, in the same commit:
+ * - `library.action === 'delete'`: every file under codes/<libraryId>/;
+ * - `library.action === 'move'`: everything under codes/<libraryId>/ moves into codes/<to.libraryId>/ (library.json
+ *   records merged by id, a clashing id renamed; the deleted holder's notes become `to.personId`'s), so replacing a
+ *   person's code keeps their library.
+ * A library with nothing to change gets no commit. Shared files of the team library and other people's folders are
+ * never touched. Throws UpstreamError when GitHub cannot be reached or refuses, so the caller keeps the code; a retry
+ * skips what is already done. The repo holding the code's own library is done last, so a failure in another library
+ * never leaves the code (switched back on) without its library. Without TEAM_GITHUB_TOKEN nothing can have been
+ * stored through this Worker.
  * @param {import('./index.js').Deps} deps
- * @param {string[]} personIds
- * @returns {Promise<{ files: number, commits: number }>}
+ * @param {{ personIds: string[], library: null | { libraryId: string, action: 'delete' }
+ *          | { libraryId: string, action: 'move', to: { libraryId: string, personId: string } } }} what
+ * @returns {Promise<{ files: number, commits: number, library: null | { action: 'delete' | 'move', papers: number,
+ *                     files: number, renamed?: number } }>} files = people files removed (as before code libraries)
  */
-export async function removePersonFiles(deps, personIds) {
+export async function removeCodeData(deps, { personIds, library = null }) {
   const { config, now } = deps;
-  if (!config.teamToken || !personIds.length) return { files: 0, commits: 0 };
+  if (!config.teamToken) return { files: 0, commits: 0, library: null };
+  const host = hostLibrary(config);
   let files = 0;
   let commits = 0;
-  for (const lib of config.sharedLibraries) {
+  let libraryDone = null;
+  // The repo that holds the code's own library goes last: its commit deletes or moves that library for good, so it
+  // happens only once every other library is clean — a failure anywhere before leaves the library where it was.
+  const order = [...config.sharedLibraries.filter((l) => l !== host), ...config.sharedLibraries.filter((l) => l === host)];
+  for (const lib of order) {
     const repo = new TeamRepo(lib, config);
-    const done = await deletionCommit(repo, now, async (head) => {
-      const paths = await personPaths(repo, head, personIds);
-      return paths.length ? { paths, message: CODE_DELETE_MESSAGE } : null;
+    const withLibrary = lib === host && library && LIBRARY_ID_RE.test(library.libraryId || '');
+    const done = await serverCommit(repo, now, async (head) => {
+      const people = personIds.length ? await personPaths(repo, head, personIds) : [];
+      const entries = people.map((path) => ({ path, sha: null }));
+      const lines = people.length ? [{ marker: TEAM_MARKER, summary: CODE_DELETE_SUMMARY }] : [];
+      const own = withLibrary ? await planCodeLibrary(repo, head, library, personIds, now) : null;
+      if (own) {
+        entries.push(...own.entries);
+        lines.push(own.line);
+      }
+      if (!entries.length) return null;
+      return { entries, message: adminMessage(lines), people: people.length, library: own?.result ?? null };
     });
     if (done) {
-      files += done.paths.length;
+      files += done.people;
       commits++;
+      if (done.library) libraryDone = done.library;
     }
   }
-  return { files, commits };
+  return { files, commits, library: libraryDone };
+}
+
+/** Delete or move a deleted code's own library on `head` (removeCodeData); null when it holds no files. */
+async function planCodeLibrary(repo, head, what, personIds, now) {
+  const fromRoot = codeRoot(what.libraryId);
+  const fromFiles = await filesUnder(repo, head, fromRoot);
+  if (!fromFiles.size) return null;
+  const from = await libraryAt(repo, fromFiles, fromRoot);
+  const papers = from.value ? livePapers(from.value) : 0;
+  if (what.action !== 'move') {
+    const paths = planLibraryDelete(fromFiles, fromRoot);
+    return {
+      entries: paths.map((path) => ({ path, sha: null })),
+      line: { marker: what.libraryId, summary: LIBRARY_DELETE_SUMMARY },
+      result: { action: 'delete', papers, files: paths.length },
+    };
+  }
+  const toRoot = codeRoot(what.to.libraryId);
+  const toFiles = await filesUnder(repo, head, toRoot);
+  const to = await libraryAt(repo, toFiles, toRoot);
+  // A library.json that cannot be read is never replaced: then the records stay where they are (files still move).
+  const merge = !from.corrupt && !to.corrupt;
+  const plan = planLibraryMove({
+    files: new Map([...fromFiles, ...toFiles]), fromRoot, toRoot, from: merge ? from.value : null, to: to.value,
+    personMap: new Map(personIds.map((id) => [id, what.to.personId])), now,
+  });
+  if (!plan) return null;
+  const entries = [...plan.entries];
+  if (plan.library) entries.push({ path: `${toRoot}${LIBRARY_PATH}`, sha: await createJsonBlob(repo, plan.library) });
+  return {
+    entries,
+    line: { marker: what.to.libraryId, summary: MOVE_SUMMARY(plan.papers) },
+    result: { action: 'move', papers: plan.papers, files: plan.entries.filter((e) => e.sha !== null).length, renamed: plan.renamed },
+  };
+}
+
+/**
+ * GET /relay/admin/codes/<code>/library: the code's own library — { code, name, libraryId, papers (not in the 휴지통),
+ * trashed, files, bytes, maxBytes }. A code that never opened its library has libraryId null and zeros.
+ * @param {import('./db.js').CodeRow} row
+ */
+export async function codeLibraryReport(deps, row) {
+  const { config, now } = deps;
+  const host = hostLibrary(config);
+  const libraryId = LIBRARY_ID_RE.test(row.library_id || '') ? row.library_id : null;
+  const report = { code: row.code, name: row.name, libraryId, papers: 0, trashed: 0, files: 0, bytes: 0, maxBytes: libraryMaxBytes(row, config) };
+  if (!libraryId || !host) return report;
+  const repo = new TeamRepo(host, config);
+  const head = await repo.head(now, { maxAgeMs: 0 });
+  if (head.state !== 'ok') return report;
+  const root = codeRoot(libraryId);
+  const files = await filesUnder(repo, head, root);
+  const library = (await libraryAt(repo, files, root)).value;
+  const papers = library ? listOf(library.papers).filter((p) => p && typeof p === 'object' && typeof p.id === 'string') : [];
+  return {
+    ...report,
+    papers: papers.filter((p) => p.deleted !== true).length,
+    trashed: papers.filter((p) => p.deleted === true).length,
+    files: files.size,
+    bytes: [...files.values()].reduce((sum, f) => sum + (f.size || 0), 0),
+  };
 }
 
 /**
@@ -737,6 +1045,125 @@ async function personPaths(repo, head, personIds) {
   return personFiles(found, personIds);
 }
 
+/**
+ * The files of the head tree under `root` (a code library's 'codes/<id>/'): from the recursive index, or — when GitHub
+ * truncated it — by walking down to that folder and listing it recursively.
+ * @returns {Promise<Map<string, { sha: string, size: number }>>}
+ */
+async function filesUnder(repo, head, root) {
+  const index = await repo.index(head.treeSha);
+  if (!index) throw new UpstreamError(502, MSG.noListing);
+  if (!index.truncated) return new Map([...index.files].filter(([path]) => path.startsWith(root)));
+  let sha = head.treeSha;
+  for (const part of root.slice(0, -1).split('/')) {
+    const level = await repo.listing(sha, false);
+    if (!level) throw new UpstreamError(502, MSG.noListing);
+    const dir = level.tree.find((e) => e?.path === part && e.type === 'tree');
+    if (!dir) return new Map();
+    sha = dir.sha;
+  }
+  const sub = await repo.listing(sha, true);
+  if (!sub || sub.truncated) throw new UpstreamError(502, MSG.noListing);
+  const out = new Map();
+  for (const f of sub.tree) {
+    if (f?.type === 'blob' && typeof f.path === 'string') out.set(`${root}${f.path}`, { sha: f.sha, size: Number(f.size) || 0 });
+  }
+  return out;
+}
+
+/** The library.json at `root` among `files`: { value } (null when there is none) or { value: null, corrupt: true }. */
+async function libraryAt(repo, files, root) {
+  const file = files.get(`${root}${LIBRARY_PATH}`);
+  if (!file) return { value: null, corrupt: false };
+  const value = (await loadLibrary(repo, file.sha)).value?.top ?? null;
+  return { value, corrupt: !value };
+}
+
+/** Papers of a library.json object that are not in the 휴지통. */
+function livePapers(library) {
+  return listOf(library?.papers).filter((p) => p && typeof p === 'object' && typeof p.id === 'string' && p.deleted !== true).length;
+}
+
+/** '' (the team library) and 'codes/<id>/' of every code library with a library.json in `index`. */
+function libraryRoots(index) {
+  const codes = [];
+  for (const path of index.files.keys()) {
+    const m = /^codes\/([0-9a-f]{16})\/library\.json$/.exec(path);
+    if (m) codes.push(codeRoot(m[1]));
+  }
+  return ['', ...codes.sort()];
+}
+
+/** Paths under `root`, relative to it. */
+function relativePaths(files, root) {
+  const out = [];
+  for (const path of files.keys()) if (path.startsWith(root)) out.push(path.slice(root.length));
+  return out;
+}
+
+/** Upload a JSON file (as the app writes it: 2-space indent, final newline); its blob sha. */
+async function createJsonBlob(repo, value) {
+  const bytes = new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`);
+  const res = await repo.call('POST', '/git/blobs', { json: { content: toBase64(bytes), encoding: 'base64' } });
+  if (res.status !== 201) throw await repo.passThrough(res);
+  const sha = (await res.json().catch(() => null))?.sha;
+  if (!SHA_RE.test(sha || '')) throw new UpstreamError(502, 'GitHub에서 파일 sha를 받지 못했습니다.');
+  return sha;
+}
+
+function toBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+const listOf = (v) => (Array.isArray(v) ? v : []);
+
+/** Bytes of the files under `root` in a head index (a code library's share of the repo). */
+function bytesUnder(index, root) {
+  let sum = 0;
+  if (index) for (const [path, f] of index.files) if (path.startsWith(root)) sum += f.size || 0;
+  return sum;
+}
+
+/**
+ * Who uploaded a blob, for the blob-read check: this person in this library (a person's upload to their code library
+ * must not make the blob readable through 전체 공용 서재, nor by anyone else who happens to ask for its sha).
+ */
+function uploaderKey(ctx) {
+  return `${ctx.view.treeKey}
+${ctx.me}`;
+}
+
+/**
+ * The blob shas of a tree POST's entries that this person has not shown they have, in this library: not uploaded
+ * by them through it (this isolate's memory, else the D1 proof of the last hour) and not at a path they can see in
+ * it — in the base tree, or listed to them level by level. Decided without asking GitHub, so the answer is the same
+ * whether or not the repo holds such a blob.
+ * @param {ProxyCtx} ctx
+ * @param {{ sha: string | null }[]} entries checked entries (sha null = a deletion)
+ * @param {import('./github.js').TreeIndex | null} baseIndex the base tree's index (null: no base)
+ * @returns {Promise<string[]>}
+ */
+async function unprovenBlobs(ctx, entries, baseIndex) {
+  const { repo, me, view, now } = ctx;
+  const visible = (p) => visibleIn(p, view.root, me);
+  const left = [];
+  for (const sha of new Set(entries.map((e) => e.sha).filter(Boolean))) {
+    if (repo.uploadedBy(sha, uploaderKey(ctx))) continue;
+    if ((baseIndex?.blobs.get(sha) || []).some(visible) || repo.learnedBlobPaths(sha, now).some(visible)) continue;
+    left.push(sha);
+  }
+  if (!left.length) return left;
+  const proven = await uploadedBlobs(ctx.deps.env.DB, { lib: view.treeKey, shas: left, person: me, since: now - SHARED_TREE_KEEP_MS });
+  return left.filter((sha) => !proven.has(sha));
+}
+
+/** Key of a tree note (what a tree made here changed) for one library: the same tree may sit in two libraries. */
+function noteKey(view, base) {
+  return `${view.marker}:${base}`;
+}
+
 // ───────────────────────────── helpers ─────────────────────────────
 
 /**
@@ -751,10 +1178,10 @@ async function loadLibrary(repo, sha) {
 /**
  * What a tree POST's changed entries are (summary line + which hidden summaries they may legitimately carry).
  * `entries` are the changed paths of the batch (a tree POST with a base lists only what changed); `cmp` is the
- * library.json comparison when the batch changed it.
+ * library.json comparison when the batch changed it; `root` the library's root (paths outside it are loud).
  * @returns {{ allowedQuiet: Set<string>, summary: string }}
  */
-function summariseBatch(entries, me, cmp) {
+function summariseBatch(entries, me, cmp, root = '') {
   let libraryChanged = false;
   let translations = 0;
   let pdfs = 0;
@@ -762,7 +1189,7 @@ function summariseBatch(entries, me, cmp) {
   let total = 0;
   for (const e of entries) {
     total++;
-    const where = classifyPath(e.path);
+    const where = classifyIn(e.path, root);
     if (where?.kind === 'library') libraryChanged = true;
     else if (where?.kind === 'translation') translations++;
     else if (where?.kind === 'pdf') pdfs++;
@@ -784,7 +1211,8 @@ function summariseBatch(entries, me, cmp) {
  * @returns {Promise<{ allowedQuiet: Set<string>, summary: string }>}
  */
 async function changeNote(ctx, treeSha, baseTreeSha) {
-  const { repo, me } = ctx;
+  const { repo, me, view } = ctx;
+  const libraryPath = `${view.root}${LIBRARY_PATH}`;
   const idxNew = await repo.index(treeSha);
   if (!idxNew) return { allowedQuiet: new Set(), summary: describeSharedChange({}) };
   const baseFiles = baseTreeSha ? (await repo.index(baseTreeSha))?.files ?? new Map() : new Map();
@@ -792,14 +1220,14 @@ async function changeNote(ctx, treeSha, baseTreeSha) {
   for (const [path, f] of idxNew.files) if (baseFiles.get(path)?.sha !== f.sha) changed.push({ path, sha: f.sha });
   for (const path of baseFiles.keys()) if (!idxNew.files.has(path)) changed.push({ path, sha: null });
   let cmp = null;
-  const libEntry = changed.find((e) => e.path === LIBRARY_PATH && e.sha);
+  const libEntry = changed.find((e) => e.path === libraryPath && e.sha);
   if (libEntry) {
     const next = await loadLibrary(repo, libEntry.sha);
-    const baseSha = baseFiles.get(LIBRARY_PATH)?.sha;
+    const baseSha = baseFiles.get(libraryPath)?.sha;
     const baseLib = baseSha ? (await loadLibrary(repo, baseSha)).value ?? null : null;
     if (next.value) cmp = compareLibraries(baseLib, next.value);
   }
-  return summariseBatch(changed, me, cmp);
+  return summariseBatch(changed, me, cmp, view.root);
 }
 
 /** @returns {Promise<{ value: Record<string, any> } | { error: Response }>} */

@@ -15,6 +15,8 @@ const MAX_ATTEMPTS = 3; // per request: transient 5xx / short rate-limit waits
 
 const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+/** A library kept in a folder of the repo (e.g. 'codes/<libId>/'): plain path segments, each ending in '/'. */
+export const ROOT_PREFIX_RE = /^(?:[A-Za-z0-9_-]{1,64}\/){1,8}$/;
 
 export const README_PATH = 'README.md';
 /** Root entries a data repo may contain without looking like someone else's project. */
@@ -68,25 +70,36 @@ export class GitHubClient {
   #fetch;
   #rateLimitMaxWaitMs;
   #proxy;
+  #rootPrefix;
+  #label;
   #refCache = null; // { etag, commitSha } — conditional GETs (304s) do not count against the rate limit
   #treeOfCommit = new Map();
 
   /**
    * @param {{ owner: string, repo: string, branch?: string, token: string, apiBase?: string,
-   *           fetch?: typeof fetch, rateLimitMaxWaitMs?: number }} opts
+   *           fetch?: typeof fetch, rateLimitMaxWaitMs?: number, proxy?: boolean, rootPrefix?: string,
+   *           label?: string }} opts
    *   apiBase: test hook (fake server); defaults to https://api.github.com.
    *   rateLimitMaxWaitMs: rate-limit waits up to this long are slept through; longer ones throw.
    *   proxy: `apiBase` is the relay's GitHub-compatible proxy for the shared library (공용 서재, docs/SHARED.md
    *     §2.1) and `token` is an invite code. Korean messages from the proxy are shown as they are, a stale
    *     base_tree/parent (409/422 on POST trees/commits) is a conflict (re-pull, merge, retry), and an invalid
    *     apiBase is a configuration error — never a fallback to api.github.com (the code must not go there).
+   *   rootPrefix: the library lives in this folder of the repo (e.g. 'codes/<libId>/' for an invite code's own
+   *     library). listTree() then returns only the files under it, with paths relative to it, and commit()
+   *     takes paths relative to it — callers keep using 'library.json', 'papers/…', 'people/…'. The branch,
+   *     its head and the trees are still the whole repo's (base_tree / parents stay the repo head). An empty
+   *     repo is still bootstrapped with README.md at the repo root. '' (default) = the repo root.
+   *   label: the library's name in proxy-mode fallback messages (default '공용 서재').
    */
-  constructor({ owner, repo, branch = 'main', token, apiBase, fetch: fetchImpl, rateLimitMaxWaitMs = 60_000, proxy = false } = {}) {
+  constructor({ owner, repo, branch = 'main', token, apiBase, fetch: fetchImpl, rateLimitMaxWaitMs = 60_000, proxy = false, rootPrefix = '', label = '' } = {}) {
     this.#owner = String(owner ?? '').trim();
     this.#repo = String(repo ?? '').trim().replace(/\.git$/i, '');
     this.#branch = String(branch || 'main').trim() || 'main';
     this.#token = String(token ?? '').trim();
     this.#proxy = Boolean(proxy);
+    this.#rootPrefix = String(rootPrefix ?? '');
+    this.#label = String(label || '').trim() || '공용 서재';
     // No default in proxy mode: a missing relay address must never become api.github.com.
     this.#apiBase = this.#proxy ? normalizeProxyBase(apiBase) : normalizeApiBase(apiBase ?? DEFAULT_API_BASE);
     this.#fetch = fetchImpl || ((...args) => globalThis.fetch(...args));
@@ -99,8 +112,13 @@ export class GitHubClient {
   get apiBase() { return this.#apiBase; }
   /** True for the shared library's relay proxy (the token is an invite code). */
   get proxy() { return this.#proxy; }
-  /** Stable identity of the remote ("same repo?") — never includes the token. */
-  get target() { return `${this.#apiBase}/${this.#owner}/${this.#repo}#${this.#branch}`; }
+  /** The repo folder the library lives in ('' = the repo root). */
+  get rootPrefix() { return this.#rootPrefix; }
+  /**
+   * Stable identity of the remote ("same repo and library?") — never includes the token. A library in a folder
+   * of the repo adds `:<rootPrefix>` (':' cannot occur in a branch name).
+   */
+  get target() { return targetOf(this); }
 
   // ------------------------------------------------------------ public API
 
@@ -210,13 +228,20 @@ export class GitHubClient {
     return { commitSha, treeSha: await this.#commitTree(commitSha, signal) };
   }
 
-  /** Every blob in the tree, recursively. @returns {Promise<Map<string, { sha: string, size: number }>>} */
+  /**
+   * Every blob in the tree, recursively — with a rootPrefix only the blobs under it, keyed relative to it.
+   * @returns {Promise<Map<string, { sha: string, size: number }>>}
+   */
   async listTree(treeSha, { signal } = {}) {
     this.#assertConfig();
     const { data } = await this.#request('GET', this.#repoPath(`/git/trees/${encodeURIComponent(treeSha)}?recursive=1`), { signal });
     const out = new Map();
     if (!data.truncated) {
-      for (const e of data.tree || []) if (e.type === 'blob') out.set(e.path, { sha: e.sha, size: e.size ?? 0 });
+      for (const e of data.tree || []) {
+        if (e.type !== 'blob' || typeof e.path !== 'string') continue;
+        const path = this.#fromRepo(e.path);
+        if (path) out.set(path, { sha: e.sha, size: e.size ?? 0 });
+      }
       return out;
     }
     // Huge trees come back truncated: walk them one level at a time instead.
@@ -283,8 +308,9 @@ export class GitHubClient {
       const sha = f.sha || (await this.createBlob(f.bytes ?? utf8Encode(f.text ?? ''), { signal }));
       blobs[f.path] = sha;
     });
+    // Paths are relative to the library's folder; the tree is the whole repo's.
     const entries = files.map((f) => ({
-      path: f.path, mode: '100644', type: 'blob', sha: f.delete ? null : blobs[f.path],
+      path: this.#toRepo(f.path), mode: '100644', type: 'blob', sha: f.delete ? null : blobs[f.path],
     }));
     const treeBody = baseTree ? { base_tree: baseTree, tree: entries } : { tree: entries.filter((e) => e.sha) };
     // The relay proxy accepts trees only on the current head and commits only whose parent is the head: when
@@ -323,13 +349,31 @@ export class GitHubClient {
   // -------------------------------------------------------------- internals
 
   #configProblem() {
-    if (this.#proxy && !this.#apiBase) return '공용 서재 서버 주소가 올바르지 않습니다. 설정 → 초대 코드에서 서버 주소를 확인하세요.';
+    if (this.#proxy && !this.#apiBase) return `${this.#label} 서버 주소가 올바르지 않습니다. 설정 → 초대 코드에서 서버 주소를 확인하세요.`;
     if (this.#proxy && !this.#token) return '초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.';
     if (!this.#owner || !this.#repo || !this.#token) return '소유자, 저장소 이름, 토큰을 모두 입력하세요.';
     if (!OWNER_RE.test(this.#owner)) return `소유자 이름이 올바르지 않습니다: ‘${this.#owner}’ (영문·숫자·하이픈만 쓸 수 있습니다)`;
     if (!REPO_RE.test(this.#repo) || this.#repo === '.' || this.#repo === '..') return `저장소 이름이 올바르지 않습니다: ‘${this.#repo}’`;
     if (/[\s~^:?*[\\]|\.\.|^\/|\/$|\.lock$/.test(this.#branch)) return `브랜치 이름이 올바르지 않습니다: ‘${this.#branch}’`;
+    if (this.#rootPrefix && !ROOT_PREFIX_RE.test(this.#rootPrefix)) return `${this.#label}의 저장 위치가 올바르지 않습니다. 앱을 새로 고친 뒤 다시 시도하세요.`;
     return '';
+  }
+
+  /** Repo path of a library path (the library's folder + path). */
+  #toRepo(path) {
+    const p = String(path);
+    if (!this.#rootPrefix) return p;
+    // Never let a library write outside its folder ('..', absolute paths).
+    if (p.startsWith('/') || p.split('/').some((s) => s === '..' || s === '.' || s === '')) {
+      throw new GitHubError(`잘못된 파일 경로입니다: ${p}`, { code: 'config' });
+    }
+    return `${this.#rootPrefix}${p}`;
+  }
+
+  /** Library path of a repo path, or null when it lies outside the library's folder. */
+  #fromRepo(path) {
+    if (!this.#rootPrefix) return path;
+    return path.startsWith(this.#rootPrefix) && path.length > this.#rootPrefix.length ? path.slice(this.#rootPrefix.length) : null;
   }
 
   #assertConfig() {
@@ -357,7 +401,7 @@ export class GitHubClient {
 
   /** True when the branch's root holds files this app does not manage (a likely wrong repo). */
   async #hasForeignFiles(commitSha, signal) {
-    if (!commitSha) return false;
+    if (!commitSha || this.#rootPrefix) return false; // a library in a folder shares the repo root with others
     const treeSha = await this.#commitTree(commitSha, signal);
     const { data } = await this.#request('GET', this.#repoPath(`/git/trees/${encodeURIComponent(treeSha)}`), { signal });
     return (data.tree || []).some((e) => !APP_ROOT_ENTRIES.has(e.path));
@@ -366,10 +410,21 @@ export class GitHubClient {
   async #walkTree(treeSha, prefix, out, signal) {
     const { data } = await this.#request('GET', this.#repoPath(`/git/trees/${encodeURIComponent(treeSha)}`), { signal });
     for (const e of data.tree || []) {
+      if (typeof e.path !== 'string') continue;
       const path = prefix ? `${prefix}/${e.path}` : e.path;
-      if (e.type === 'blob') out.set(path, { sha: e.sha, size: e.size ?? 0 });
-      else if (e.type === 'tree') await this.#walkTree(e.sha, path, out, signal);
+      if (e.type === 'blob') {
+        const rel = this.#fromRepo(path);
+        if (rel) out.set(rel, { sha: e.sha, size: e.size ?? 0 });
+      } else if (e.type === 'tree' && this.#onRootPath(`${path}/`)) {
+        await this.#walkTree(e.sha, path, out, signal);
+      }
     }
+  }
+
+  /** Does directory `dir` ('a/b/') lead to or lie inside the library's folder? (Other folders are not walked.) */
+  #onRootPath(dir) {
+    const root = this.#rootPrefix;
+    return !root || root.startsWith(dir) || dir.startsWith(root);
   }
 
   /**
@@ -516,28 +571,35 @@ export class GitHubClient {
   #proxyError(status, ghMessage, method, path) {
     const korean = /[가-힣]/.test(ghMessage) ? ghMessage : '';
     const make = (fallback, code) => new GitHubError(korean || fallback, { code, status });
+    const lib = this.#label;
     switch (status) {
       case 401:
         return make('초대 코드가 올바르지 않거나 사용이 중지되었습니다. 설정에서 초대 코드를 확인하세요.', 'auth');
       case 403:
-        return make(method === 'GET' ? '이 초대 코드로는 공용 서재를 열 수 없습니다.' : '공용 서재에 이 변경을 저장할 수 없습니다 (403).', 'forbidden');
+        return make(method === 'GET' ? `이 초대 코드로는 ${lib}를 열 수 없습니다.` : `${lib}에 이 변경을 저장할 수 없습니다 (403).`, 'forbidden');
       case 404:
-        if (/\/git\/ref\//.test(path) && method === 'GET') return make(`공용 서재의 ‘${this.#branch}’ 브랜치를 찾을 수 없습니다.`, 'not_found');
-        return make('공용 서재를 찾을 수 없습니다. 초대 코드 서버가 공용 서재를 지원하는지 확인하세요.', 'not_found');
+        if (/\/git\/ref\//.test(path) && method === 'GET') return make(`${lib}의 ‘${this.#branch}’ 브랜치를 찾을 수 없습니다.`, 'not_found');
+        return make(`${lib}를 찾을 수 없습니다. 초대 코드 서버가 이 서재를 지원하는지 확인하세요.`, 'not_found');
       case 409:
-        return make('공용 서재 저장소가 비어 있습니다.', 'empty');
+        return make(`${lib} 저장소가 비어 있습니다.`, 'empty');
       case 413:
-        return make('파일이 너무 커서 공용 서재에 올릴 수 없습니다.', 'too_large');
+        return make(`파일이 너무 커서 ${lib}에 올릴 수 없습니다.`, 'too_large');
       case 422:
-        return make(`공용 서재 서버가 요청을 거부했습니다: ${ghMessage || '처리할 수 없는 요청'}`, 'invalid');
+        return make(`${lib} 서버가 요청을 거부했습니다: ${ghMessage || '처리할 수 없는 요청'}`, 'invalid');
       default:
-        if (status >= 500) return make('공용 서재 서버에 일시적인 문제가 있습니다. 잠시 후 자동으로 다시 시도합니다.', 'server');
-        return make(`공용 서재 요청에 실패했습니다 (${status}).`, 'unknown');
+        if (status >= 500) return make(`${lib} 서버에 일시적인 문제가 있습니다. 잠시 후 자동으로 다시 시도합니다.`, 'server');
+        return make(`${lib} 요청에 실패했습니다 (${status}).`, 'unknown');
     }
   }
 }
 
 // ------------------------------------------------------------------ helpers
+
+/** GitHubClient.target: `<apiBase>/<owner>/<repo>#<branch>`, plus `:<rootPrefix>` for a library in a folder. */
+function targetOf(c) {
+  const base = `${c.apiBase}/${c.owner}/${c.repo}#${c.branch}`;
+  return c.rootPrefix ? `${base}:${c.rootPrefix}` : base;
+}
 
 /** git's blob id: sha1("blob <len>\0" + content), hex. */
 export async function gitBlobSha(bytes) {

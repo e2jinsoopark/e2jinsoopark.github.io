@@ -42,7 +42,8 @@ Errors: one short line under the input (`role="alert"`, the input gets `aria-inv
   chosen code made again).
 
 Success: the code is saved (`registerInviteCode`), the screen waits up to 2.5 s for `GET /shared` (`deps.shared.settled()`,
-so an invitee lands in 공용 서재, not in an empty 내 서재 first), shows the toast "초대 코드를 등록했어요." and replaces the
+so an invitee lands in their code's own library '<name> 서재' — `#/s/mine` since code libraries, `docs/CODE-LIBRARIES.md` —
+not in an empty 내 서재 first), shows the toast "초대 코드를 등록했어요." and replaces the
 address with `#/` (the router then sends an invitee to `#/s/<lib>`). No welcome screen. While it registers the router
 does not re-route on the settings change (`busy()`); otherwise a code or key arriving some other way (another tab,
 설정) makes the first screen give way by itself.

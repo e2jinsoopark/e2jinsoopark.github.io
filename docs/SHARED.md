@@ -136,6 +136,13 @@ top of §1–§4:
   the caller in the current (or a last-10-min) head tree, was listed to them level-by-level in the last 10 min, or was
   uploaded by them; otherwise 404, and GitHub is not asked for it. Other people's `people/<other>/` blob shas are never
   listed anyway — this closes the gap of a sha learned some other way.
+- **Blobs named in a tree are proven (security, 2026-10-19):** every blob sha in a `POST git/trees` must be one the
+  caller uploaded through **this** library (this isolate's memory, else a D1 `shared_trees` row with
+  `lib = 'blob:<lib>'`, kept 1 h) or one already at a path visible to them in it (base tree, or listed level by level);
+  otherwise **409** "이 서재에 올린 기록이 없는 파일이 있어…", decided before GitHub (or the Worker) touches the blob — the
+  same answer whether or not the repo has it. GitHub accepts any blob of the repo in a tree, so without this a tree
+  would tell whether another library (or the history) holds a file whose bytes one can guess (a published PDF), and
+  copy another library's file in by its sha. The app re-uploads a blob after 45 min (`js/store/sync.js`).
 - **library.json integrity (security):** `POST git/trees` parses the new `library.json` (and the base's) as the client
   does; a record (folder or paper) present in the base may not vanish from the new file → 403 (Korean). Deletes must be
   tombstones (휴지통, restorable 30 days); nothing is wiped without a recoverable trail. A corrupt `library.json`
@@ -166,3 +173,17 @@ top of §1–§4:
   `people/<personId>/` in every library (one `[관리자] 초대 코드 삭제에 따라 개인 기록 정리` commit per library that has such
   files; 최근 활동 shows who `관리자`), then the code. Shared files (`library.json`, PDFs, translations) stay. GitHub
   unreachable → 502 and the code stays (no orphaned notes). The holder's devices forget the code on the next 401.
+
+## 6. Code libraries (2026-10-19)
+
+Owner: "초대코드별로 초대코드만의 [공용서재]가 보이게". Every invite code now also has its **own library** ("<code name>
+서재", URL id `mine`, repo folder `codes/<libraryId>/` of the same team repo), seen only by that code's holders; the
+library of §1–§5 stays as **전체 공용 서재** (`team`). This changes, on top of §1–§5:
+- `GET /shared` → `{ libraries: [{ id: 'mine', name: '<code name> 서재', kind: 'code' }, { id: 'team', name: '전체 공용 서재',
+  kind: 'team' }], personId, name, libraryId }`.
+- Commit messages carry a library marker (`[name] {lib:team|<libraryId>} …`) that only the Worker writes and never sends to
+  the app; 최근 활동 is per library.
+- Invitees land in their code library; the copy menu is **다른 서재로 복사…** between any two libraries.
+- `DELETE /relay/admin/codes/:code` takes `?library=delete|move&to=<code>`; a one-time admin migration splits the papers
+  already in 전체 공용 서재 into their uploaders' code libraries.
+Design, migration and deploy order: [`docs/CODE-LIBRARIES.md`](CODE-LIBRARIES.md).

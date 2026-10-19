@@ -3,14 +3,19 @@
 // (coalesced) and pushed to GitHub by the SyncEngine. Deletions are tombstones so they sync.
 //
 // Several libraries can be open at once (docs/SHARED.md §3.1): 내 서재 (id 'mine', IndexedDB 'paper-reader',
-// the owner's GitHub repo — unchanged) and 공용 서재 (openSharedLibrary(): its own IndexedDB, the relay's
-// GitHub-compatible proxy, each person's notes and AI data under `people/<personId>/`, deletes that only
-// tombstone so the 휴지통 can restore them).
+// the owner's GitHub repo — unchanged) and the relay's libraries (openSharedLibrary(): each with its own
+// IndexedDB, the relay's GitHub-compatible proxy, each person's notes and AI data under `people/<personId>/`,
+// deletes that only tombstone so the 휴지통 can restore them): 전체 공용 서재 (lib 'team', the team repo's root)
+// and the invite code's own library (lib 'mine', the folder `codes/<libraryId>/` of the same repo).
+//
+// Paths: every path this module, the engine, IndexedDB and the 'remotechange' events use is the library's own
+// ('library.json', 'papers/<id>/…', 'people/<id>/…'). A library kept in a folder of the repo (`rootPrefix`) is
+// mapped to repo paths (rootPrefix + path) only by GitHubClient, so readers and features work unchanged.
 import { emit } from '../core/bus.js';
 import { LIMITS } from '../core/config.js';
 import { formatBytes, safeStorage, uid, utf8Encode } from '../core/util.js';
 import { db as defaultDb, DEFAULT_DB_NAME, openDatabase } from './db.js';
-import { gitBlobSha } from './github.js';
+import { GitHubClient, ROOT_PREFIX_RE, gitBlobSha } from './github.js';
 import { SyncEngine, deepEqual, mergeLibrary, mergeTranslation, toMillis } from './sync.js';
 
 const LIBRARY_PATH = 'library.json';
@@ -27,13 +32,18 @@ const LIBRARY_ID_RE = /^(?:mine|shared:[A-Za-z0-9_-]{1,64})$/;
 const PERSONAL_PREFIX_RE = /^people\/[A-Za-z0-9_-]{1,64}\/$/;
 const SHARED_LIB_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const PERSON_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** An invite code's own library (GET /shared `libraryId`, D1 codes.library_id): its folder is `codes/<libraryId>/`. */
+const LIBRARY_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** The relay's library of the caller's invite code (GET /shared lists it as id 'mine'). */
+export const CODE_LIBRARY = 'mine';
 /** First line of a commit message (the relay prefixes `[name] ` and keeps ≤ 200 characters). */
 const MAX_COMMIT_SUMMARY = 170;
 const MAX_ACTIONS = 100;
 
-const SHARED_TEXTS = Object.freeze({
-  noClient: '이 파일은 아직 이 기기에 없습니다. 공용 서재에 연결되면 내려받을 수 있습니다.',
-  targetChanged: '공용 서재 서버가 바뀌어 동기화를 멈췄습니다. 설정 → 초대 코드를 확인하세요.',
+/** Sync messages of a relay library, named by its label ('전체 공용 서재', '봄당 서재', …). */
+const sharedTexts = (label) => Object.freeze({
+  noClient: `이 파일은 아직 이 기기에 없습니다. ${label}에 연결되면 내려받을 수 있습니다.`,
+  targetChanged: `${label} 서버가 바뀌어 동기화를 멈췄습니다. 설정 → 초대 코드를 확인하세요.`,
 });
 
 /** Repo path of one of a paper's shared files ('paper.pdf', 'translation.json', …). */
@@ -73,6 +83,7 @@ export class Library extends EventTarget {
   #retainPdf;
   #personName;
   #journalKey;
+  #root;
   /** Shared library: what this device changed since the last push, for the commit message (최근 활동). */
   #actions = [];
   #muted = 0;
@@ -86,20 +97,26 @@ export class Library extends EventTarget {
    * @param {{ settings?: { get(): any }, db?: object, sync?: SyncEngine, syncOptions?: object,
    *           id?: string, label?: string, dbName?: string, getConfig?: () => object|null,
    *           personalPrefix?: string, retainPdfOnDelete?: boolean, shared?: boolean,
-   *           personName?: string | (() => string) }} opts
+   *           personName?: string | (() => string), rootPrefix?: string }} opts
    *   id: 'mine' or 'shared:<lib>'. dbName: the IndexedDB database (default 'paper-reader').
    *   getConfig: the GitHub config for the engine, incl. apiBase (내 서재 default: settings.github; a shared library
    *     has no default and always uses it in proxy mode).
    *   personalPrefix: '' or 'people/<personId>/' — where annotations.json and ai.json live.
+   *   rootPrefix: '' (the repo root) or the repo folder the whole library lives in, e.g. 'codes/<libraryId>/':
+   *     every repo path is rootPrefix + path (library.json, papers/…, the personalPrefix paths). Paths seen by
+   *     callers (dataPath, 'remotechange') stay the library's own; see repoPath(). Applied to the engine's config,
+   *     so it has no effect on a `sync` engine passed in.
    *   retainPdfOnDelete: deletes only tombstone (files stay, 휴지통 can restore papers).
    *   personName: who deletes (tombstones' deletedBy); default '나' for a personal library.
    */
   static async open({
     settings, db, sync, syncOptions, id = 'mine', label, dbName, getConfig, personalPrefix = '',
-    retainPdfOnDelete = false, shared = false, personName,
+    retainPdfOnDelete = false, shared = false, personName, rootPrefix = '',
   } = {}) {
     if (!LIBRARY_ID_RE.test(String(id))) throw new TypeError(`invalid library id: ${id}`);
     if (personalPrefix && !PERSONAL_PREFIX_RE.test(personalPrefix)) throw new TypeError(`invalid personalPrefix: ${personalPrefix}`);
+    if (rootPrefix && !ROOT_PREFIX_RE.test(rootPrefix)) throw new TypeError(`invalid rootPrefix: ${rootPrefix}`);
+    const display = String(label || (shared ? '공용 서재' : '내 서재'));
     const database = db || (dbName ? openDatabase(dbName) : defaultDb);
     const name = database.name || dbName || '';
     // 내 서재 keeps the Web Lock, BroadcastChannel and journal names it always had; any other database has
@@ -111,19 +128,31 @@ export class Library extends EventTarget {
     // proxy mode (the invite code must not be sent to api.github.com, stale bases are conflicts).
     const sharedConfig = () => {
       const c = getConfig?.();
-      return c ? { ...c, proxy: true } : null;
+      return c ? { label: display, ...c, proxy: true } : null;
     };
+    const baseConfig = shared ? sharedConfig : getConfig || (() => settings?.get?.().github ?? null);
+    // The library's folder is part of its identity (GitHubClient.target), so a config can never point the same
+    // local data at another folder of the repo without the engine's repo-switch consent.
+    const engineConfig = rootPrefix ? () => {
+      const c = baseConfig();
+      if (!c) return null;
+      const out = { ...c, rootPrefix };
+      // A carryOver naming this config's repo without the folder (e.g. app.js's "always carry my own data over")
+      // means this library's own target.
+      if (c.carryOver && c.carryOver === new GitHubClient({ ...c, rootPrefix: '' }).target) out.carryOver = new GitHubClient(out).target;
+      return out;
+    } : baseConfig;
     const engine = sync || new SyncEngine({
       db: database,
-      getConfig: shared ? sharedConfig : getConfig || (() => settings?.get?.().github ?? null),
+      getConfig: engineConfig,
       scope,
-      addReadme: !shared,
+      addReadme: !shared && !rootPrefix,
       describeCommit: shared ? (changes) => library?.#describeCommit(changes) ?? null : null,
-      texts: shared ? SHARED_TEXTS : undefined,
+      texts: shared ? sharedTexts(display) : undefined,
       ...syncOptions,
     });
     library = new Library(engine, database, {
-      id, label, shared, personalPrefix, retainPdfOnDelete, personName,
+      id, label: display, shared, personalPrefix, retainPdfOnDelete, personName, rootPrefix,
       journalKey: scope ? `${JOURNAL_KEY}:${scope}` : JOURNAL_KEY,
     });
     await library.#load();
@@ -149,6 +178,7 @@ export class Library extends EventTarget {
     this.#retainPdf = Boolean(options.retainPdfOnDelete);
     this.#personName = options.personName ?? (shared ? '' : '나');
     this.#journalKey = options.journalKey || JOURNAL_KEY;
+    this.#root = options.rootPrefix || '';
   }
 
   #db;
@@ -165,6 +195,14 @@ export class Library extends EventTarget {
   get retainPdfOnDelete() { return this.#retainPdf; }
   /** Name written into tombstones' deletedBy (null when unknown). */
   get personName() { return this.#who(); }
+  /** '' or the repo folder this library lives in (e.g. 'codes/<libraryId>/' for an invite code's library). */
+  get rootPrefix() { return this.#root; }
+
+  /**
+   * Repo path of one of this library's paths (rootPrefix + path) — what the GitHub repo holds. Everything else
+   * (dataPath(), listPaths(), 'remotechange' paths, IndexedDB keys) uses the library's own paths.
+   */
+  repoPath(path) { return `${this.#root}${path}`; }
 
   /** Live folders (tombstones hidden). A parent that was deleted resolves to its nearest live ancestor. */
   get folders() { return this.#ensureView().folders; }
@@ -877,7 +915,10 @@ export class Library extends EventTarget {
 
   #assertTarget(target) {
     if (!(target instanceof Library) || !(#data in target)) throw new TypeError('copy target must be a Library');
-    if (target === this) throw new Error('같은 서재 안으로는 복사할 수 없습니다. 옮기기를 사용하세요.');
+    // A second instance of this library (same IndexedDB) is the same library.
+    if (target === this || (target.#db === this.#db && target.#id === this.#id)) {
+      throw new Error('같은 서재 안으로는 복사할 수 없습니다. 옮기기를 사용하세요.');
+    }
   }
 
   /** Mark deleted, with when and by whom (for the 휴지통). */
@@ -957,7 +998,9 @@ export class Library extends EventTarget {
       else if (personal) parts.push('내 메모·AI 결과 동기화');
       else return null;
     }
-    return joinLimited([...new Set(parts)], MAX_COMMIT_SUMMARY);
+    // '{lib:…}' is the relay's marker of which library a commit belongs to (최근 활동 per library); a title can
+    // never imitate it.
+    return joinLimited([...new Set(parts)], MAX_COMMIT_SUMMARY).replace(/\{\s*lib\s*:/gi, '{lib ');
   }
 
   /** Shared library: which deleted papers lost their files (not restorable, hidden from the 휴지통). */
@@ -1078,30 +1121,56 @@ export async function personIdFor(code) {
   return (await sha256Hex(utf8Encode(normal))).slice(0, 16);
 }
 
-/** IndexedDB name of a shared library on this device: one per library and person (invite code). */
-export function sharedDbName(lib, personId) {
+/**
+ * IndexedDB name of a relay library on this device: one per library and person (invite code) —
+ * 'paper-reader-shared-team-<personId>', and for the code's own library (lib 'mine') also per library:
+ * 'paper-reader-shared-mine-<libraryId>-<personId>' (a code moved to another library never mixes the two).
+ */
+export function sharedDbName(lib, personId, libraryId = '') {
+  if (lib === CODE_LIBRARY) {
+    if (!LIBRARY_KEY_RE.test(String(libraryId || ''))) throw new TypeError(`invalid libraryId: ${libraryId}`);
+    return `paper-reader-shared-${lib}-${libraryId}-${personId}`;
+  }
   return `paper-reader-shared-${lib}-${personId}`;
 }
 
+/** Repo folder of an invite code's own library: 'codes/<libraryId>/'. */
+export function codeLibraryPrefix(libraryId) {
+  const key = String(libraryId ?? '').trim();
+  if (!LIBRARY_KEY_RE.test(key)) throw new Error('이 초대 코드의 서재 정보를 받지 못했습니다. 잠시 후 다시 시도하세요.');
+  return `codes/${key}/`;
+}
+
 /**
- * Open 공용 서재 `lib` through the relay (docs/SHARED.md): the relay's GitHub-compatible proxy
- * (`<relayUrl>/shared/<lib>/gh`, owner 'team', repo 'library', the invite code as token), this person's notes
- * and AI data under `people/<personId>/`, deletes that only tombstone (휴지통), its own IndexedDB database
- * (sharedDbName(lib, personId)).
- * @param {{ relayUrl?: string, code?: string, lib?: string, personId?: string, name?: string | (() => string),
- *           personName?: string | (() => string), label?: string, branch?: string,
- *           getConfig?: () => object|null, dbName?: string, db?: object, syncOptions?: object }} opts
+ * Open a relay library (docs/SHARED.md) through the relay's GitHub-compatible proxy (`<relayUrl>/shared/<lib>/gh`,
+ * owner 'team', repo 'library', the invite code as token), with this person's notes and AI data under
+ * `people/<personId>/`, deletes that only tombstone (휴지통) and its own IndexedDB database (sharedDbName()).
+ * - lib 'team' (default): 전체 공용 서재, the team repo's root — every active code sees it.
+ * - lib 'mine': the invite code's own library, the folder `codes/<libraryId>/` of the same repo (`libraryId` from
+ *   GET /shared) — only holders of that code see it. Every repo path is `codes/<libraryId>/` + path.
+ * @param {{ relayUrl?: string, code?: string, lib?: string, libraryId?: string, rootPrefix?: string,
+ *           personId?: string, name?: string | (() => string), personName?: string | (() => string), label?: string,
+ *           branch?: string, getConfig?: () => object|null, dbName?: string, db?: object, syncOptions?: object }} opts
  *   relayUrl + code: the server address and invite code (settings.relay). Or `getConfig` instead: a function
  *   returning the proxy config `{ owner, repo, branch, token, apiBase, carryOver? }` that follows settings
  *   changes (it is always used as a proxy config: the code never goes to api.github.com, whatever apiBase says).
+ *   libraryId: required for lib 'mine' (GET /shared `libraryId`). rootPrefix: another library's folder (rare;
+ *   lib 'mine' derives it from libraryId).
  *   personId: from the relay's GET /shared (computed from the code when omitted). personName (or `name`): the
  *   person's name from GET /shared, written into tombstones' deletedBy and papers' addedBy.
+ *   label: the library's name (GET /shared `name`, e.g. '전체 공용 서재', '봄당 서재').
  * @returns {Promise<Library>}
  */
 export async function openSharedLibrary({
-  relayUrl, code, lib = 'team', personId, name, personName, label, branch = 'main', getConfig, dbName, db, syncOptions,
+  relayUrl, code, lib = 'team', libraryId, rootPrefix, personId, name, personName, label, branch = 'main', getConfig,
+  dbName, db, syncOptions,
 } = {}) {
   if (!SHARED_LIB_RE.test(String(lib))) throw new TypeError(`invalid shared library id: ${lib}`);
+  const codeLibrary = lib === CODE_LIBRARY;
+  const root = codeLibrary ? codeLibraryPrefix(libraryId) : String(rootPrefix ?? '');
+  const libraryKey = codeLibrary ? root.slice('codes/'.length, -1) : '';
+  if (root && !ROOT_PREFIX_RE.test(root)) throw new TypeError(`invalid rootPrefix: ${root}`);
+  const display = String(label || (codeLibrary ? '초대 코드 서재' : '공용 서재'));
   let configFn;
   let pid = personId == null || personId === '' ? '' : String(personId);
   if (typeof getConfig === 'function') {
@@ -1117,27 +1186,21 @@ export async function openSharedLibrary({
     if (!token) throw new Error('초대 코드가 없습니다. 설정에서 초대 코드를 입력해 주세요.');
     if (!pid) pid = await personIdFor(token);
     const apiBase = `${base}/shared/${lib}/gh`;
-    const cfg = {
-      owner: 'team',
-      repo: 'library',
-      branch,
-      token,
-      apiBase,
-      proxy: true,
-      // Same person (code) and library: data cached here always belongs to this library, even when the relay's
-      // address changes, so the engine may push it there without asking (GitHubClient.target format).
-      carryOver: `${apiBase}/team/library#${branch}`,
-    };
+    const cfg = { owner: 'team', repo: 'library', branch, token, apiBase, proxy: true };
+    // Same person (code) and library: data cached here always belongs to this library, even when the relay's
+    // address changes, so the engine may push it there without asking (GitHubClient.target format).
+    cfg.carryOver = new GitHubClient({ ...cfg, rootPrefix: root }).target;
     configFn = () => ({ ...cfg });
   }
   if (!PERSON_ID_RE.test(pid)) throw new TypeError(`invalid personId: ${pid}`);
   return Library.open({
     id: `shared:${lib}`,
-    label: label || '공용 서재',
-    dbName: db ? undefined : dbName || sharedDbName(lib, pid),
+    label: display,
+    dbName: db ? undefined : dbName || sharedDbName(lib, pid, libraryKey),
     db,
     getConfig: configFn,
     personalPrefix: `people/${pid}/`,
+    rootPrefix: root,
     retainPdfOnDelete: true,
     shared: true,
     personName: personName !== undefined ? personName : name ?? '',
