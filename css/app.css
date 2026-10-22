@@ -47,6 +47,8 @@
   --nav-current-bg: var(--surface);
   --nav-current-shadow: 0 1px 2px rgba(60, 38, 22, 0.08), 0 0 0 1px var(--border);
   --star: #b87a14;
+  --check-border: #8f7f71;   /* an empty checkbox's edge: ≥ 3:1 on every light surface */
+  --selected-bg: #f8efe6;    /* a selected paper row (mocha tint on paper) */
   --backdrop: rgba(43, 28, 18, 0.42);
   --scroll-thumb: #d3c5b3;
 
@@ -120,6 +122,8 @@
   --nav-current-bg: rgba(204, 156, 131, 0.14);
   --nav-current-shadow: none;
   --star: #e9b04f;
+  --check-border: #8a7a6c;   /* ≥ 3.6:1 on every dark surface */
+  --selected-bg: #2c231d;
   --backdrop: rgba(8, 5, 3, 0.6);
   --scroll-thumb: #4d4138;
   --danger: #f08a78;
@@ -174,6 +178,7 @@ h1, h2, h3, h4 { line-height: 1.3; }
 .icon { flex: none; display: inline-block; vertical-align: middle; }
 .icon-glyph { display: inline-grid; place-items: center; width: 18px; height: 18px; font-size: 15px; line-height: 1; }
 .muted { color: var(--text-3); }
+.nowrap { white-space: nowrap; }
 kbd {
   font-family: var(--font-mono); font-size: 0.82em; padding: 1px 5px; border-radius: 4px;
   border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2);
@@ -471,6 +476,19 @@ kbd {
 .tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; font-weight: 500; }
 .tree-item[aria-current='true'] .tree-count { color: var(--accent-text); }
+/* '⋯' (폴더 메뉴) on each folder: on hover/focus with a mouse, always on touch and in the narrow-screen drawer. */
+.tree-more {
+  position: absolute; z-index: 1; top: 4px; right: 4px; display: grid; place-items: center; width: 26px; height: 26px;
+  padding: 0; border: 0; border-radius: 6px; background: none; color: var(--text-3); cursor: pointer; opacity: 0;
+  transition: opacity 0.1s;
+}
+.tree-more:hover { background: var(--hover-bg); color: var(--text); }
+.tree-more:focus-visible { opacity: 1; outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+/* hover, keyboard focus on the folder, or the ⋯ itself focused (its menu open); a mouse click on the folder keeps its count */
+.tree-row:hover .tree-more, .tree-row:has(:focus-visible) .tree-more, .tree-more:focus { opacity: 1; }
+.tree-row:hover > .tree-item.is-folder .tree-count, .tree-row:has(:focus-visible) > .tree-item.is-folder .tree-count,
+.tree-row:has(> .tree-more:focus) > .tree-item.is-folder .tree-count { visibility: hidden; }
+.tree-item.is-folder, .subfolder { -webkit-touch-callout: none; }
 .lib-sidebar-footer { padding: 12px 14px 14px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
 .lib-sidebar-footer .btn { justify-content: flex-start; width: 100%; }
 
@@ -497,22 +515,87 @@ kbd {
 }
 .subfolder:hover { border-color: var(--border-strong); color: var(--text); }
 .subfolder.is-drop-target { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
-.lib-count-line { font-size: 12.5px; color: var(--text-3); margin: 0 0 10px; }
+/* '+ 하위 폴더': a dashed chip after an open folder's subfolders */
+.subfolder-add { border-style: dashed; border-color: var(--border-strong); background: transparent; color: var(--text-3); gap: 6px; padding: 0 14px 0 11px; }
+.subfolder-add:hover { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+
+/* The count line above the list: 전체 선택 + '논문 60편'; with a selection the action bar (sticky at the top of the
+   list; a bottom bar on phones). Its box never changes size, so selecting does not move the rows; it scrolls away
+   with the list until something is selected. */
+.lib-listbar { top: -18px; z-index: 6; margin: -8px -28px 2px; padding: 8px 28px 8px; background: var(--bg); }
+.lib-listbar.is-selecting { position: sticky; }
+.lib-listbar-inner {
+  display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 6px 0 16px;
+  border: 1px solid transparent; border-radius: 12px; transition: background-color 0.12s, border-color 0.12s, box-shadow 0.15s;
+}
+.lib-listbar.is-selecting .lib-listbar-inner {
+  background: var(--surface); border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); box-shadow: var(--shadow-md);
+}
+.lib-select-all { display: grid; place-items: center; flex: none; width: 36px; height: 36px; cursor: pointer; border-radius: 8px; }
+.lib-select-all:hover { background: var(--hover-bg); }
+.lib-count-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-count-text b { color: var(--text); font-weight: 650; }
+.lib-count-of { color: var(--text-3); }
+.sel-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.sel-actions .btn { color: var(--text-2); }
+.sel-actions .btn:hover { color: var(--text); }
+.sel-actions .sel-short { display: none; }
+.sel-actions .sel-star[aria-pressed='true'] { background: transparent; color: var(--star); }
+.sel-actions .sel-star[aria-pressed='true'] .icon { fill: currentColor; }
+.sel-actions .is-danger { color: var(--danger); }
+.sel-actions .is-danger:hover { background: var(--danger-soft); color: var(--danger-hover); }
+
+/* Checkboxes (rows, 전체 선택): mocha when checked, a dash when some are. */
+.pick-check {
+  appearance: none; -webkit-appearance: none; flex: none; display: inline-grid; place-content: center;
+  width: 18px; height: 18px; margin: 0; border: 1.5px solid var(--check-border); border-radius: 5px;
+  background: var(--surface); color: var(--text-on-accent); cursor: pointer; transition: background-color 0.1s, border-color 0.1s;
+}
+.pick-check::before {
+  content: ''; width: 10px; height: 10px; background: currentColor; transform: scale(0); transition: transform 0.1s;
+  clip-path: polygon(14% 44%, 0 65%, 40% 100%, 100% 22%, 84% 6%, 39% 66%);
+}
+.pick-check:hover { border-color: var(--accent); }
+.pick-check:checked, .pick-check:indeterminate { background: var(--accent); border-color: var(--accent); }
+.pick-check:checked::before { transform: scale(1); }
+.pick-check:indeterminate::before { transform: scale(1); width: 9px; height: 2px; border-radius: 1px; clip-path: none; }
+.pick-check:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 .paper-list { display: grid; gap: 8px; }
 .paper-row {
   position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 14px;
   padding: 13px 12px 13px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface);
-  box-shadow: var(--shadow-sm); transition: border-color 0.12s, box-shadow 0.15s;
+  box-shadow: var(--shadow-sm); transition: border-color 0.12s, box-shadow 0.15s, background-color 0.12s;
 }
 .paper-row:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
 .paper-row.is-dragging { opacity: 0.45; }
 .paper-row:focus-within { border-color: var(--accent); }
+.paper-row.is-selected { background: var(--selected-bg); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 /* a small sheet of paper with a folded corner */
 .paper-thumb {
   position: relative; display: grid; place-items: center; width: 40px; height: 48px; border-radius: 4px 9px 4px 4px;
   background: var(--surface-2); color: var(--accent); border: 1px solid var(--border);
   background-image: linear-gradient(225deg, var(--surface-3) 0 7px, transparent 7px);
+}
+.paper-thumb > .icon { transition: opacity 0.1s; }
+/* The row checkbox sits on the paper sheet, above the row's link (which covers the row). */
+.paper-pick {
+  position: relative; z-index: 1; display: grid; place-items: center; width: 40px; height: 48px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; user-select: none;
+}
+.paper-pick .paper-check { position: absolute; top: 50%; left: 50%; margin: -9px 0 0 -9px; opacity: 0; transition: opacity 0.1s; }
+.paper-list.is-selecting .paper-check, .paper-row.is-selected .paper-check, .paper-check:focus-visible { opacity: 1; }
+.paper-list.is-selecting .paper-thumb > .icon, .paper-row.is-selected .paper-thumb > .icon,
+.paper-pick:has(.paper-check:focus-visible) .paper-thumb > .icon { opacity: 0; }
+.paper-row.is-selected .paper-thumb { background: var(--accent-soft-2); border-color: transparent; }
+@media (hover: hover) and (pointer: fine) {
+  .paper-row:hover .paper-check { opacity: 1; }
+  .paper-row:hover .paper-thumb > .icon { opacity: 0; }
+}
+/* the "논문 3편" card under the pointer while dragging a selection */
+.drag-badge {
+  position: fixed; top: -200px; left: -200px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
+  border-radius: 9px; background: var(--accent); color: var(--text-on-accent); font-size: 13.5px; font-weight: 600; white-space: nowrap;
 }
 .paper-main { min-width: 0; }
 .paper-title {
@@ -989,21 +1072,48 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .activity-text .badge { margin-left: 6px; height: 18px; font-size: 11px; vertical-align: 1px; }
 .activity-time { display: block; margin-top: 2px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
-/* 공용 서재로 복사 / 폴더로 이동 */
+/* 공용 서재로 복사 / 폴더로 이동: the folder picker (full tree, search, inline 새 폴더) */
+.folder-pick { display: grid; gap: 8px; margin-top: 10px; }
+.folder-pick-search .input { height: 34px; }
 .folder-picker { display: grid; gap: 1px; max-height: min(46vh, 360px); overflow-y: auto; margin-top: 10px; padding: 4px; border-radius: 10px; border: 1px solid var(--border); }
+.folder-pick .folder-picker { margin-top: 0; }
 .folder-picker .menu-item input { accent-color: var(--accent); margin: 0; flex: none; }
 .folder-picker .menu-item:has(input:checked) { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.folder-picker .menu-item:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .folder-picker .menu-item > .icon { color: var(--text-3); flex: none; }
 .folder-picker .menu-item > .icon-users { color: var(--success); }
 .folder-picker .menu-item > .icon-lock { color: var(--accent-text); }
-.copy-dialog .modal-message { margin-bottom: 2px; word-break: keep-all; overflow-wrap: anywhere; }
+.folder-pick-row { display: flex; align-items: center; min-width: 0; padding-left: calc(var(--depth, 0) * 18px); }
+.folder-pick-row > .menu-item { flex: 1; min-width: 0; padding-left: 4px; }
+.folder-pick-row.is-context > .menu-item:not(:has(input:checked)) { color: var(--text-3); }
+.folder-pick-toggle, .folder-pick-spacer {
+  flex: none; display: grid; place-items: center; width: 24px; height: 28px; padding: 0; border: 0; border-radius: 5px;
+  background: none; color: var(--text-3);
+}
+.folder-pick-toggle { cursor: pointer; }
+.folder-pick-toggle:hover { background: var(--hover-bg); color: var(--text); }
+.folder-pick-toggle .icon { transition: transform 0.12s; }
+.folder-pick-toggle[aria-expanded='true'] .icon { transform: rotate(90deg); }
+.folder-pick-here {
+  flex: none; margin-left: auto; padding: 1px 7px; border-radius: 999px; background: var(--surface-3);
+  color: var(--text-2); font-size: 11.5px; font-weight: 500;
+}
+.folder-picker mark { background: var(--pr-hover); color: inherit; border-radius: 3px; padding: 0 1px; }
+.folder-pick-new {
+  display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px calc(28px + var(--depth, 0) * 18px); color: var(--accent);
+}
+.folder-pick-new > .icon { flex: none; }
+.folder-pick-new .input { flex: 1; min-width: 0; height: 32px; font-size: 14px; }
+.folder-pick-empty { margin: 6px 10px; font-size: 13px; color: var(--text-3); }
+.folder-pick-tools { display: flex; align-items: center; gap: 8px; }
+.folder-pick-tools .btn { color: var(--accent-text); }
+.copy-dialog .modal-message, .move-dialog .modal-message { margin-bottom: 2px; word-break: keep-all; overflow-wrap: anywhere; }
 /* 다른 서재로 복사: one button per other library */
 .copy-libs { display: flex; flex-wrap: wrap; max-width: 100%; margin-top: 10px; }
 .copy-libs .btn { min-width: 0; max-width: 100%; }
 .copy-libs .btn .icon { flex: none; color: var(--text-3); }
 .copy-libs .btn[aria-pressed='true'] .icon-users { color: var(--success); }
 .copy-libs .btn[aria-pressed='true'] .icon-lock, .copy-libs .btn[aria-pressed='true'] .icon-library { color: var(--accent-text); }
-.copy-tools { display: flex; justify-content: flex-end; margin-top: 6px; }
 
 /* reader: the paper is in 공용 서재 */
 .tb-shared {
@@ -1093,6 +1203,38 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
 .relay-custom-code[aria-invalid='true'] { border-color: var(--danger); }
 
 /* ============================================================ RESPONSIVE */
+/* Touch-first devices: row checkboxes always shown, folder menus (⋯) always shown, no text selection or callout
+   on a long press (it selects a paper / opens a folder's menu). */
+@media (hover: none), (pointer: coarse) {
+  .paper-pick .paper-check { opacity: 1; }
+  .paper-pick .paper-thumb > .icon { opacity: 0; }
+  .paper-row, .tree-item, .subfolder { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .paper-link { -webkit-touch-callout: none; }
+}
+@media (hover: none), (pointer: coarse), (max-width: 860px) {
+  .tree-more { opacity: 1; }
+  .tree-item.is-folder { padding-right: 34px; }
+  .tree-row:hover > .tree-item.is-folder .tree-count, .tree-row:has(:focus-visible) > .tree-item.is-folder .tree-count,
+  .tree-row:has(> .tree-more:focus) > .tree-item.is-folder .tree-count { visibility: visible; }
+}
+/* The action bar's labels: the short ones (이동 · 복사 · 즐겨찾기 · 삭제 · 해제) where the list is too narrow for the full
+   names (titles and aria-labels keep them). '새 하위 폴더' in the header goes icon-only below 1300px, so PDF 추가
+   never wraps onto a line of its own. */
+@media (min-width: 861px) and (max-width: 1099px), (min-width: 641px) and (max-width: 739px) {
+  .sel-actions .sel-btn .btn-label { display: none; }
+  .sel-actions .sel-btn .sel-short { display: inline; }
+  .sel-actions .sel-btn { padding: 0 9px; gap: 5px; }
+}
+@media (max-width: 1299px) {
+  .lib-subfolder-btn .btn-label { display: none; }
+  .lib-subfolder-btn { width: 34px; padding: 0; }
+}
+/* Sidebar beside a narrow list: the header's controls take their own line, the search box gives up width first. */
+@media (min-width: 861px) and (max-width: 1099px) {
+  .lib-actions { flex: 1 1 100%; }
+  .lib-actions .input-with-icon { flex: 1 1 120px; }
+  .lib-search { width: 100%; }
+}
 @media (max-width: 1680px) {
   /* 공용 서재 badge: the note moves to its tooltip, so the paper title keeps its room. */
   .tb-shared-note { display: none; }
@@ -1133,6 +1275,9 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
   .lib-install-head { display: inline-flex; flex: none; }
   .paper-row { grid-template-columns: 34px minmax(0, 1fr); }
   .paper-thumb { width: 34px; height: 42px; }
+  .paper-pick { width: 34px; height: 42px; }
+  .lib-listbar { top: -14px; margin: -8px -16px 2px; padding: 8px 16px; }
+  .lib-listbar-inner { padding-left: 13px; }
   .paper-side { grid-column: 2; justify-content: flex-start; }
   .paper-progress { width: 140px; text-align: left; }
   .tb-progress .progress, .tb-zoom-label { display: none; }
@@ -1144,6 +1289,21 @@ h3.tp-para { margin: 1.5em 0 0.55em; font-size: 1.13em; font-weight: 700; line-h
   .step > .btn { grid-column: 2; justify-self: start; }
 }
 @media (max-width: 640px) {
+  /* The search box keeps a usable width: what does not fit next to it goes to the next line. */
+  .lib-actions .input-with-icon { flex: 1 1 160px; }
+  /* Phones: the selection's actions are a bottom bar (icon over a short label); the count stays at the top. */
+  .sel-actions {
+    position: fixed; z-index: 60; left: 0; right: 0; bottom: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+    gap: 2px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); background: var(--surface);
+    border-top: 1px solid var(--border); box-shadow: 0 -8px 20px -10px rgba(60, 38, 22, 0.22);
+  }
+  .sel-actions[hidden] { display: none; }
+  .sel-actions .btn { flex-direction: column; gap: 3px; height: 50px; padding: 0 2px; font-size: 11.5px; font-weight: 600; border-radius: 10px; }
+  .sel-actions .btn .icon { width: 20px; height: 20px; }
+  .sel-actions .btn-label { display: none; }
+  .sel-actions .sel-short { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lib-content.has-selection { padding-bottom: calc(88px + env(safe-area-inset-bottom)); }
+  body:has(.library.is-selecting) .toast-region { bottom: calc(76px + env(safe-area-inset-bottom)); }
   .tb-title, .tb-zoom, .tb-sep { display: none; }
   .tb-shared-name { display: none; }
   .tb-shared { padding: 0 6px; }

@@ -55,6 +55,13 @@ The suite also covers hover, programmatic and mouse-drag selection, zoom 1.5 and
 9. **`hasTextLayer`** is true when the non-furniture visible characters reach at least `min(2000, max(200, 80 × pages))`. **cohen1960 is not image-only:** it carries an OCR text layer, so `hasTextLayer` is `true`. Text quality there is OCR quality. Pages without any text render as canvas only.
 10. **`meta`.**
     - Title: PDF Info if it looks sane; otherwise the largest multi-word block on page 1.
+      - The Info Title is first decoded by `js/pdf/pdf-text.js` (`readPdfTitle`). A hex string written as text (`<C3D6C1BEB3EDB9AE2E687770>`), or bytes that pdf.js read as PDFDocEncoding because they had no BOM (`ÃÖÁ¾³í¹®.hwp`), are turned back into bytes and decoded as UTF-16 (BOM), then UTF-8, then EUC-KR. On already-decoded text, EUC-KR is accepted only when it is mostly KS X 1001 Hangul, so Latin-1 accents are never turned into Hangul.
+      - `Microsoft Word - ` prefixes, paths and document extensions (.hwp .hwpx .docx .pptx .pdf …) are stripped. Placeholders (Untitled, Document1, 제목 없음) are dropped.
+      - A title that came from a file name, or still looks like one or like a code (`G09_McGrath2020_…`, `E41_KimEunji2021_SNU_석사_EICU_VAP`, `최종논문`, `manuscript_v2`), is not trusted. The page-1 block is used instead.
+      - If the page has no block larger than the body text, a cover-page fallback runs: the largest title-like block, at body size only on a sparse page (≤ 30 lines). Labels such as "MASTER'S THESIS", 석사학위논문, Original Article, "Journal of …" and "… 대학원" never count as a title.
+      - If there is no such block either, the decoded metadata title is kept (e.g. `최종논문`).
+      - The four fixtures' titles are unchanged.
+    - Stored titles: `Library` (js/store/library.js) rewrites a title that is exactly a hex string (`/^<[0-9A-Fa-f]{4,}>$/`) to its decoded text, or to the file name when the bytes are not text. It does this on load and after a remote library.json arrives, writes the result back once, and never parses the PDF. Titles that only look like file names are improved for new uploads, or by hand with 제목 수정.
     - Authors: PDF Info if it looks sane; otherwise the name-like block or line after the title, with superscript markers stripped.
     - Year: scored candidates from ©, "Published/Accepted", journal citation lines, Info Subject and running heads. It is `null` when unsure (creation dates are never used).
     - Abstract: the paragraphs after an Abstract/Summary heading with the same type size; else a leading "Abstract" label; else the first long paragraph on page 1. At most 2000 characters, cut at a sentence end.
@@ -126,6 +133,9 @@ A second issue: `Range.getClientRects()` covers the fallback font's whole conten
 ```bash
 # extraction only (Node 24, no browser): stats, invariants, 15 random body sentences per paper, full dumps
 node tests/pdf/extract-node.mjs --samples=15 --dump          # dumps → C:/Users/dindoo/Projects/pr-tools/out/pdf/sentences-*.txt
+
+# title decoding + quickMeta on generated PDFs + the library's hex-title repair (Node, fake GitHub on loopback; 12 checks)
+node tests/pdf/title-decode.test.mjs                         # → C:/Users/dindoo/Projects/pr-tools/out/pdf/title-decode.results.json
 
 # browser evidence suite (Edge via Playwright); serve the repo root first
 python -m http.server 8101 --bind 127.0.0.1                 # from the repo root, in the background

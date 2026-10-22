@@ -141,10 +141,28 @@ a Mocha Mousse text selection (`--pdfv-selection`, instead of pdf.js's system Ac
 4. Playwright on Windows: import it as `file:///C:/Users/dindoo/Projects/pr-tools/node_modules/playwright/index.mjs`
    (a bare `C:/…` path is rejected by Node's ESM loader).
 
+## Library: several papers at once, folders (2026-10-22)
+
+- Every paper row has a checkbox on its paper icon (shown on hover/focus with a mouse, always on touch). Shift+click
+  = range, Ctrl/Cmd+A = every row shown, Esc = none; on touch a long press starts selecting and taps then toggle.
+  The count line above the list has a tri-state 전체 선택 and becomes the action bar while something is selected
+  (sticky at the top of the list; a bottom bar on phones): 폴더로 이동… · 다른 서재로 복사… · 즐겨찾기 · 삭제 · 선택
+  해제 — short labels (이동 · 복사 · …) where the list is narrow. Moves, 즐겨찾기 and 내 서재 deletes are one batch
+  (one library.json write → one sync commit); moves have 되돌리기, 공용 서재 deletes go to the 휴지통 with 되돌리기.
+  Dragging a selected row carries the whole selection. The selection clears on a route or folder change.
+- The folder picker (폴더로 이동, 다른 폴더 안으로 옮기기, 다른 서재로 복사) shows the whole tree with expand/collapse,
+  a search box above 15 folders, and an inline 새 폴더 (inside the picked folder). Every sidebar folder has '⋯'
+  (long press on touch): 새 하위 폴더 · 이름 바꾸기 · 다른 폴더 안으로 옮기기… · 최상위로 옮기기 · 다른 서재로 복사… · 삭제.
+  An open folder adds '새 하위 폴더' to the header (icon only below 1300 px) and a dashed '+ 하위 폴더' chip.
+- Tests: `node tests/library-select/run.mjs` (real view + real store on in-memory sync; desktop Edge, Pixel 7,
+  iPhone 15 WebKit). Screenshots in `C:/Users/dindoo/Projects/pr-tools/out/select/`.
+
 ## Known limitations
 
-- Library list is not virtualised (fine for hundreds of papers); no multi-select. Paper rows are not
-  keyboard-draggable — the row menu (⋯, right-click, Shift+F10) has **폴더로 이동…** as the keyboard path.
+- Library list is not virtualised (fine for hundreds of papers). Paper rows are not keyboard-draggable — the row
+  checkbox + action bar, or the row menu (⋯, right-click, Shift+F10), has **폴더로 이동…** as the keyboard path.
+- A folder made inside the folder picker stays when the dialog is then cancelled. 되돌리기 of a 공용 서재 bulk delete
+  restores the papers one by one (several library.json writes).
 - The translation pane renders every sentence at once (fine for a few thousand sentences).
 - 번역 겹쳐보기 hides the right pane; opening a panel switches back to 나란히.
 - Dark-theme users may see a brief light flash on load (the CSP forbids an inline theme script).

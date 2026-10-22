@@ -44,6 +44,11 @@ Nothing outside these was touched.
 - `'error'` event `{ message, error }` when saving library.json to IndexedDB fails (e.g. quota). **The shell does not listen yet; suggest a toast.**
 - Returned folders/papers are **frozen snapshots**, rebuilt after each change. `folderId` / `parentId` are already resolved: a reference to a deleted folder points to its nearest live ancestor, and parent cycles from concurrent moves are broken deterministically.
 - `updatePaper` ignores `id/addedAt/updatedAt/deleted/size`, validates `folderId` (must be a live folder) and `title` (non-empty), and skips no-op patches (no commit).
+- **Hex-title repair (2026-10-22).** Some older uploads stored their PDF Info Title as a raw hex string, e.g. `<C3D6C1BEB3EDB9AE2E687770>`. The library replaces such a title with its decoded text (`decodePdfTitle` from `js/pdf/pdf-text.js`, here `최종논문`) or, when the bytes are not text, with the file name.
+  - It checks on load and after a remote library.json arrives. No PDF is parsed.
+  - The fix is written back once, with a `touch`. Tombstones are fixed too.
+  - Shared libraries note `제목 복구 ‘…’` for the commit message.
+  - Tested in `tests/pdf/title-decode.test.mjs`.
 - `addPaper` also rejects data without `%PDF-` in the first 1 KB. `deletePaper` also deletes the paper's four files from the repo, as the UI's confirm text promises; tombstoned papers' leftover files are removed again after every remote change.
 
 ## Decisions

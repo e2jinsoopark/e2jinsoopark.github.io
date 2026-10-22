@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Library selection / folder UX harness: the real library view (js/ui/library-view.js) on the real store
+     (js/store/library.js) with an in-memory sync engine that records every write (tests/library-select/harness.js).
+     ?libs=one → 내 서재 only; default → 내 서재 + a 공용 서재 (휴지통). ?folders=<n> → extra folders for the picker search.
+     Not shipped. -->
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>갈피 (library-select harness)</title>
+  <link rel="icon" href="/assets/brand/icon-32.png">
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/tests/library-select/harness.js"></script>
+</head>
+<body>
+  <div id="app"><div class="view" id="view"><div class="boot"><div class="boot-inner">불러오는 중…</div></div></div></div>
+</body>
+</html>

@@ -1,6 +1,7 @@
 // Text extraction: pdf.js text items → logical document text with a reversible char map,
 // paragraphs, sentences (stable sids), references and basic metadata.
 // Pure computation (no DOM access), so it also runs under Node for tests.
+import { looksLikeFileName, readPdfTitle } from './pdf-text.js';
 
 /** Bump whenever the produced text / sentence boundaries change (invalidates cached translations by sid). */
 export const SEG_VERSION = 1;
@@ -1426,15 +1427,56 @@ function saneInfoTitle(t) {
   return letterCount(t) >= 0.5 * t.length;
 }
 
+/**
+ * Page-1 lines that name the kind of document or the venue rather than the paper ("Master's Thesis",
+ * "석사학위논문", "Original Article", "Journal of …", "서울대학교 대학원").
+ */
+const TITLE_LABEL_RE = /^(?:(?:석사|박사)?\s*학위\s*(?:청구\s*)?논문|(?:master'?s?|doctoral|doctor of philosophy|ph\.?\s?d\.?)\s+(?:thesis|dissertation)|a\s+(?:thesis|dissertation)\b|(?:original|research|review|brief|special)\s+(?:article|paper|report|communication)$|journal\s+of\b|open\s+access$|(?:abstract|contents|table of contents|목\s*차|초\s*록|국문\s*초록|감사의\s*글)$)/i;
+const TITLE_LABEL_TAIL_RE = /(?:대학교|대학원|간호대학|university|college|graduate school|school of nursing)$/i;
+
+function isTitleLabel(text) {
+  const t = cleanSpaces(text);
+  return TITLE_LABEL_RE.test(t) || (TITLE_LABEL_TAIL_RE.test(t) && t.split(' ').length <= 6);
+}
+
+/** A block whose text could be a paper title (for cover pages, where the title is not larger than the rest). */
+function titleLike(text) {
+  const t = cleanSpaces(text);
+  if (t.length < 6 || t.length > 300 || letterCount(t) < 6 || !/\s/.test(t) || /^\p{Ll}/u.test(t)) return false;
+  if (t.split(' ').length > 40 || (t.match(/[.!?](?:\s|$)/g) || []).length >= 2) return false; // a paragraph
+  if (/https?:|www\.|@|^\d{4}\s*년|^(?:19|20)\d\d\s*[./-]\s*\d{1,2}\b/i.test(t)) return false; // links, dates
+  return !isTitleLabel(t) && !looksLikeFileName(t);
+}
+
+/**
+ * The largest title-like block on a cover page. A thesis or report cover sets its title in the page's most
+ * common size, so it is never larger than the "body" there: accept that size only on a sparse page.
+ */
+function coverTitleBlock(blocks, stats) {
+  const content = blocks.filter((b) => b.kind !== 'furniture');
+  const lineCount = content.reduce((n, b) => n + b.lines.length, 0);
+  let best = null;
+  for (const b of content) {
+    if (b.merged || b.kind === 'caption' || b.kind === 'reference' || !titleLike(b.text)) continue;
+    if (!best || b.fs > best.fs + 0.1) best = b;
+  }
+  if (!best) return null;
+  return best.fs > stats.bodySize + 0.3 || (best.fs >= stats.bodySize - 0.3 && lineCount <= 30) ? best : null;
+}
+
 /** @returns {{text:string, block:object|null}} */
 function pickTitle(info, blocks, stats) {
-  const fromInfo = cleanSpaces(info?.Title);
+  // Info Title decoded (a hex string, or EUC-KR/UTF-8 bytes read as PDFDocEncoding), without "Microsoft Word - "
+  // and file extensions; `fileLike` when it is or was a file name or a code ('최종논문.hwp', 'G09_McGrath2020_…').
+  const { title: fromInfo, fileLike } = readPdfTitle(info?.Title);
   const candidates = blocks.filter((b) => b.kind !== 'furniture' && !b.merged
     && letterCount(b.text) >= 10 && /\s/.test(b.text.trim()) && !/^\p{Ll}/u.test(b.text.trim())
-    && b.fs > stats.bodySize && b.text.length <= 400);
+    && b.fs > stats.bodySize && b.text.length <= 400 && !isTitleLabel(b.text) && !looksLikeFileName(b.text));
   let block = null;
   for (const b of candidates) if (!block || b.fs > block.fs + 0.1) block = b;
-  if (saneInfoTitle(fromInfo)) {
+  // A file-name title (or none): the title printed on page 1 wins when there is one, even on a cover page.
+  if (!block && (fileLike || letterCount(fromInfo) <= 3)) block = coverTitleBlock(blocks, stats);
+  if (!fileLike && saneInfoTitle(fromInfo)) {
     const infoKey = normalizeForCompare(fromInfo);
     const match = candidates.find((b) => {
       const key = normalizeForCompare(b.text);
@@ -1449,7 +1491,7 @@ function pickTitle(info, blocks, stats) {
   for (let k = idx + 1; k < blocks.length; k++) {
     const b = blocks[k];
     if (b.kind === 'furniture') continue;
-    if (Math.abs(b.fs - block.fs) > 0.3 || b.font !== block.font) break;
+    if (Math.abs(b.fs - block.fs) > 0.3 || b.font !== block.font || isTitleLabel(b.text)) break;
     text += ` ${b.text}`;
   }
   return { text: cleanSpaces(text.replace(/[\d*†‡§¶]+$/, '')), block };

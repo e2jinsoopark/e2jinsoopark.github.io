@@ -17,6 +17,7 @@ import { formatBytes, safeStorage, uid, utf8Encode } from '../core/util.js';
 import { db as defaultDb, DEFAULT_DB_NAME, openDatabase } from './db.js';
 import { GitHubClient, ROOT_PREFIX_RE, gitBlobSha } from './github.js';
 import { SyncEngine, deepEqual, mergeLibrary, mergeTranslation, toMillis } from './sync.js';
+import { HEX_TITLE_RE, decodePdfTitle } from '../pdf/pdf-text.js';
 
 const LIBRARY_PATH = 'library.json';
 /** Synchronous last-resort copy of unsaved library changes, written when the page is hidden or closed. */
@@ -697,6 +698,7 @@ export class Library extends EventTarget {
       await this.#persist();
       if (this.#savedRev === this.#rev) safeStorage.remove(this.#journalKey);
     }
+    this.#repairTitles();
     const { signal } = this.#listening;
     this.#sync.addEventListener('status', (e) => {
       // Nothing pending: every action noted so far has been pushed (by this tab or another one).
@@ -738,6 +740,7 @@ export class Library extends EventTarget {
     });
     this.#writeChain = step.catch((err) => console.warn('[store] reading library.json failed', err));
     await step;
+    this.#repairTitles();
     await this.#gcDeletedPapers();
   }
 
@@ -756,6 +759,27 @@ export class Library extends EventTarget {
     this.#data = merged;
     this.#view = null;
     emit(this, 'change', { reason });
+  }
+
+  /**
+   * Titles stored as a raw PDF hex string ('<C3D6C1BEB3EDB9AE2E687770>', an Info Title older versions could not
+   * read) get their decoded title ('최종논문') written back, once: no PDF is parsed. One that is not text falls
+   * back to the file name. Runs on load and when another device's library.json arrives.
+   */
+  #repairTitles() {
+    const fixed = [];
+    for (const p of this.#data.papers) {
+      if (typeof p.title !== 'string' || !HEX_TITLE_RE.test(p.title.trim())) continue;
+      const fromFile = decodePdfTitle(p.fileName);
+      const title = (decodePdfTitle(p.title) || (HEX_TITLE_RE.test(fromFile) ? '' : fromFile)).slice(0, MAX_NAME_LENGTH).trim();
+      if (!title || title === p.title) continue;
+      p.title = title;
+      touch(p);
+      fixed.push(p);
+    }
+    if (!fixed.length) return;
+    this.#changed('paper');
+    for (const p of fixed) if (!p.deleted) this.#note(`제목 복구 ${q(p.title)}`);
   }
 
   /** GitHub refused to store one file (e.g. a PDF over its size limit): say which paper, keep syncing the rest. */
